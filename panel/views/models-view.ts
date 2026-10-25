@@ -8,6 +8,9 @@ import { btn, card, el, stack } from '../ui/dom.ts';
 
 const clockOf = (at: number | null): string => (at === null ? 'never' : new Date(at).toLocaleTimeString());
 
+const canonicalModel = (id: string): string =>
+  id.trim().replace(/\([^()]+\)\s*$/, '').split('/').pop()?.toLowerCase() ?? '';
+
 const formatTokens = (tokens: number): string => {
   if (tokens >= 1_000_000) {
     if (tokens === 1_000_000 || tokens === 1_048_576) return '1M';
@@ -64,6 +67,18 @@ export const createModelsView = (
     if (state.models.length > 0) {
       void save([state.models[0]!.id]);
     }
+  };
+
+  const saveFallbacks = async (ids: string[]): Promise<void> => {
+    failure = '';
+    await store.run((service) => service.patchConfig({ fallbackModels: ids.slice(0, 2) }));
+    if (store.error()) {
+      failure = store.error();
+      render();
+      return;
+    }
+    await host.toast({ kind: 'success', message: 'Model fallback order saved.' });
+    render();
   };
 
   const refresh = async (): Promise<void> => {
@@ -257,6 +272,78 @@ export const createModelsView = (
     };
 
     updateList();
+
+    // Keep this small routing control in the same model view as the catalog.
+    const { card: fallbackCard } = card(
+      root,
+      'Automatic Model Fallback',
+      'If a request fails with a retryable upstream error, BlackRouter tries these models in order. The requested model is always attempted first.',
+    );
+
+    const configuredFallbacks = state.config.fallbackModels ?? [];
+    if (configuredFallbacks.length === 0) {
+      fallbackCard.append(el('p', 'br-muted', 'No fallback models configured. Failed requests will return the upstream error.'));
+    }
+
+    const fallbackList = el('div', 'br-stack');
+    for (let index = 0; index < configuredFallbacks.length; index += 1) {
+      const modelId = configuredFallbacks[index]!;
+      const model = state.models.find((entry) => canonicalModel(entry.id) === canonicalModel(modelId));
+      const fallbackRow = el('div', 'br-row between');
+      fallbackRow.style.alignItems = 'center';
+      const info = el('div', 'br-stack');
+      info.append(el('span', 'br-model-name', `${index + 1}. ${model?.name ?? modelId}`));
+      info.append(el('span', 'br-model-id', modelId));
+      fallbackRow.append(info);
+
+      const actions = el('div', 'br-row');
+      const up = btn(actions, 'Move up', () => {
+        if (index === 0) return;
+        const next = [...configuredFallbacks];
+        [next[index - 1], next[index]] = [next[index]!, next[index - 1]!];
+        void saveFallbacks(next);
+      });
+      up.disabled = index === 0;
+      const down = btn(actions, 'Move down', () => {
+        if (index >= configuredFallbacks.length - 1) return;
+        const next = [...configuredFallbacks];
+        [next[index + 1], next[index]] = [next[index]!, next[index + 1]!];
+        void saveFallbacks(next);
+      });
+      down.disabled = index >= configuredFallbacks.length - 1;
+      btn(actions, 'Remove', () => {
+        void saveFallbacks(configuredFallbacks.filter((_, itemIndex) => itemIndex !== index));
+      });
+      fallbackRow.append(actions);
+      fallbackList.append(fallbackRow);
+    }
+    fallbackCard.append(fallbackList);
+
+    const used = new Set(configuredFallbacks.map(canonicalModel));
+    const fallbackOptions = state.models.filter((model) => !used.has(canonicalModel(model.id)));
+    const addRow = el('div', 'br-row');
+    const picker = el('select', 'br-search-input') as HTMLSelectElement;
+    picker.style.flex = '1';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = fallbackOptions.length > 0 ? 'Choose a fallback model…' : 'No additional models available';
+    picker.append(placeholder);
+    for (const model of fallbackOptions) {
+      const option = document.createElement('option');
+      option.value = model.id;
+      option.textContent = model.name;
+      picker.append(option);
+    }
+    picker.disabled = configuredFallbacks.length >= 2 || fallbackOptions.length === 0;
+    addRow.append(picker);
+    const addBtn = btn(addRow, 'Add fallback', () => {
+      if (!picker.value || configuredFallbacks.length >= 2) return;
+      void saveFallbacks([...configuredFallbacks, picker.value]);
+    }, 'primary');
+    addBtn.disabled = picker.disabled;
+    fallbackCard.append(addRow);
+    fallbackCard.append(el('p', 'br-muted', 'Fallbacks are tried only for HTTP 404, 408, 429, 500, 502, 503, or 504. Up to two fallback models are allowed per request.'));
+
   };
 
   return {
