@@ -12,6 +12,7 @@ import { aggregateStream } from './sse.ts';
 import { createOpenCodeResponseTransform, prepareOpenCodeRequestBody, resolveOpenCodeLane } from './opencode-protocol.ts';
 import { freeTierHeaders, type PreparedChat } from './zen.ts';
 import { resolveModelCandidates, shouldAdvanceAfterStatus } from './model-fallback.ts';
+import { parseRetryAfterMs } from './retry-after.ts';
 import { createUsageObserver, extractTokenUsage, type TokenUsage } from './usage-observer.ts';
 
 /**
@@ -537,21 +538,35 @@ export const proxyChatCompletion = (
       },
       (answer) => {
         const status = answer.statusCode ?? 502;
+        const retryAfterHeader = answer.headers['retry-after'];
+        const retryAfter = typeof retryAfterHeader === 'string' ? retryAfterHeader : undefined;
+        const isShortDirect429 = status === 429 &&
+          candidate === null &&
+          retryAfter !== undefined &&
+          parseRetryAfterMs(retryAfter) <= 2_000;
+
         if (status === 429) {
           if (candidate) rateLimitedPoolIds.add(candidate.id);
-          if (onRateLimit) {
-            const retryAfter = answer.headers['retry-after'];
-            onRateLimit(candidate, typeof retryAfter === 'string' ? retryAfter : undefined);
-          }
+          onRateLimit?.(candidate, retryAfter);
         }
 
-        // Until a successful response starts streaming, fail over only to the
-        // next bounded and eligible model/pool pair. Do not retry malformed/auth requests.
-        if (shouldAdvanceAfterStatus(status, candidate !== null)) {
-          fallbackReasons.push(`HTTP ${status} on ${attempt.model}`);
+        // A direct 429 usually means the shared free pool is out of quota. Only
+        // try another model when the upstream explicitly asks for a very short
+        // wait, and honour that wait instead of immediately producing another 429.
+        // A pool-specific 429 may fail over to another healthy pool.
+        if (shouldAdvanceAfterStatus(status, candidate !== null, isShortDirect429)) {
           if (advanceToNextAttempt()) {
+            fallbackReasons.push(`HTTP ${status} on ${attempt.model}`);
             answer.resume();
-            sendAttempt();
+            if (isShortDirect429) {
+              const waitMs = parseRetryAfterMs(retryAfter);
+              const jitterMs = 100 + Math.floor(Math.random() * 301);
+              setTimeout(() => {
+                if (!response.destroyed && !response.writableEnded) sendAttempt();
+              }, waitMs + jitterMs);
+            } else {
+              sendAttempt();
+            }
             return;
           }
         }
