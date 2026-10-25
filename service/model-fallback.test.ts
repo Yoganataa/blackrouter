@@ -6,6 +6,7 @@ import {
   buildComboRouterModels,
   canonicalModelId,
   isRetryableFallbackStatus,
+  shouldAdvanceAfterStatus,
   modelComboModelId,
   resolveModelCandidates,
 } from './model-fallback.ts';
@@ -91,6 +92,20 @@ describe('model fallback', () => {
     }
     for (const status of [200, 400, 401, 403, 422]) {
       expect(isRetryableFallbackStatus(status)).toBe(false);
+    }
+  });
+
+  test('does not fan a direct upstream 429 out to more models', () => {
+    expect(shouldAdvanceAfterStatus(429, false)).toBe(false);
+    expect(shouldAdvanceAfterStatus(429, true)).toBe(true);
+  });
+
+  test('continues bounded fallback for other transient upstream failures', () => {
+    for (const status of [404, 408, 500, 502, 503, 504]) {
+      expect(shouldAdvanceAfterStatus(status, false)).toBe(true);
+    }
+    for (const status of [200, 400, 401, 403, 422]) {
+      expect(shouldAdvanceAfterStatus(status, true)).toBe(false);
     }
   });
 });
