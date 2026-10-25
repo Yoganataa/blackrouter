@@ -391,7 +391,7 @@ export const proxyChatCompletion = (
   prepared: PreparedChat,
   response: ServerResponse,
   pool?: ProxyPool | null,
-  onRateLimit?: (pool: ProxyPool) => void,
+  onRateLimit?: (pool: ProxyPool, retryAfter?: string) => void,
 ): void => {
   const target = buildTarget(config, 'chat', pool, prepared.model);
   const transport = target.url.protocol === 'http:' ? http : https;
@@ -411,7 +411,8 @@ export const proxyChatCompletion = (
     (answer) => {
       const status = answer.statusCode ?? 502;
       if (status === 429 && pool && onRateLimit) {
-        onRateLimit(pool);
+        const retryAfter = answer.headers['retry-after'];
+        onRateLimit(pool, typeof retryAfter === 'string' ? retryAfter : undefined);
       }
       if (prepared.stream || status !== 200) {
         response.writeHead(status, responseHeaders(answer.headers));
