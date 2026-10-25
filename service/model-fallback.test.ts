@@ -27,6 +27,13 @@ describe('model fallback', () => {
     expect(resolveModelCandidates('primary', ['a', 'b', 'c', 'd'])).toEqual(['primary', 'a', 'b']);
   });
 
+  test('does not conflate differently namespaced upstream models', () => {
+    expect(resolveModelCandidates('vendor-a/model', ['vendor-b/model'])).toEqual([
+      'vendor-a/model',
+      'vendor-b/model',
+    ]);
+  });
+
   test('only retries eligible upstream errors', () => {
     for (const status of [404, 408, 429, 500, 502, 503, 504]) {
       expect(isRetryableFallbackStatus(status)).toBe(true);
