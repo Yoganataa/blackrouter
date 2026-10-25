@@ -3,6 +3,7 @@ import type { ProxyPool, RouterConfig } from '../contract.ts';
 export type PoolSelector = {
   pickPool(
     config: Pick<RouterConfig, 'proxyPools' | 'proxyStrategy' | 'activePoolId' | 'stickyLimit'>,
+    excludedPoolIds?: ReadonlySet<string>,
   ): ProxyPool | null;
   reset(): void;
 };
@@ -27,8 +28,11 @@ export const createPoolSelector = (): PoolSelector => {
 
   const pickPool = (
     config: Pick<RouterConfig, 'proxyPools' | 'proxyStrategy' | 'activePoolId' | 'stickyLimit'>,
+    excludedPoolIds?: ReadonlySet<string>,
   ): ProxyPool | null => {
-    const active = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
+    const active = (config.proxyPools || []).filter(
+      (p) => p.isActive && p.proxyUrl.trim() && !excludedPoolIds?.has(p.id),
+    );
     if (active.length === 0) {
       reset();
       return null;
