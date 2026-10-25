@@ -91,6 +91,8 @@ export const routerConfigSchema = z.object({
   upstream: z.string(),
   /** Free model ids the user wants OpenCode to see. Empty means "every free model". */
   selectedModels: z.array(z.string()),
+  /** Ordered model ids tried only after the requested model returns a retryable upstream error. */
+  fallbackModels: z.array(z.string().min(1)).max(2).default([]),
   /** Proxy pools deployed or configured to route upstream calls. */
   proxyPools: z.array(proxyPoolSchema),
   /** Strategy for routing requests across configured proxy pools. */
@@ -109,6 +111,7 @@ export const configPatchSchema = z.object({
   port: z.number().int().min(1024).max(65535).optional(),
   apiKey: z.string().min(1).optional(),
   selectedModels: z.array(z.string()).optional(),
+  fallbackModels: z.array(z.string().min(1)).max(2).optional(),
   proxyPools: z.array(proxyPoolSchema).optional(),
   proxyStrategy: z.enum(PROXY_STRATEGIES).optional(),
   activePoolId: z.string().nullable().optional(),
