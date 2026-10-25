@@ -24,7 +24,8 @@ export type RouterServerDeps = {
   refreshModels(): Promise<void>;
   record(entry: RequestEntry): void;
   pickPool?(): ProxyPool | null;
-  markRateLimited?(pool: ProxyPool, retryAfter?: string): void;
+  getDirectRateLimitedUntil?(): number;
+  markRateLimited?(pool: ProxyPool | null, retryAfter?: string): void;
 };
 
 export type RouterServer = { close(): Promise<void> };
@@ -57,6 +58,21 @@ const presentedKey = (request: http.IncomingMessage): string => {
   const authorization = request.headers.authorization ?? '';
   const match = /^Bearer\s+(.+)$/i.exec(authorization.trim());
   return match?.[1]?.trim() ?? '';
+};
+
+const writeRateLimitedError = (response: ServerResponse, until: number, message: string): void => {
+  const retrySeconds = Math.max(1, Math.ceil((until - Date.now()) / 1000));
+  response.writeHead(429, {
+    'content-type': 'application/json',
+    'retry-after': String(retrySeconds),
+  });
+  response.end(JSON.stringify({
+    error: {
+      message,
+      type: 'rate_limit_error',
+      code: 'rate_limit_exhausted',
+    },
+  }));
 };
 
 const readBody = (request: http.IncomingMessage): Promise<string> =>
@@ -142,16 +158,26 @@ export const startRouterServer = (deps: RouterServerDeps): Promise<RouterServer>
                 poolName: pool ? pool.name : 'Direct',
               });
             });
+
+            const activePoolsExist = config.proxyPools.some((p) => p.isActive && p.proxyUrl.trim());
+            if (!pool && !activePoolsExist) {
+              const directCooldownUntil = deps.getDirectRateLimitedUntil?.() ?? 0;
+              if (directCooldownUntil > Date.now()) {
+                writeRateLimitedError(
+                  response,
+                  directCooldownUntil,
+                  'The direct OpenCode upstream is in rate-limit cooldown.',
+                );
+                return;
+              }
+            }
+
             const reqSession = resolveRequestSession(request, session);
             proxyChatCompletion(config, reqSession, prepared, response, pool, (rateLimitedPool, retryAfter) => {
               if (deps.markRateLimited) {
                 deps.markRateLimited(rateLimitedPool, retryAfter);
-              } else {
-                const retrySeconds = retryAfter ? Number(retryAfter) : NaN;
-                const cooldownMs = Number.isFinite(retrySeconds) && retrySeconds >= 0
-                  ? Math.min(retrySeconds * 1000, 60 * 60_000)
-                  : 5 * 60_000;
-                rateLimitedPool.rateLimitedUntil = Date.now() + cooldownMs;
+              } else if (rateLimitedPool) {
+                rateLimitedPool.rateLimitedUntil = Date.now() + 5 * 60_000;
                 rateLimitedPool.testStatus = 'error';
                 rateLimitedPool.lastError = 'Rate limit (HTTP 429)';
                 rateLimitedPool.lastTestedAt = Date.now();
