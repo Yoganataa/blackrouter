@@ -388,6 +388,10 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
 
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const pool = poolSelector.pickPool(config);
+        if (!pool && config.proxyPools.some((p) => p.isActive && p.proxyUrl.trim())) {
+          lastError = 'All configured proxy pools are cooling down. Wait for the upstream rate limit to reset.';
+          break;
+        }
         if (pool && attempted.has(pool.id)) break;
         if (pool) attempted.add(pool.id);
         const target = buildTarget(config, 'chat', pool, modelId);
