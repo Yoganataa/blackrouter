@@ -152,7 +152,9 @@ export const startRouterServer = (deps: RouterServerDeps): Promise<RouterServer>
                 at: started,
                 method: 'POST',
                 path: '/v1/chat/completions',
-                model: prepared.model,
+                model: typeof response.getHeader('x-blackrouter-resolved-model') === 'string'
+                  ? response.getHeader('x-blackrouter-resolved-model') as string
+                  : prepared.model,
                 status: response.statusCode,
                 ms: Date.now() - started,
                 poolName: pool ? pool.name : 'Direct',
