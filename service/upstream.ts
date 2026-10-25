@@ -506,6 +506,11 @@ export const proxyChatCompletion = (
       },
       (answer) => {
         const status = answer.statusCode ?? 502;
+        // Store the resolved model on ServerResponse as well as in wire headers,
+        // so the request log can report the model that actually served the turn.
+        response.setHeader('x-blackrouter-requested-model', prepared.model);
+        response.setHeader('x-blackrouter-resolved-model', attempt.model);
+        if (attempt.model !== prepared.model) response.setHeader('x-blackrouter-fallback-used', 'true');
         if (status === 429 && onRateLimit) {
           const retryAfter = answer.headers['retry-after'];
           onRateLimit(candidate, typeof retryAfter === 'string' ? retryAfter : undefined);
