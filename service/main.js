@@ -6892,6 +6892,22 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
   let attemptIndex = 0;
   let lastRequestedModel = prepared.model;
   const fallbackReasons = [];
+  const rateLimitedPoolIds = new Set;
+  const advanceToNextAttempt = () => {
+    let nextIndex = attemptIndex + 1;
+    while (nextIndex < attempts.length) {
+      const nextAttempt = attempts[nextIndex];
+      if (nextAttempt?.pool && rateLimitedPoolIds.has(nextAttempt.pool.id)) {
+        nextIndex += 1;
+        continue;
+      }
+      break;
+    }
+    if (nextIndex >= attempts.length)
+      return false;
+    attemptIndex = nextIndex;
+    return true;
+  };
   const routingHeaders = (attempt) => ({
     "x-blackrouter-requested-model": prepared.model,
     "x-blackrouter-resolved-model": attempt.model,
@@ -6956,14 +6972,17 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       }
     }, (answer) => {
       const status = answer.statusCode ?? 502;
-      if (status === 429 && onRateLimit) {
-        const retryAfter = answer.headers["retry-after"];
-        onRateLimit(candidate, typeof retryAfter === "string" ? retryAfter : undefined);
+      if (status === 429) {
+        if (candidate)
+          rateLimitedPoolIds.add(candidate.id);
+        if (onRateLimit) {
+          const retryAfter = answer.headers["retry-after"];
+          onRateLimit(candidate, typeof retryAfter === "string" ? retryAfter : undefined);
+        }
       }
       if (isRetryableFallbackStatus(status)) {
         fallbackReasons.push(`HTTP ${status} on ${attempt.model}`);
-        if (attemptIndex + 1 < attempts.length) {
-          attemptIndex += 1;
+        if (advanceToNextAttempt()) {
           answer.resume();
           sendAttempt();
           return;
@@ -7023,9 +7042,8 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
         answer.pipe(protocolTransform);
     });
     upstream.on("error", (error) => {
-      if (attemptIndex + 1 < attempts.length && !response.headersSent && !response.destroyed) {
+      if (!response.headersSent && !response.destroyed && advanceToNextAttempt()) {
         fallbackReasons.push(`network error on ${lastRequestedModel}`);
-        attemptIndex += 1;
         sendAttempt();
         return;
       }
