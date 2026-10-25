@@ -6249,6 +6249,11 @@ ${currentFile}`);
         } else {
           hunkSkipped += 1;
         }
+      } else if (line.startsWith("\\")) {} else if (hunkShown < GIT_DIFF_HUNK_MAX_LINES) {
+        result.push(`  ${line}`);
+        hunkShown += 1;
+      } else {
+        hunkSkipped += 1;
       }
     }
   }
