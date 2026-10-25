@@ -81,3 +81,12 @@ export const isRetryableFallbackStatus = (status: number): boolean =>
   status === 502 ||
   status === 503 ||
   status === 504;
+
+/**
+ * A direct OpenCode 429 is usually a shared free-pool quota, not a bad relay.
+ * Do not immediately fan the same request out to other models on that same
+ * upstream. If a proxy pool was used, its 429 can fail over to another healthy
+ * pool; that pool is cooled down and won't be retried for this request.
+ */
+export const shouldAdvanceAfterStatus = (status: number, usedProxyPool: boolean): boolean =>
+  isRetryableFallbackStatus(status) && (status !== 429 || usedProxyPool);
