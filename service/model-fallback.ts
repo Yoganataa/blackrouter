@@ -88,5 +88,10 @@ export const isRetryableFallbackStatus = (status: number): boolean =>
  * upstream. If a proxy pool was used, its 429 can fail over to another healthy
  * pool; that pool is cooled down and won't be retried for this request.
  */
-export const shouldAdvanceAfterStatus = (status: number, usedProxyPool: boolean): boolean =>
-  isRetryableFallbackStatus(status) && (status !== 429 || usedProxyPool);
+export const shouldAdvanceAfterStatus = (
+  status: number,
+  usedProxyPool: boolean,
+  allowShortDirect429Fallback = false,
+): boolean =>
+  isRetryableFallbackStatus(status) &&
+  (status !== 429 || usedProxyPool || allowShortDirect429Fallback);
