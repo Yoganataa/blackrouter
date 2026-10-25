@@ -5995,6 +5995,11 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
           sendAttempt(next);
           return;
         }
+        if (initialPool) {
+          answer.resume();
+          writeOpenAiError(response, 429, "All available proxy pools are rate-limited. Wait for the upstream rate limit to reset.", "rate_limit_exhausted");
+          return;
+        }
       }
       if (prepared.stream || status !== 200) {
         response.writeHead(status, responseHeaders(answer.headers));
