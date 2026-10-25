@@ -373,106 +373,104 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
 
     testModel: async (modelId: string): Promise<TestModelResult> => {
       const start = Date.now();
-      const pool = poolSelector.pickPool(config);
-      const target = buildTarget(config, 'chat', pool, modelId);
+      const attempted = new Set<string>();
+      const maxAttempts = Math.max(1, config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length + 1);
+      let lastError = 'The upstream did not answer.';
+
+      // A short, non-streaming UI test should never request a 1k-token response.
       const chatPayload = JSON.stringify({
         model: modelId,
-        messages: [{ role: 'user', content: 'Say "OK"' }],
-        max_tokens: 1024,
+        messages: [{ role: 'user', content: 'Reply only with OK.' }],
+        max_tokens: 8,
         stream: false,
       });
       const prepared = prepareChat(chatPayload, { rtkEnabled: false });
-      const testHeaders: Record<string, string> = {
-        ...freeTierHeaders(runtimeSession),
-        ...target.headers,
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-      };
 
-      try {
-        let resultText = '';
-        if (target.agent) {
-          resultText = await new Promise<string>((resolve, reject) => {
-            const transport = target.url.protocol === 'http:' ? http : https;
-            const req = transport.request(
-              target.url,
-              {
-                method: 'POST',
-                agent: target.agent,
-                headers: testHeaders,
-              },
-              (res) => {
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const pool = poolSelector.pickPool(config);
+        if (pool && attempted.has(pool.id)) break;
+        if (pool) attempted.add(pool.id);
+        const target = buildTarget(config, 'chat', pool, modelId);
+        const testHeaders: Record<string, string> = {
+          ...freeTierHeaders(runtimeSession),
+          ...target.headers,
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        };
+
+        try {
+          let resultText = '';
+          let status = 200;
+          let retryAfter: string | undefined;
+          if (target.agent) {
+            const answer = await new Promise<{ text: string; status: number; retryAfter?: string }>((resolve, reject) => {
+              const transport = target.url.protocol === 'http:' ? http : https;
+              const req = transport.request(target.url, { method: 'POST', agent: target.agent, headers: testHeaders }, (res) => {
                 const chunks: Buffer[] = [];
                 res.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
-                res.on('end', () => {
-                  const text = Buffer.concat(chunks).toString('utf8');
-                  if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-                    resolve(text);
-                  } else {
-                    if (res.statusCode === 429 && pool) {
-                      const cooldownUntil = Date.now() + 5 * 60_000;
-                      const updated = config.proxyPools.map((p) =>
-                        p.id === pool.id
-                          ? { ...p, testStatus: 'error' as const, lastTestedAt: Date.now(), lastError: 'Rate limit (HTTP 429)', rateLimitedUntil: cooldownUntil }
-                          : p,
-                      );
-                      persist({ ...config, proxyPools: updated });
-                    }
-                    reject(new Error(`HTTP ${res.statusCode}: ${text.slice(0, 300)}`));
-                  }
-                });
-              },
-            );
-            req.on('error', reject);
-            req.setTimeout(15_000, () => {
-              req.destroy();
-              reject(new Error('Test request timed out.'));
+                res.on('end', () => resolve({
+                  text: Buffer.concat(chunks).toString('utf8'),
+                  status: res.statusCode ?? 502,
+                  retryAfter: typeof res.headers['retry-after'] === 'string' ? res.headers['retry-after'] : undefined,
+                }));
+              });
+              req.on('error', reject);
+              req.setTimeout(15_000, () => {
+                req.destroy();
+                reject(new Error('Test request timed out.'));
+              });
+              req.end(prepared.body);
             });
-            req.write(prepared.body);
-            req.end();
-          });
-        } else {
-          const res = await fetch(target.url, {
-            method: 'POST',
-            headers: testHeaders,
-            body: prepared.body,
-            signal: AbortSignal.timeout(15_000),
-          });
-          const text = await res.text();
-          if (!res.ok) {
-            if (res.status === 429 && pool) {
-              const cooldownUntil = Date.now() + 5 * 60_000;
-              const updated = config.proxyPools.map((p) =>
-                p.id === pool.id
-                  ? { ...p, testStatus: 'error' as const, lastTestedAt: Date.now(), lastError: 'Rate limit (HTTP 429)', rateLimitedUntil: cooldownUntil }
-                  : p,
-              );
-              persist({ ...config, proxyPools: updated });
-            }
-            return {
-              ok: false,
-              modelId,
-              elapsedMs: Date.now() - start,
-              error: `HTTP ${res.status}: ${text.slice(0, 300)}`,
-            };
+            resultText = answer.text;
+            status = answer.status;
+            retryAfter = answer.retryAfter;
+          } else {
+            const answer = await fetch(target.url, {
+              method: 'POST',
+              headers: testHeaders,
+              body: prepared.body,
+              signal: AbortSignal.timeout(15_000),
+            });
+            resultText = await answer.text();
+            status = answer.status;
+            retryAfter = answer.headers.get('retry-after') ?? undefined;
           }
-          resultText = text;
-        }
 
-        const elapsedMs = Date.now() - start;
-        const aggregated = aggregateStream(resultText);
-        const choices = Array.isArray(aggregated.choices) ? aggregated.choices : [];
-        const firstChoice = choices[0] as { message?: { content?: string } } | undefined;
-        const reply = firstChoice?.message?.content?.trim() || 'OK';
-        return { ok: true, modelId, elapsedMs, reply };
-      } catch (err) {
-        return {
-          ok: false,
-          modelId,
-          elapsedMs: Date.now() - start,
-          error: err instanceof Error ? err.message : String(err),
-        };
+          if (status >= 200 && status < 300) {
+            const aggregated = aggregateStream(resultText);
+            const choices = Array.isArray(aggregated.choices) ? aggregated.choices : [];
+            const firstChoice = choices[0] as { message?: { content?: string } } | undefined;
+            const reply = firstChoice?.message?.content?.trim() || 'OK';
+            return { ok: true, modelId, elapsedMs: Date.now() - start, reply };
+          }
+
+          lastError = `HTTP ${status}: ${resultText.slice(0, 300)}`;
+          if (status !== 429) break;
+          if (pool) {
+            const retrySeconds = retryAfter ? Number(retryAfter) : NaN;
+            const cooldownMs = Number.isFinite(retrySeconds) && retrySeconds >= 0
+              ? Math.min(retrySeconds * 1000, 60 * 60_000)
+              : 5 * 60_000;
+            const updated = config.proxyPools.map((p) => p.id === pool.id
+              ? { ...p, testStatus: 'error' as const, lastTestedAt: Date.now(), lastError: 'Rate limit (HTTP 429)', rateLimitedUntil: Date.now() + cooldownMs }
+              : p);
+            persist({ ...config, proxyPools: updated });
+          } else {
+            // Direct upstream itself is rate-limited; retrying immediately will worsen it.
+            break;
+          }
+        } catch (err) {
+          lastError = err instanceof Error ? err.message : String(err);
+          break;
+        }
       }
+
+      return {
+        ok: false,
+        modelId,
+        elapsedMs: Date.now() - start,
+        error: lastError,
+      };
     },
 
     deployCloudflare: async (input) => {
