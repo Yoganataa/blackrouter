@@ -11,6 +11,8 @@ const RAW_CAP = 500 * 1024;
 const DETECT_WINDOW = 2048;
 const GIT_DIFF_HUNK_MAX_LINES = 100;
 const GREP_PER_FILE_MAX = 5;
+const STATUS_MAX_FILES = 10;
+const STATUS_MAX_UNTRACKED = 10;
 const SMART_TRUNCATE_MIN_LINES = 80;
 const SMART_TRUNCATE_HEAD = 30;
 const SMART_TRUNCATE_TAIL = 20;
@@ -129,26 +131,37 @@ export function compactGitStatus(input: string): string {
       branch = raw.replace(/^##\s*/, '');
       continue;
     }
+    // Porcelain status has two status columns followed by the path.
     if (raw.length >= 3 && /^[ MADRCU?!][ MADRCU?!] /.test(raw)) {
-      const x = raw[0];
-      const y = raw[1];
-      const file = raw.slice(3);
+      const x = raw[0] ?? ' ';
+      const y = raw[1] ?? ' ';
+      const file = raw.slice(3).trim();
       if (raw.slice(0, 2) === '??') {
         untrackedFiles.push(file);
-      } else if (x && 'MADRC'.includes(x)) {
-        stagedFiles.push(file);
-      }
-      if (y === 'M' || y === 'D') {
-        modifiedFiles.push(file);
+      } else {
+        if (x !== ' ' && 'MADRCU'.includes(x)) stagedFiles.push(file);
+        if (y !== ' ' && 'MADRCU'.includes(y)) modifiedFiles.push(file);
       }
     }
   }
 
   const out: string[] = [];
-  if (branch) out.push(`* ${branch}`);
-  if (stagedFiles.length > 0) out.push(`+ Staged: ${stagedFiles.length} files`);
-  if (modifiedFiles.length > 0) out.push(`~ Modified: ${modifiedFiles.length} files`);
-  if (untrackedFiles.length > 0) out.push(`? Untracked: ${untrackedFiles.length} files`);
+  if (branch) out.push('* ' + branch);
+  if (stagedFiles.length > 0) {
+    out.push('+ Staged: ' + stagedFiles.length + ' files');
+    for (const file of stagedFiles.slice(0, STATUS_MAX_FILES)) out.push('  ' + file);
+    if (stagedFiles.length > STATUS_MAX_FILES) out.push('  ... +' + (stagedFiles.length - STATUS_MAX_FILES) + ' more staged files');
+  }
+  if (modifiedFiles.length > 0) {
+    out.push('~ Modified: ' + modifiedFiles.length + ' files');
+    for (const file of modifiedFiles.slice(0, STATUS_MAX_FILES)) out.push('  ' + file);
+    if (modifiedFiles.length > STATUS_MAX_FILES) out.push('  ... +' + (modifiedFiles.length - STATUS_MAX_FILES) + ' more modified files');
+  }
+  if (untrackedFiles.length > 0) {
+    out.push('? Untracked: ' + untrackedFiles.length + ' files');
+    for (const file of untrackedFiles.slice(0, STATUS_MAX_UNTRACKED)) out.push('  ' + file);
+    if (untrackedFiles.length > STATUS_MAX_UNTRACKED) out.push('  ... +' + (untrackedFiles.length - STATUS_MAX_UNTRACKED) + ' more untracked files');
+  }
 
   return out.length > 0 ? out.join('\n') : input;
 }

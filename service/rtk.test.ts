@@ -60,6 +60,36 @@ describe('RTK token compression', () => {
     expect(compacted).toContain('? Untracked: 1 files');
   });
 
+  it('preserves changed paths while summarizing git status', () => {
+    const raw = [
+      '## main',
+      'M  src/staged.ts',
+      ' M src/modified.ts',
+      '?? docs/new-notes.md',
+      '',
+    ].join('\n');
+    const compacted = compactGitStatus(raw);
+    expect(compacted).toContain('+ Staged: 1 files');
+    expect(compacted).toContain('  src/staged.ts');
+    expect(compacted).toContain('~ Modified: 1 files');
+    expect(compacted).toContain('  src/modified.ts');
+    expect(compacted).toContain('? Untracked: 1 files');
+    expect(compacted).toContain('  docs/new-notes.md');
+  });
+
+  it('caps the number of file paths emitted by git status', () => {
+    const raw = [
+      '## main',
+      ...Array.from({ length: 12 }, (_, index) => ' M src/file-' + index + '.ts'),
+    ].join('\n');
+    const compacted = compactGitStatus(raw);
+    expect(compacted).toContain('~ Modified: 12 files');
+    expect(compacted).toContain('src/file-0.ts');
+    expect(compacted).toContain('src/file-9.ts');
+    expect(compacted).not.toContain('src/file-10.ts');
+    expect(compacted).toContain('... +2 more modified files');
+  });
+
   it('compacts clean git status', () => {
     expect(compactGitStatus('')).toBe('Clean working tree');
     expect(compactGitStatus('   ')).toBe('Clean working tree');
