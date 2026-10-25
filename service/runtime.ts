@@ -391,8 +391,13 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
 
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const pool = poolSelector.pickPool(config);
-        if (!pool && config.proxyPools.some((p) => p.isActive && p.proxyUrl.trim())) {
+        const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
+        if (!pool && activePoolCount > 0) {
           lastError = 'All configured proxy pools are cooling down. Wait for the upstream rate limit to reset.';
+          break;
+        }
+        if (!pool && activePoolCount === 0 && directRateLimitedUntil > Date.now()) {
+          lastError = `The direct OpenCode upstream is rate-limited. Retry in approximately ${Math.ceil((directRateLimitedUntil - Date.now()) / 1000)} seconds.`;
           break;
         }
         if (pool && attempted.has(pool.id)) break;
