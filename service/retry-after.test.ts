@@ -25,6 +25,11 @@ describe('parseRetryAfterMs', () => {
     expect(parseRetryAfterMs(new Date(now + 4 * 60 * 60_000).toUTCString(), now)).toBe(60 * 60_000);
   });
 
+  test('rejects signed values instead of parsing them as legacy dates', () => {
+    expect(parseRetryAfterMs('-1', now)).toBe(5 * 60_000);
+    expect(parseRetryAfterMs('+1', now)).toBe(5 * 60_000);
+  });
+
   test('falls back for missing or invalid values', () => {
     expect(parseRetryAfterMs(undefined, now)).toBe(5 * 60_000);
     expect(parseRetryAfterMs('later', now)).toBe(5 * 60_000);
