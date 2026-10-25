@@ -42,6 +42,7 @@ import {
   PROVIDER_ID,
 } from './opencode-config.ts';
 import { createPoolSelector } from './pool-selector.ts';
+import { createRequestHistoryStore, REQUEST_HISTORY_LIMIT } from './request-history.ts';
 import { parseRetryAfterMs } from './retry-after.ts';
 import { startRouterServer, type RouterServer } from './router-server.ts';
 import { aggregateStream } from './sse.ts';
@@ -59,7 +60,7 @@ import { freeTierHeaders, prepareChat, sessionId } from './zen.ts';
  */
 
 const REFRESH_INTERVAL_MS = 10 * 60_000;
-const REQUEST_LOG_LIMIT = 25;
+const REQUEST_LOG_LIMIT = REQUEST_HISTORY_LIMIT;
 
 const PACKAGE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -101,7 +102,8 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
   let modelsError = '';
   let upstreamCount = 0;
   let warnings: string[] = [];
-  const requests: RequestEntry[] = [];
+  const requestHistory = createRequestHistoryStore(store.path);
+  const requests: RequestEntry[] = requestHistory.load();
   let router: RouterServer | null = null;
   let routerError = '';
   let directRateLimitedUntil = 0;
@@ -189,6 +191,12 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         record: (entry: RequestEntry) => {
           requests.unshift(entry);
           if (requests.length > REQUEST_LOG_LIMIT) requests.length = REQUEST_LOG_LIMIT;
+          try {
+            requestHistory.save(requests);
+          } catch (error) {
+            // A filesystem failure must not break active model requests.
+            console.warn('[blackrouter] could not persist request history:', error);
+          }
         },
       });
     } catch (error) {
