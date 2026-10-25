@@ -5198,6 +5198,27 @@ var createPoolSelector = () => {
   return { pickPool, reset };
 };
 
+// service/retry-after.ts
+var parseRetryAfterMs = (value, now = Date.now(), fallbackMs = 5 * 60000) => {
+  const fallback = Math.max(1000, Math.min(fallbackMs, 60 * 60000));
+  if (typeof value !== "string" || value.trim() === "")
+    return fallback;
+  const trimmed = value.trim();
+  let requestedMs;
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    if (!Number.isFinite(seconds) || seconds < 0)
+      return fallback;
+    requestedMs = seconds * 1000;
+  } else {
+    const date = Date.parse(trimmed);
+    if (!Number.isFinite(date))
+      return fallback;
+    requestedMs = date - now;
+  }
+  return Math.max(1000, Math.min(requestedMs, 60 * 60000));
+};
+
 // service/router-server.ts
 import { timingSafeEqual } from "node:crypto";
 import http3 from "node:http";
@@ -5298,6 +5319,732 @@ var aggregateStream = (text) => {
     delete answer.usage.completion_tokens_details;
   }
   return answer;
+};
+
+// service/opencode-protocol.ts
+import { Transform } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
+var cleanModelId = (modelId) => {
+  let clean = modelId.replace(/\([^()]+\)\s*$/, "").trim();
+  if (clean.includes("/"))
+    clean = clean.split("/").pop() ?? clean;
+  return clean.trim();
+};
+var resolveOpenCodeLane = (upstream, modelId) => {
+  let isOpenCode = false;
+  try {
+    isOpenCode = new URL(upstream).hostname.toLowerCase().includes("opencode.ai");
+  } catch {
+    return "chat";
+  }
+  if (!isOpenCode)
+    return "chat";
+  const base = cleanModelId(modelId).split("/").pop()?.toLowerCase() ?? "";
+  if (/^muse[-_]?spark(?:$|[-_:.\s])/.test(base))
+    return "responses";
+  if (/^union[-_]?alpha(?:$|[-_:.\s])/.test(base))
+    return "messages";
+  return "chat";
+};
+var parseArgs = (value) => {
+  if (value && typeof value === "object" && !Array.isArray(value))
+    return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+};
+var textOf = (value) => {
+  if (typeof value === "string")
+    return value;
+  if (Array.isArray(value)) {
+    return value.map((part) => {
+      if (!part || typeof part !== "object")
+        return "";
+      const block = part;
+      if (typeof block.text === "string")
+        return block.text;
+      if (typeof block.content === "string")
+        return block.content;
+      return "";
+    }).join("");
+  }
+  if (value === null || value === undefined)
+    return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+var textBlocks = (value, role) => {
+  if (typeof value === "string") {
+    return value ? [{ type: role === "assistant" ? "output_text" : "input_text", [role === "assistant" ? "text" : "text"]: value }] : [];
+  }
+  if (!Array.isArray(value))
+    return [];
+  const blocks = [];
+  for (const part of value) {
+    if (!part || typeof part !== "object")
+      continue;
+    const block = part;
+    if (block.type === "text" && typeof block.text === "string") {
+      blocks.push({ type: role === "assistant" ? "output_text" : "input_text", text: block.text });
+    } else if (role === "user" && block.type === "image_url") {
+      const imageUrl = typeof block.image_url === "string" ? block.image_url : block.image_url?.url;
+      if (typeof imageUrl === "string" && imageUrl) {
+        blocks.push({ type: "input_image", image_url: imageUrl, detail: block.image_url?.detail || "auto" });
+      }
+    } else if (role === "user" && (block.type === "input_image" || block.type === "image")) {
+      const imageUrl = block.image_url || block.url || block.file_id;
+      if (typeof imageUrl === "string" && imageUrl) {
+        blocks.push({ type: "input_image", image_url: imageUrl, detail: block.detail || "auto" });
+      }
+    }
+  }
+  return blocks;
+};
+var maxTokensFrom = (body) => {
+  for (const key of ["max_output_tokens", "max_completion_tokens", "max_tokens"]) {
+    const value = body[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0)
+      return Math.max(16, Math.floor(value));
+  }
+  return;
+};
+var responseFormatToText = (responseFormat) => {
+  if (!responseFormat || typeof responseFormat !== "object")
+    return;
+  const rf = responseFormat;
+  if (rf.type === "json_object")
+    return { format: { type: "json_object" } };
+  if (rf.type === "json_schema" && rf.json_schema && typeof rf.json_schema === "object") {
+    const schema = rf.json_schema;
+    if (!schema.schema)
+      return;
+    return {
+      format: {
+        type: "json_schema",
+        name: typeof schema.name === "string" && schema.name ? schema.name : "response",
+        schema: schema.schema,
+        ...typeof schema.strict === "boolean" ? { strict: schema.strict } : {}
+      }
+    };
+  }
+  return;
+};
+var responseToolChoice = (choice) => {
+  if (typeof choice === "string")
+    return choice;
+  if (!choice || typeof choice !== "object")
+    return;
+  const value = choice;
+  if (value.type === "function" && value.function?.name)
+    return { type: "function", name: value.function.name };
+  return value;
+};
+var chatToResponses = (body) => {
+  const input = [];
+  const instructions = typeof body.instructions === "string" ? [body.instructions] : [];
+  const pendingCallIds = [];
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  for (const rawMessage of messages) {
+    if (!rawMessage || typeof rawMessage !== "object")
+      continue;
+    const message = rawMessage;
+    const role = typeof message.role === "string" ? message.role : "user";
+    if (role === "system" || role === "developer") {
+      const text = textOf(message.content);
+      if (text.trim())
+        instructions.push(text);
+      continue;
+    }
+    if (role === "tool" || role === "function") {
+      const suppliedId = typeof message.tool_call_id === "string" ? message.tool_call_id : "";
+      let callId = suppliedId;
+      if (callId) {
+        const index = pendingCallIds.indexOf(callId);
+        if (index >= 0)
+          pendingCallIds.splice(index, 1);
+      } else if (pendingCallIds.length > 0) {
+        callId = pendingCallIds.shift();
+      } else {
+        callId = `call_tool_${input.length}`;
+      }
+      input.push({ type: "function_call_output", call_id: callId.slice(0, 64), output: textOf(message.content) });
+      continue;
+    }
+    if (role === "user" || role === "assistant") {
+      const content = textBlocks(message.content, role);
+      if (content.length > 0)
+        input.push({ type: "message", role, content });
+    }
+    if (role === "assistant" && Array.isArray(message.tool_calls)) {
+      for (const rawCall of message.tool_calls) {
+        if (!rawCall || typeof rawCall !== "object")
+          continue;
+        const call = rawCall;
+        const fn = call.function && typeof call.function === "object" ? call.function : {};
+        if (typeof fn.name !== "string" || !fn.name.trim())
+          continue;
+        const callId = (typeof call.id === "string" && call.id ? call.id : `call_${input.length}`).slice(0, 64);
+        pendingCallIds.push(callId);
+        input.push({
+          type: "function_call",
+          call_id: callId,
+          name: fn.name,
+          arguments: typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments ?? {})
+        });
+      }
+    }
+  }
+  if (input.length === 0)
+    input.push({ type: "message", role: "user", content: [{ type: "input_text", text: "..." }] });
+  const result = {
+    model: cleanModelId(typeof body.model === "string" ? body.model : ""),
+    input,
+    stream: true,
+    store: false
+  };
+  if (instructions.length)
+    result.instructions = instructions.join(`
+
+`);
+  const maxTokens = maxTokensFrom(body);
+  if (maxTokens !== undefined)
+    result.max_output_tokens = maxTokens;
+  for (const key of ["temperature", "top_p", "parallel_tool_calls", "metadata", "include"]) {
+    if (body[key] !== undefined)
+      result[key] = body[key];
+  }
+  if (body.reasoning && typeof body.reasoning === "object")
+    result.reasoning = body.reasoning;
+  else if (typeof body.reasoning_effort === "string" && body.reasoning_effort !== "auto") {
+    result.reasoning = { effort: body.reasoning_effort === "max" ? "xhigh" : body.reasoning_effort, summary: "auto" };
+  }
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  const responseTools = [];
+  for (const rawTool of tools) {
+    if (!rawTool || typeof rawTool !== "object")
+      continue;
+    const tool = rawTool;
+    const fn = tool.function && typeof tool.function === "object" ? tool.function : tool;
+    if (typeof fn.name !== "string" || !fn.name)
+      continue;
+    responseTools.push({
+      type: "function",
+      name: fn.name,
+      ...typeof fn.description === "string" ? { description: fn.description } : {},
+      parameters: fn.parameters && typeof fn.parameters === "object" ? fn.parameters : { type: "object", properties: {} },
+      ...typeof fn.strict === "boolean" ? { strict: fn.strict } : {}
+    });
+  }
+  if (responseTools.length)
+    result.tools = responseTools;
+  const toolChoice = responseToolChoice(body.tool_choice);
+  if (toolChoice !== undefined)
+    result.tool_choice = toolChoice;
+  const text = responseFormatToText(body.response_format);
+  if (text)
+    result.text = text.format;
+  return result;
+};
+var imageBlockToMessages = (part) => {
+  const imageUrl = typeof part.image_url === "string" ? part.image_url : part.image_url?.url;
+  if (typeof imageUrl !== "string" || !imageUrl)
+    return null;
+  const dataMatch = /^data:([^;]+);base64,(.+)$/s.exec(imageUrl);
+  if (dataMatch) {
+    return { type: "image", source: { type: "base64", media_type: dataMatch[1], data: dataMatch[2] } };
+  }
+  return { type: "image", source: { type: "url", url: imageUrl } };
+};
+var contentToMessages = (value) => {
+  if (typeof value === "string")
+    return value ? [{ type: "text", text: value }] : [];
+  if (!Array.isArray(value))
+    return [];
+  const blocks = [];
+  for (const rawPart of value) {
+    if (!rawPart || typeof rawPart !== "object")
+      continue;
+    const part = rawPart;
+    if (part.type === "text" && typeof part.text === "string")
+      blocks.push({ type: "text", text: part.text });
+    else if (part.type === "image_url") {
+      const image = imageBlockToMessages(part);
+      if (image)
+        blocks.push(image);
+    }
+  }
+  return blocks;
+};
+var mergeMessageTurns = (messages) => {
+  const merged = [];
+  for (const message of messages) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === message.role && Array.isArray(last.content) && Array.isArray(message.content)) {
+      last.content.push(...message.content);
+    } else {
+      merged.push({ ...message, content: Array.isArray(message.content) ? [...message.content] : message.content });
+    }
+  }
+  return merged;
+};
+var chatToMessages = (body) => {
+  const messages = [];
+  const systemParts = typeof body.system === "string" ? [body.system] : [];
+  if (typeof body.instructions === "string")
+    systemParts.push(body.instructions);
+  const rawMessages = Array.isArray(body.messages) ? body.messages : [];
+  const pendingToolIds = [];
+  for (const rawMessage of rawMessages) {
+    if (!rawMessage || typeof rawMessage !== "object")
+      continue;
+    const message = rawMessage;
+    const role = typeof message.role === "string" ? message.role : "user";
+    if (role === "system" || role === "developer") {
+      const systemText = textOf(message.content);
+      if (systemText.trim())
+        systemParts.push(systemText);
+      continue;
+    }
+    if (role === "tool" || role === "function") {
+      const suppliedId = typeof message.tool_call_id === "string" ? message.tool_call_id : "";
+      let callId = suppliedId;
+      if (callId) {
+        const index = pendingToolIds.indexOf(callId);
+        if (index >= 0)
+          pendingToolIds.splice(index, 1);
+      } else if (pendingToolIds.length > 0) {
+        callId = pendingToolIds.shift();
+      } else {
+        callId = `call_tool_${messages.length}`;
+      }
+      messages.push({
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: callId,
+          content: textOf(message.content)
+        }]
+      });
+      continue;
+    }
+    const content = contentToMessages(message.content);
+    if (role === "assistant" && Array.isArray(message.tool_calls)) {
+      for (const rawCall of message.tool_calls) {
+        if (!rawCall || typeof rawCall !== "object")
+          continue;
+        const call = rawCall;
+        const fn = call.function && typeof call.function === "object" ? call.function : {};
+        if (typeof fn.name !== "string" || !fn.name.trim())
+          continue;
+        const id = typeof call.id === "string" && call.id ? call.id : `call_${messages.length}_${content.length}`;
+        pendingToolIds.push(id);
+        content.push({ type: "tool_use", id, name: fn.name, input: parseArgs(fn.arguments) });
+      }
+    }
+    if (content.length)
+      messages.push({ role: role === "assistant" ? "assistant" : "user", content });
+  }
+  let tools = [];
+  if (Array.isArray(body.tools)) {
+    tools = body.tools.flatMap((rawTool) => {
+      if (!rawTool || typeof rawTool !== "object")
+        return [];
+      const tool = rawTool;
+      const fn = tool.function && typeof tool.function === "object" ? tool.function : tool;
+      if (typeof fn.name !== "string" || !fn.name)
+        return [];
+      return [{
+        name: fn.name,
+        ...typeof fn.description === "string" ? { description: fn.description } : {},
+        input_schema: fn.parameters && typeof fn.parameters === "object" ? fn.parameters : { type: "object", properties: {} }
+      }];
+    });
+  }
+  const result = {
+    model: cleanModelId(typeof body.model === "string" ? body.model : ""),
+    max_tokens: maxTokensFrom(body) ?? 4096,
+    stream: true,
+    messages: mergeMessageTurns(messages)
+  };
+  if (systemParts.length)
+    result.system = systemParts.join(`
+
+`);
+  if (tools.length)
+    result.tools = tools;
+  if (typeof body.temperature === "number")
+    result.temperature = body.temperature;
+  if (typeof body.top_p === "number")
+    result.top_p = body.top_p;
+  if (Array.isArray(body.stop))
+    result.stop_sequences = body.stop;
+  if (body.metadata && typeof body.metadata === "object")
+    result.metadata = body.metadata;
+  if (body.tool_choice !== undefined) {
+    const choice = body.tool_choice;
+    if (typeof choice === "string") {
+      if (choice === "required")
+        result.tool_choice = { type: "any" };
+      else
+        result.tool_choice = { type: choice === "none" ? "none" : "auto" };
+    } else if (choice && typeof choice === "object") {
+      const rawChoice = choice;
+      if (rawChoice.type === "function" && rawChoice.function?.name)
+        result.tool_choice = { type: "tool", name: rawChoice.function.name };
+      else if (rawChoice.type === "required" || rawChoice.type === "any")
+        result.tool_choice = { type: "any" };
+      else
+        result.tool_choice = { type: "auto" };
+    }
+  }
+  return result;
+};
+var prepareOpenCodeRequestBody = (raw, lane) => {
+  if (lane === "chat")
+    return raw;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("The prepared upstream request is not JSON.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("The prepared upstream request must be a JSON object.");
+  }
+  const body = parsed;
+  return JSON.stringify(lane === "responses" ? chatToResponses(body) : chatToMessages(body));
+};
+var parseFrame = (frame) => {
+  const lines = frame.split(/\r?\n/);
+  let event = "";
+  const data = [];
+  for (const line of lines) {
+    if (!line || line.startsWith(":"))
+      continue;
+    if (line.startsWith("event:"))
+      event = line.slice(6).trim();
+    else if (line.startsWith("data:"))
+      data.push(line.slice(5).trimStart());
+  }
+  if (!data.length)
+    return null;
+  return { event, data: data.join(`
+`) };
+};
+var responseErrorMessage = (payload) => {
+  const response = payload.response && typeof payload.response === "object" ? payload.response : {};
+  const error = payload.error && typeof payload.error === "object" ? payload.error : response.error && typeof response.error === "object" ? response.error : payload;
+  return typeof error.message === "string" ? error.message : JSON.stringify(error);
+};
+var createOpenCodeResponseTransform = (lane, requestedModel) => {
+  if (lane === "chat")
+    return null;
+  const decoder = new StringDecoder("utf8");
+  let buffer = "";
+  let responseId = `chatcmpl-blackrouter-${Date.now()}`;
+  const model = cleanModelId(requestedModel);
+  const created = Math.floor(Date.now() / 1000);
+  let outputTokens = 0;
+  let inputTokens = 0;
+  let finishReason = "stop";
+  let finished = false;
+  let sawToolCall = false;
+  const responseToolIndices = new Map;
+  const responseToolIds = new Map;
+  const responseToolArgs = new Map;
+  const responseToolArgsDeltaSeen = new Set;
+  let responseToolCount = 0;
+  const messageToolIndices = new Map;
+  const messageToolIds = new Map;
+  const messageToolNames = new Map;
+  const messageToolArgsDeltaSeen = new Set;
+  let messageToolCount = 0;
+  let messageStopReason = "end_turn";
+  const emitData = (payload) => {
+    stream.push(Buffer.from(`data: ${JSON.stringify(payload)}
+
+`));
+  };
+  const emitChunk = (delta, finish = null, usage) => {
+    const chunk = {
+      id: responseId,
+      object: "chat.completion.chunk",
+      created,
+      model,
+      choices: [{ index: 0, delta, finish_reason: finish }]
+    };
+    if (usage)
+      chunk.usage = usage;
+    emitData(chunk);
+  };
+  const emitToolStart = (index, id, name) => {
+    sawToolCall = true;
+    emitChunk({ tool_calls: [{ index, id, type: "function", function: { name, arguments: "" } }] });
+  };
+  const emitError = (payload) => {
+    if (finished)
+      return;
+    emitData({ error: { type: "upstream_error", message: responseErrorMessage(payload) } });
+    emitData({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+    stream.push(Buffer.from(`data: [DONE]
+
+`));
+    finished = true;
+  };
+  const emitFinish = (reason, usage) => {
+    if (finished)
+      return;
+    const normalizedReason = sawToolCall ? "tool_calls" : reason;
+    const finalUsage = usage ?? (inputTokens || outputTokens ? {
+      prompt_tokens: inputTokens,
+      completion_tokens: outputTokens,
+      total_tokens: inputTokens + outputTokens
+    } : undefined);
+    emitChunk({}, normalizedReason, finalUsage);
+    stream.push(Buffer.from(`data: [DONE]
+
+`));
+    finished = true;
+  };
+  const processResponsesEvent = (event, payload) => {
+    const type = event || (typeof payload.type === "string" ? payload.type : "");
+    if (type === "response.created" || type === "response.in_progress") {
+      const responseObject = payload.response && typeof payload.response === "object" ? payload.response : {};
+      if (typeof responseObject.id === "string")
+        responseId = responseObject.id;
+      if (typeof responseObject.model === "string")
+        responseId = responseObject.id || responseId;
+      return;
+    }
+    if (type === "response.output_text.delta" || type === "response.text.delta") {
+      if (typeof payload.delta === "string" && payload.delta)
+        emitChunk({ content: payload.delta });
+      return;
+    }
+    if (type === "response.reasoning_summary_text.delta" || type === "response.reasoning_text.delta" || type === "response.thought.delta") {
+      if (typeof payload.delta === "string" && payload.delta)
+        emitChunk({ reasoning_content: payload.delta });
+      return;
+    }
+    if (type === "response.refusal.delta") {
+      if (typeof payload.delta === "string" && payload.delta)
+        emitChunk({ content: payload.delta });
+      return;
+    }
+    if (type === "response.output_item.added") {
+      const item = payload.item && typeof payload.item === "object" ? payload.item : null;
+      if (!item || item.type !== "function_call" && item.type !== "custom_tool_call")
+        return;
+      const callId = typeof item.call_id === "string" && item.call_id || typeof item.id === "string" && item.id || `call_${responseToolCount}`;
+      const itemId = typeof payload.item_id === "string" ? payload.item_id : typeof item.id === "string" ? item.id : callId;
+      let index = responseToolIndices.get(itemId) ?? responseToolIndices.get(callId);
+      if (index === undefined) {
+        index = responseToolCount++;
+        responseToolIndices.set(itemId, index);
+        responseToolIndices.set(callId, index);
+      }
+      responseToolIds.set(itemId, callId);
+      responseToolIds.set(callId, callId);
+      const name = typeof item.name === "string" ? item.name : "";
+      if (name)
+        emitToolStart(index, callId, name);
+      const args = typeof item.arguments === "string" ? item.arguments : "";
+      if (args)
+        responseToolArgs.set(index, args);
+      return;
+    }
+    if (type === "response.function_call_arguments.delta" || type === "response.custom_tool_call_input.delta") {
+      const itemId = typeof payload.item_id === "string" ? payload.item_id : "";
+      const rawCallId = typeof payload.call_id === "string" ? payload.call_id : "";
+      let index = responseToolIndices.get(itemId);
+      if (index === undefined && rawCallId)
+        index = responseToolIndices.get(rawCallId);
+      if (index === undefined) {
+        index = responseToolCount++;
+        const key = itemId || rawCallId || `call_${index}`;
+        const callId = rawCallId || key;
+        responseToolIndices.set(key, index);
+        responseToolIndices.set(callId, index);
+        responseToolIds.set(key, callId);
+        responseToolIds.set(callId, callId);
+        emitToolStart(index, callId, typeof payload.name === "string" ? payload.name : "");
+      }
+      const callId = responseToolIds.get(itemId) || responseToolIds.get(rawCallId) || rawCallId || `call_${index}`;
+      const delta = typeof payload.delta === "string" ? payload.delta : "";
+      if (delta) {
+        responseToolArgsDeltaSeen.add(index);
+        responseToolArgs.set(index, (responseToolArgs.get(index) ?? "") + delta);
+        emitChunk({ tool_calls: [{ index, id: callId, type: "function", function: { arguments: delta } }] });
+      }
+      return;
+    }
+    if (type === "response.output_item.done") {
+      const item = payload.item && typeof payload.item === "object" ? payload.item : null;
+      if (item && (item.type === "function_call" || item.type === "custom_tool_call")) {
+        const itemId = typeof payload.item_id === "string" ? payload.item_id : typeof item.id === "string" ? item.id : "";
+        const callId = typeof item.call_id === "string" ? item.call_id : itemId;
+        const index = responseToolIndices.get(itemId) ?? responseToolIndices.get(callId);
+        const args = typeof item.arguments === "string" ? item.arguments : index === undefined ? "" : responseToolArgs.get(index) ?? "";
+        if (index !== undefined && args && !responseToolArgsDeltaSeen.has(index)) {
+          responseToolArgsDeltaSeen.add(index);
+          responseToolArgs.set(index, args);
+          emitChunk({ tool_calls: [{ index, id: callId, type: "function", function: { arguments: args } }] });
+        }
+      }
+      return;
+    }
+    if (type === "response.completed") {
+      const responseObject = payload.response && typeof payload.response === "object" ? payload.response : {};
+      const usage = responseObject.usage && typeof responseObject.usage === "object" ? responseObject.usage : {};
+      inputTokens = Number(usage.input_tokens) || 0;
+      outputTokens = Number(usage.output_tokens) || 0;
+      const output = Array.isArray(responseObject.output) ? responseObject.output : [];
+      if (output.some((item) => item && (item.type === "function_call" || item.type === "custom_tool_call")))
+        sawToolCall = true;
+      emitFinish("stop", inputTokens || outputTokens ? { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: Number(usage.total_tokens) || inputTokens + outputTokens } : undefined);
+      return;
+    }
+    if (type === "response.incomplete") {
+      emitFinish("length");
+      return;
+    }
+    if (type === "response.failed" || type === "error") {
+      emitError(payload);
+    }
+  };
+  const processMessagesEvent = (event, payload) => {
+    const type = event || (typeof payload.type === "string" ? payload.type : "");
+    if (type === "message_start") {
+      const message = payload.message && typeof payload.message === "object" ? payload.message : {};
+      if (typeof message.id === "string")
+        responseId = message.id;
+      const usage = message.usage && typeof message.usage === "object" ? message.usage : {};
+      inputTokens = Number(usage.input_tokens) || 0;
+      return;
+    }
+    if (type === "content_block_start") {
+      const block = payload.content_block && typeof payload.content_block === "object" ? payload.content_block : {};
+      const index = Number(payload.index) || 0;
+      if (block.type === "text" && typeof block.text === "string" && block.text) {
+        emitChunk({ content: block.text });
+      } else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) {
+        emitChunk({ reasoning_content: block.thinking });
+      } else if (block.type === "tool_use") {
+        let toolIndex = messageToolIndices.get(index);
+        if (toolIndex === undefined) {
+          toolIndex = messageToolCount++;
+          messageToolIndices.set(index, toolIndex);
+        }
+        const id = typeof block.id === "string" && block.id ? block.id : `call_${toolIndex}`;
+        const name = typeof block.name === "string" ? block.name : "";
+        messageToolIds.set(index, id);
+        messageToolNames.set(index, name);
+        emitToolStart(toolIndex, id, name);
+        const args = block.input && typeof block.input === "object" && Object.keys(block.input).length ? JSON.stringify(block.input) : "";
+        if (args) {
+          messageToolArgsDeltaSeen.add(index);
+          emitChunk({ tool_calls: [{ index: toolIndex, id, type: "function", function: { arguments: args } }] });
+        }
+      }
+      return;
+    }
+    if (type === "content_block_delta") {
+      const index = Number(payload.index) || 0;
+      const delta = payload.delta && typeof payload.delta === "object" ? payload.delta : {};
+      if (delta.type === "text_delta" && typeof delta.text === "string" && delta.text)
+        emitChunk({ content: delta.text });
+      else if ((delta.type === "thinking_delta" || delta.type === "redacted_thinking_delta") && typeof delta.thinking === "string" && delta.thinking)
+        emitChunk({ reasoning_content: delta.thinking });
+      else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string" && delta.partial_json) {
+        const toolIndex = messageToolIndices.get(index);
+        const id = messageToolIds.get(index) || `call_${toolIndex ?? index}`;
+        if (toolIndex !== undefined) {
+          messageToolArgsDeltaSeen.add(index);
+          emitChunk({ tool_calls: [{ index: toolIndex, id, type: "function", function: { arguments: delta.partial_json } }] });
+        }
+      }
+      return;
+    }
+    if (type === "message_delta") {
+      const delta = payload.delta && typeof payload.delta === "object" ? payload.delta : {};
+      if (typeof delta.stop_reason === "string")
+        messageStopReason = delta.stop_reason;
+      const usage = payload.usage && typeof payload.usage === "object" ? payload.usage : {};
+      outputTokens = Number(usage.output_tokens) || outputTokens;
+      return;
+    }
+    if (type === "message_stop") {
+      const reason = messageStopReason === "tool_use" ? "tool_calls" : messageStopReason === "max_tokens" ? "length" : "stop";
+      emitFinish(reason, inputTokens || outputTokens ? { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: inputTokens + outputTokens } : undefined);
+      return;
+    }
+    if (type === "error")
+      emitError(payload);
+  };
+  const processFrame = (rawFrame) => {
+    const frame = parseFrame(rawFrame);
+    if (!frame || frame.data === "[DONE]") {
+      if (frame?.data === "[DONE]")
+        emitFinish(finishReason);
+      return;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(frame.data);
+    } catch {
+      return;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      return;
+    const payload = parsed;
+    if (payload.error && typeof payload.error === "object") {
+      emitError(payload);
+      return;
+    }
+    if (lane === "responses")
+      processResponsesEvent(frame.event, payload);
+    else
+      processMessagesEvent(frame.event, payload);
+  };
+  const stream = new Transform({
+    transform(chunk, _encoding, callback) {
+      try {
+        buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
+        let separator = /\r?\n\r?\n/.exec(buffer);
+        while (separator && separator.index !== undefined) {
+          const frame = buffer.slice(0, separator.index);
+          buffer = buffer.slice(separator.index + separator[0].length);
+          processFrame(frame);
+          separator = /\r?\n\r?\n/.exec(buffer);
+        }
+        callback();
+      } catch (error) {
+        callback(error instanceof Error ? error : new Error(String(error)));
+      }
+    },
+    flush(callback) {
+      try {
+        buffer += decoder.end();
+        if (buffer.trim())
+          processFrame(buffer);
+        if (!finished)
+          emitFinish(finishReason);
+        callback();
+      } catch (error) {
+        callback(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+  });
+  return stream;
 };
 
 // service/zen.ts
@@ -5956,13 +6703,22 @@ var writeOpenAiError = (response, status, message, code, headers = {}) => {
 };
 var AGGREGATE_LIMIT_BYTES = 8 * 1024 * 1024;
 var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimit) => {
+  const lane = resolveOpenCodeLane(config.upstream, prepared.model);
+  let upstreamBody;
+  try {
+    upstreamBody = prepareOpenCodeRequestBody(prepared.body, lane);
+  } catch (error) {
+    writeOpenAiError(response, 400, error instanceof Error ? error.message : "Could not convert the OpenCode request body.", "invalid_request");
+    return;
+  }
   const activePools = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
-  const attempted = new Set();
+  const attempted = new Set;
   const initialPool = pool ?? null;
   const healthyPools = activePools.filter((p) => !p.rateLimitedUntil || p.rateLimitedUntil <= Date.now());
   const candidates = initialPool ? [initialPool, ...healthyPools.filter((p) => p.id !== initialPool.id)] : activePools.length === 0 ? [null] : healthyPools;
   const sendAttempt = (candidate) => {
-    if (response.destroyed || response.writableEnded) return;
+    if (response.destroyed || response.writableEnded)
+      return;
     if (!candidate && activePools.length > 0) {
       const now = Date.now();
       const nextAvailableAt = Math.min(...activePools.map((p) => p.rateLimitedUntil && p.rateLimitedUntil > now ? p.rateLimitedUntil : now + 5 * 60000));
@@ -5974,7 +6730,8 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       writeOpenAiError(response, 429, "All available proxy pools have been tried or are cooling down. Wait for the upstream rate limit to reset.", "rate_limit_exhausted");
       return;
     }
-    if (candidate) attempted.add(candidate.id);
+    if (candidate)
+      attempted.add(candidate.id);
     const target = buildTarget(config, "chat", candidate, prepared.model);
     const transport = target.url.protocol === "http:" ? http2 : https2;
     const upstream = transport.request(target.url, {
@@ -5983,15 +6740,16 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       headers: {
         ...target.headers,
         ...freeTierHeaders(session),
+        ...lane === "messages" ? { "anthropic-version": "2023-06-01" } : {},
         "content-type": "application/json",
         accept: "text/event-stream",
-        "content-length": String(Buffer.byteLength(prepared.body))
+        "content-length": String(Buffer.byteLength(upstreamBody))
       }
     }, (answer) => {
       const status = answer.statusCode ?? 502;
       if (status === 429 && onRateLimit) {
         const retryAfter = answer.headers["retry-after"];
-        onRateLimit(candidate, typeof retryAfter === "string" ? retryAfter : void 0);
+        onRateLimit(candidate, typeof retryAfter === "string" ? retryAfter : undefined);
         if (candidate) {
           const next = candidates.find((p) => p !== null && !attempted.has(p.id) && (!p.rateLimitedUntil || p.rateLimitedUntil <= Date.now()));
           if (next) {
@@ -6006,31 +6764,50 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
           }
         }
       }
-      if (prepared.stream || status !== 200) {
+      if (status < 200 || status >= 300) {
         response.writeHead(status, responseHeaders(answer.headers));
         pipeline(answer, response, () => {});
         return;
       }
+      const contentType = typeof answer.headers["content-type"] === "string" ? answer.headers["content-type"].toLowerCase() : "";
+      const protocolTransform = lane !== "chat" && contentType.includes("text/event-stream") ? createOpenCodeResponseTransform(lane, prepared.model) : null;
+      if (prepared.stream) {
+        response.writeHead(status, responseHeaders(answer.headers));
+        if (protocolTransform) {
+          pipeline(answer, protocolTransform, response, () => {});
+        } else {
+          pipeline(answer, response, () => {});
+        }
+        return;
+      }
       const chunks = [];
       let size = 0;
-      answer.on("data", (chunk) => {
-        size += chunk.length;
-        if (size <= AGGREGATE_LIMIT_BYTES) chunks.push(chunk);
+      const collect = (chunk) => {
+        const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        size += value.length;
+        if (size <= AGGREGATE_LIMIT_BYTES)
+          chunks.push(value);
+      };
+      const source = protocolTransform ?? answer;
+      source.on("data", collect);
+      source.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        writeJson(response, status, aggregateStream(body));
       });
-      answer.on("end", () => {
-        writeJson(response, status, aggregateStream(Buffer.concat(chunks).toString("utf8")));
-      });
-      answer.on("error", (error) => {
+      source.on("error", (error) => {
         writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, "upstream_unreachable");
       });
+      if (protocolTransform)
+        answer.pipe(protocolTransform);
     });
     upstream.on("error", (error) => {
       writeOpenAiError(response, 502, `The upstream did not answer: ${error.message}`, "upstream_unreachable");
     });
     response.on("close", () => {
-      if (!response.writableEnded) upstream.destroy();
+      if (!response.writableEnded)
+        upstream.destroy();
     });
-    upstream.end(prepared.body);
+    upstream.end(upstreamBody);
   };
   sendAttempt(initialPool);
 };
@@ -6064,8 +6841,17 @@ var presentedKey = (request) => {
 };
 var writeRateLimitedError = (response, until, message) => {
   const retrySeconds = Math.max(1, Math.ceil((until - Date.now()) / 1000));
-  response.writeHead(429, { "content-type": "application/json", "retry-after": String(retrySeconds) });
-  response.end(JSON.stringify({ error: { message, type: "rate_limit_error", code: "rate_limit_exhausted" } }));
+  response.writeHead(429, {
+    "content-type": "application/json",
+    "retry-after": String(retrySeconds)
+  });
+  response.end(JSON.stringify({
+    error: {
+      message,
+      type: "rate_limit_error",
+      code: "rate_limit_exhausted"
+    }
+  }));
 };
 var readBody = (request) => new Promise((resolve, reject) => {
   const chunks = [];
@@ -6152,7 +6938,7 @@ var startRouterServer = (deps) => new Promise((resolve, reject) => {
           if (deps.markRateLimited) {
             deps.markRateLimited(rateLimitedPool, retryAfter);
           } else if (rateLimitedPool) {
-            rateLimitedPool.rateLimitedUntil = Date.now() + parseRetryAfterMs(retryAfter);
+            rateLimitedPool.rateLimitedUntil = Date.now() + 5 * 60000;
             rateLimitedPool.testStatus = "error";
             rateLimitedPool.lastError = "Rate limit (HTTP 429)";
             rateLimitedPool.lastTestedAt = Date.now();
@@ -6179,22 +6965,6 @@ var startRouterServer = (deps) => new Promise((resolve, reject) => {
 });
 
 // service/runtime.ts
-var parseRetryAfterMs = (value, now = Date.now(), fallbackMs = 5 * 60000) => {
-  const fallback = Math.max(1000, Math.min(fallbackMs, 60 * 60 * 1000));
-  if (typeof value !== "string" || value.trim() === "") return fallback;
-  const trimmed = value.trim();
-  let requestedMs;
-  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
-    const seconds = Number(trimmed);
-    if (!Number.isFinite(seconds) || seconds < 0) return fallback;
-    requestedMs = seconds * 1000;
-  } else {
-    const date = Date.parse(trimmed);
-    if (!Number.isFinite(date)) return fallback;
-    requestedMs = date - now;
-  }
-  return Math.max(1000, Math.min(requestedMs, 60 * 60 * 1000));
-};
 var REFRESH_INTERVAL_MS = 10 * 60000;
 var REQUEST_LOG_LIMIT = 25;
 var PACKAGE_ROOT = path3.dirname(path3.dirname(fileURLToPath(import.meta.url)));
@@ -6278,9 +7048,7 @@ var createRuntime = (store = createConfigStore()) => {
             directRateLimitedUntil = limitedUntil;
             return;
           }
-          const updatedPools = config.proxyPools.map((entry) => entry.id === pool.id
-            ? { ...entry, rateLimitedUntil: limitedUntil, testStatus: "error", lastError: "Rate limit (HTTP 429)", lastTestedAt: Date.now() }
-            : entry);
+          const updatedPools = config.proxyPools.map((entry) => entry.id === pool.id ? { ...entry, rateLimitedUntil: limitedUntil, testStatus: "error", lastError: "Rate limit (HTTP 429)", lastTestedAt: Date.now() } : entry);
           persist({ ...config, proxyPools: updatedPools });
         },
         record: (entry) => {
@@ -6460,9 +7228,8 @@ var createRuntime = (store = createConfigStore()) => {
     },
     testModel: async (modelId) => {
       const start = Date.now();
-      const attempted = new Set();
-      const activeCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
-      const maxAttempts = Math.max(1, activeCount);
+      const attempted = new Set;
+      const maxAttempts = Math.max(1, config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length + 1);
       let lastError = "The upstream did not answer.";
       const chatPayload = JSON.stringify({
         model: modelId,
@@ -6471,7 +7238,7 @@ var createRuntime = (store = createConfigStore()) => {
         stream: false
       });
       const prepared = prepareChat(chatPayload, { rtkEnabled: false });
-      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      for (let attempt = 0;attempt < maxAttempts; attempt += 1) {
         const pool = poolSelector.pickPool(config);
         const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
         if (!pool && activePoolCount > 0) {
@@ -6482,8 +7249,10 @@ var createRuntime = (store = createConfigStore()) => {
           lastError = `The direct OpenCode upstream is rate-limited. Retry in approximately ${Math.ceil((directRateLimitedUntil - Date.now()) / 1000)} seconds.`;
           break;
         }
-        if (pool && attempted.has(pool.id)) break;
-        if (pool) attempted.add(pool.id);
+        if (pool && attempted.has(pool.id))
+          break;
+        if (pool)
+          attempted.add(pool.id);
         const target = buildTarget(config, "chat", pool, modelId);
         const testHeaders = {
           ...freeTierHeaders(runtimeSession),
@@ -6504,7 +7273,7 @@ var createRuntime = (store = createConfigStore()) => {
                 res.on("end", () => resolve({
                   text: Buffer.concat(chunks).toString("utf8"),
                   status: res.statusCode ?? 502,
-                  retryAfter: typeof res.headers["retry-after"] === "string" ? res.headers["retry-after"] : void 0
+                  retryAfter: typeof res.headers["retry-after"] === "string" ? res.headers["retry-after"] : undefined
                 }));
               });
               req.on("error", reject);
@@ -6526,7 +7295,7 @@ var createRuntime = (store = createConfigStore()) => {
             });
             resultText = await answer.text();
             status = answer.status;
-            retryAfter = answer.headers.get("retry-after") ?? void 0;
+            retryAfter = answer.headers.get("retry-after") ?? undefined;
           }
           if (status >= 200 && status < 300) {
             const aggregated = aggregateStream(resultText);
@@ -6536,7 +7305,8 @@ var createRuntime = (store = createConfigStore()) => {
             return { ok: true, modelId, elapsedMs: Date.now() - start, reply };
           }
           lastError = `HTTP ${status}: ${resultText.slice(0, 300)}`;
-          if (status !== 429) break;
+          if (status !== 429)
+            break;
           const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
           if (!pool && activePoolCount === 0) {
             directRateLimitedUntil = Date.now() + parseRetryAfterMs(retryAfter);
@@ -6557,7 +7327,12 @@ var createRuntime = (store = createConfigStore()) => {
           break;
         }
       }
-      return { ok: false, modelId, elapsedMs: Date.now() - start, error: lastError };
+      return {
+        ok: false,
+        modelId,
+        elapsedMs: Date.now() - start,
+        error: lastError
+      };
     },
     deployCloudflare: async (input) => {
       const res = await deployCloudflare(input);
