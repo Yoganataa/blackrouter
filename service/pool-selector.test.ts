@@ -17,6 +17,7 @@ const baseConfig = (overrides: Partial<RouterConfig> = {}): RouterConfig => ({
   apiKey: 'test-key',
   upstream: 'https://opencode.ai/zen/v1',
   selectedModels: [],
+  fallbackModels: [],
   proxyPools: [pool('p1', 'Pool 1'), pool('p2', 'Pool 2'), pool('p3', 'Pool 3')],
   proxyStrategy: 'single',
   activePoolId: null,
