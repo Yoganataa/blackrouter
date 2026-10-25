@@ -352,8 +352,12 @@ const chatToMessages = (body: AnyObject): AnyObject => {
   return result;
 };
 
-export const prepareOpenCodeRequestBody = (raw: string, lane: OpenCodeLane): string => {
-  if (lane === 'chat') return raw;
+export const prepareOpenCodeRequestBody = (
+  raw: string,
+  lane: OpenCodeLane,
+  normalizeChatModelId = false,
+): string => {
+  if (lane === 'chat' && !normalizeChatModelId) return raw;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -364,6 +368,10 @@ export const prepareOpenCodeRequestBody = (raw: string, lane: OpenCodeLane): str
     throw new Error('The prepared upstream request must be a JSON object.');
   }
   const body = parsed as AnyObject;
+  if (lane === 'chat') {
+    if (typeof body.model === 'string') body.model = cleanModelId(body.model);
+    return JSON.stringify(body);
+  }
   return JSON.stringify(lane === 'responses' ? chatToResponses(body) : chatToMessages(body));
 };
 
