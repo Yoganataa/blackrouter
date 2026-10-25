@@ -396,12 +396,18 @@ export const proxyChatCompletion = (
   const activePools = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
   const attempted = new Set<string>();
   const initialPool = pool ?? null;
+  const healthyPools = activePools.filter((p) => !p.rateLimitedUntil || p.rateLimitedUntil <= Date.now());
+  // A direct initial attempt is used only when the user has no configured active pools.
   const candidates: Array<ProxyPool | null> = initialPool
-    ? [initialPool, ...activePools.filter((p) => p.id !== initialPool.id && (!p.rateLimitedUntil || p.rateLimitedUntil <= Date.now()))]
-    : [null];
+    ? [initialPool, ...healthyPools.filter((p) => p.id !== initialPool.id)]
+    : activePools.length === 0 ? [null] : healthyPools;
 
   const sendAttempt = (candidate: ProxyPool | null): void => {
     if (response.destroyed || response.writableEnded) return;
+    if (!candidate && activePools.length > 0) {
+      writeOpenAiError(response, 429, 'All configured proxy pools are cooling down. Wait before retrying the upstream.', 'rate_limit_exhausted');
+      return;
+    }
     if (candidate && attempted.has(candidate.id)) {
       writeOpenAiError(response, 429, 'All available proxy pools have been tried or are cooling down. Wait for the upstream rate limit to reset.', 'rate_limit_exhausted');
       return;
@@ -435,6 +441,8 @@ export const proxyChatCompletion = (
             sendAttempt(next);
             return;
           }
+          // Direct upstream and all-pool cases have no safe failover target.
+          // Keep the original 429 and its Retry-After header rather than looping.
         }
         if (prepared.stream || status !== 200) {
           response.writeHead(status, responseHeaders(answer.headers));
