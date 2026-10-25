@@ -33,7 +33,7 @@ describe('RTK token compression', () => {
       '+const newRoute = 1;',
       ' const after = true;',
       '\\ No newline at end of file',
-    ].join('\\n');
+    ].join('\n');
 
     const compacted = compactGitDiff(diff);
     expect(compacted).toContain('const before = true;');
