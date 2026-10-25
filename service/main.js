@@ -6531,6 +6531,99 @@ var resolveModelCandidates = (requestedModel, configuredFallbacks = []) => {
 };
 var isRetryableFallbackStatus = (status) => status === 404 || status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
 
+// service/usage-observer.ts
+import { Transform as Transform2 } from "node:stream";
+import { StringDecoder as StringDecoder2 } from "node:string_decoder";
+var objectOf = (value) => value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+var tokenCount = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
+var extractTokenUsage = (payload) => {
+  const root = objectOf(payload);
+  if (!root)
+    return null;
+  const response = objectOf(root.response);
+  const message = objectOf(root.message);
+  const usage = objectOf(root.usage) ?? objectOf(response?.usage) ?? objectOf(message?.usage);
+  if (!usage)
+    return null;
+  const inputTokens = tokenCount(usage.prompt_tokens) ?? tokenCount(usage.input_tokens);
+  const outputTokens = tokenCount(usage.completion_tokens) ?? tokenCount(usage.output_tokens);
+  const totalTokens = tokenCount(usage.total_tokens) ?? (inputTokens !== undefined && outputTokens !== undefined ? inputTokens + outputTokens : undefined);
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined)
+    return null;
+  return {
+    ...inputTokens !== undefined ? { inputTokens } : {},
+    ...outputTokens !== undefined ? { outputTokens } : {},
+    ...totalTokens !== undefined ? { totalTokens } : {}
+  };
+};
+var inspectSseFrame = (frame, onUsage) => {
+  const data = [];
+  for (const line of frame.split(/\r?\n/)) {
+    if (line.startsWith("data:"))
+      data.push(line.slice(5).trimStart());
+  }
+  if (!data.length)
+    return;
+  const raw = data.join(`
+`).trim();
+  if (!raw || raw === "[DONE]")
+    return;
+  try {
+    const payload = JSON.parse(raw);
+    const usage = extractTokenUsage(payload);
+    if (usage)
+      onUsage(usage);
+  } catch {}
+};
+var createUsageObserver = (onUsage) => {
+  const decoder = new StringDecoder2("utf8");
+  let buffer = "";
+  const inspect = (text) => {
+    buffer += text;
+    let match = /\r?\n\r?\n/.exec(buffer);
+    while (match && match.index !== undefined) {
+      const frame = buffer.slice(0, match.index);
+      buffer = buffer.slice(match.index + match[0].length);
+      inspectSseFrame(frame, (usage) => {
+        try {
+          onUsage(usage);
+        } catch {}
+      });
+      match = /\r?\n\r?\n/.exec(buffer);
+    }
+    if (buffer.length > 1024 * 1024) {
+      buffer = buffer.slice(-64 * 1024);
+    }
+  };
+  return new Transform2({
+    transform(chunk, _encoding, callback) {
+      try {
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        inspect(decoder.write(bytes));
+        this.push(bytes);
+        callback();
+      } catch (error) {
+        callback(error instanceof Error ? error : new Error(String(error)));
+      }
+    },
+    flush(callback) {
+      try {
+        inspect(decoder.end());
+        if (buffer.trim()) {
+          inspectSseFrame(buffer, (usage) => {
+            try {
+              onUsage(usage);
+            } catch {}
+          });
+        }
+        callback();
+      } catch (error) {
+        callback(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+  });
+};
+
 // service/upstream.ts
 class TunnelAgent extends https2.Agent {
   proxyUrl;
@@ -6782,7 +6875,7 @@ var writeOpenAiError = (response, status, message, code, headers = {}) => {
   writeJson(response, status, { error: { message, type: "invalid_request_error", code } }, headers);
 };
 var AGGREGATE_LIMIT_BYTES = 8 * 1024 * 1024;
-var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimit) => {
+var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimit, onUsage) => {
   const modelCandidates = resolveModelCandidates(prepared.model, config.fallbackModels ?? []);
   const activePools = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
   const now = Date.now();
@@ -6798,6 +6891,14 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
   const attempts = modelCandidates.flatMap((model) => poolCandidates.map((candidatePool) => ({ model, pool: candidatePool })));
   let attemptIndex = 0;
   let lastRequestedModel = prepared.model;
+  const fallbackReasons = [];
+  const routingHeaders = (attempt) => ({
+    "x-blackrouter-requested-model": prepared.model,
+    "x-blackrouter-resolved-model": attempt.model,
+    "x-blackrouter-resolved-pool": attempt.pool?.name ?? "Direct",
+    ...attempt.model !== prepared.model ? { "x-blackrouter-fallback-used": "true" } : {},
+    ...fallbackReasons.length > 0 ? { "x-blackrouter-fallback-reason": fallbackReasons.join(" -> ") } : {}
+  });
   const modelAwareBody = (model) => {
     const lane = resolveOpenCodeLane(config.upstream, model);
     let raw = prepared.body;
@@ -6855,28 +6956,27 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       }
     }, (answer) => {
       const status = answer.statusCode ?? 502;
-      response.setHeader("x-blackrouter-requested-model", prepared.model);
-      response.setHeader("x-blackrouter-resolved-model", attempt.model);
-      if (attempt.model !== prepared.model)
-        response.setHeader("x-blackrouter-fallback-used", "true");
       if (status === 429 && onRateLimit) {
         const retryAfter = answer.headers["retry-after"];
         onRateLimit(candidate, typeof retryAfter === "string" ? retryAfter : undefined);
       }
-      if (isRetryableFallbackStatus(status) && attemptIndex + 1 < attempts.length) {
-        attemptIndex += 1;
-        answer.resume();
-        sendAttempt();
-        return;
+      if (isRetryableFallbackStatus(status)) {
+        fallbackReasons.push(`HTTP ${status} on ${attempt.model}`);
+        if (attemptIndex + 1 < attempts.length) {
+          attemptIndex += 1;
+          answer.resume();
+          sendAttempt();
+          return;
+        }
       }
+      const routeHeaders = routingHeaders(attempt);
+      for (const [name, value] of Object.entries(routeHeaders))
+        response.setHeader(name, value);
       if (status < 200 || status >= 300) {
-        const headers = {
+        response.writeHead(status, {
           ...responseHeaders(answer.headers),
-          "x-blackrouter-requested-model": prepared.model,
-          "x-blackrouter-resolved-model": attempt.model,
-          ...attempt.model !== prepared.model ? { "x-blackrouter-fallback-used": "true" } : {}
-        };
-        response.writeHead(status, headers);
+          ...routeHeaders
+        });
         pipeline(answer, response, () => {});
         return;
       }
@@ -6884,16 +6984,15 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       const protocolTransform = lane !== "chat" && contentType.includes("text/event-stream") ? createOpenCodeResponseTransform(lane, attempt.model) : null;
       const successHeaders = {
         ...responseHeaders(answer.headers),
-        "x-blackrouter-requested-model": prepared.model,
-        "x-blackrouter-resolved-model": attempt.model,
-        ...attempt.model !== prepared.model ? { "x-blackrouter-fallback-used": "true" } : {}
+        ...routeHeaders
       };
       if (prepared.stream) {
         response.writeHead(status, successHeaders);
+        const observer = createUsageObserver((usage) => onUsage?.(usage));
         if (protocolTransform) {
-          pipeline(answer, protocolTransform, response, () => {});
+          pipeline(answer, protocolTransform, observer, response, () => {});
         } else {
-          pipeline(answer, response, () => {});
+          pipeline(answer, observer, response, () => {});
         }
         return;
       }
@@ -6908,7 +7007,11 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       const source = protocolTransform ?? answer;
       source.on("data", collect);
       source.on("end", () => {
-        writeJson(response, status, aggregateStream(Buffer.concat(chunks).toString("utf8")), successHeaders);
+        const completion = aggregateStream(Buffer.concat(chunks).toString("utf8"));
+        const usage = extractTokenUsage(completion);
+        if (usage)
+          onUsage?.(usage);
+        writeJson(response, status, completion, successHeaders);
       });
       source.on("error", (error) => {
         writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, "upstream_unreachable");
@@ -6921,11 +7024,16 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
     });
     upstream.on("error", (error) => {
       if (attemptIndex + 1 < attempts.length && !response.headersSent && !response.destroyed) {
+        fallbackReasons.push(`network error on ${lastRequestedModel}`);
         attemptIndex += 1;
         sendAttempt();
         return;
       }
-      writeOpenAiError(response, 502, `The upstream did not answer for ${lastRequestedModel}: ${error.message}`, "upstream_unreachable");
+      const finalAttempt = attempt;
+      const routeHeaders = routingHeaders(finalAttempt);
+      for (const [name, value] of Object.entries(routeHeaders))
+        response.setHeader(name, value);
+      writeOpenAiError(response, 502, `The upstream did not answer for ${lastRequestedModel}: ${error.message}`, "upstream_unreachable", routeHeaders);
     });
     response.on("close", () => {
       if (!response.writableEnded)
