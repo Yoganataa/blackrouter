@@ -5956,51 +5956,73 @@ var writeOpenAiError = (response, status, message, code) => {
 };
 var AGGREGATE_LIMIT_BYTES = 8 * 1024 * 1024;
 var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimit) => {
-  const target = buildTarget(config, "chat", pool, prepared.model);
-  const transport = target.url.protocol === "http:" ? http2 : https2;
-  const upstream = transport.request(target.url, {
-    method: "POST",
-    agent: target.agent,
-    headers: {
-      ...target.headers,
-      ...freeTierHeaders(session),
-      "content-type": "application/json",
-      accept: "text/event-stream",
-      "content-length": String(Buffer.byteLength(prepared.body))
-    }
-  }, (answer) => {
-    const status = answer.statusCode ?? 502;
-    if (status === 429 && pool && onRateLimit) {
-      const retryAfter = answer.headers["retry-after"];
-      onRateLimit(pool, typeof retryAfter === "string" ? retryAfter : void 0);
-    }
-    if (prepared.stream || status !== 200) {
-      response.writeHead(status, responseHeaders(answer.headers));
-      pipeline(answer, response, () => {});
+  const activePools = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
+  const attempted = new Set();
+  const initialPool = pool ?? null;
+  const healthyPools = activePools.filter((p) => !p.rateLimitedUntil || p.rateLimitedUntil <= Date.now());
+  const candidates = initialPool ? [initialPool, ...healthyPools.filter((p) => p.id !== initialPool.id)] : activePools.length === 0 ? [null] : healthyPools;
+  const sendAttempt = (candidate) => {
+    if (response.destroyed || response.writableEnded) return;
+    if (!candidate && activePools.length > 0) {
+      writeOpenAiError(response, 429, "All configured proxy pools are cooling down. Wait before retrying the upstream.", "rate_limit_exhausted");
       return;
     }
-    const chunks = [];
-    let size = 0;
-    answer.on("data", (chunk) => {
-      size += chunk.length;
-      if (size <= AGGREGATE_LIMIT_BYTES)
-        chunks.push(chunk);
+    if (candidate && attempted.has(candidate.id)) {
+      writeOpenAiError(response, 429, "All available proxy pools have been tried or are cooling down. Wait for the upstream rate limit to reset.", "rate_limit_exhausted");
+      return;
+    }
+    if (candidate) attempted.add(candidate.id);
+    const target = buildTarget(config, "chat", candidate, prepared.model);
+    const transport = target.url.protocol === "http:" ? http2 : https2;
+    const upstream = transport.request(target.url, {
+      method: "POST",
+      agent: target.agent,
+      headers: {
+        ...target.headers,
+        ...freeTierHeaders(session),
+        "content-type": "application/json",
+        accept: "text/event-stream",
+        "content-length": String(Buffer.byteLength(prepared.body))
+      }
+    }, (answer) => {
+      const status = answer.statusCode ?? 502;
+      if (status === 429 && candidate && onRateLimit) {
+        const retryAfter = answer.headers["retry-after"];
+        onRateLimit(candidate, typeof retryAfter === "string" ? retryAfter : void 0);
+        const next = candidates.find((p) => p !== null && !attempted.has(p.id) && (!p.rateLimitedUntil || p.rateLimitedUntil <= Date.now()));
+        if (next) {
+          answer.resume();
+          sendAttempt(next);
+          return;
+        }
+      }
+      if (prepared.stream || status !== 200) {
+        response.writeHead(status, responseHeaders(answer.headers));
+        pipeline(answer, response, () => {});
+        return;
+      }
+      const chunks = [];
+      let size = 0;
+      answer.on("data", (chunk) => {
+        size += chunk.length;
+        if (size <= AGGREGATE_LIMIT_BYTES) chunks.push(chunk);
+      });
+      answer.on("end", () => {
+        writeJson(response, status, aggregateStream(Buffer.concat(chunks).toString("utf8")));
+      });
+      answer.on("error", (error) => {
+        writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, "upstream_unreachable");
+      });
     });
-    answer.on("end", () => {
-      writeJson(response, status, aggregateStream(Buffer.concat(chunks).toString("utf8")));
+    upstream.on("error", (error) => {
+      writeOpenAiError(response, 502, `The upstream did not answer: ${error.message}`, "upstream_unreachable");
     });
-    answer.on("error", (error) => {
-      writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, "upstream_unreachable");
+    response.on("close", () => {
+      if (!response.writableEnded) upstream.destroy();
     });
-  });
-  upstream.on("error", (error) => {
-    writeOpenAiError(response, 502, `The upstream did not answer: ${error.message}`, "upstream_unreachable");
-  });
-  response.on("close", () => {
-    if (!response.writableEnded)
-      upstream.destroy();
-  });
-  upstream.end(prepared.body);
+    upstream.end(prepared.body);
+  };
+  sendAttempt(initialPool);
 };
 
 // service/router-server.ts
