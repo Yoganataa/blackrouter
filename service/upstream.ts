@@ -11,7 +11,7 @@ import { resolveModelMetadata } from './model-metadata.ts';
 import { aggregateStream } from './sse.ts';
 import { createOpenCodeResponseTransform, prepareOpenCodeRequestBody, resolveOpenCodeLane } from './opencode-protocol.ts';
 import { freeTierHeaders, type PreparedChat } from './zen.ts';
-import { isRetryableFallbackStatus, resolveModelCandidates } from './model-fallback.ts';
+import { resolveModelCandidates, shouldAdvanceAfterStatus } from './model-fallback.ts';
 import { createUsageObserver, extractTokenUsage, type TokenUsage } from './usage-observer.ts';
 
 /**
@@ -547,7 +547,7 @@ export const proxyChatCompletion = (
 
         // Until a successful response starts streaming, fail over only to the
         // next bounded and eligible model/pool pair. Do not retry malformed/auth requests.
-        if (isRetryableFallbackStatus(status)) {
+        if (shouldAdvanceAfterStatus(status, candidate !== null)) {
           fallbackReasons.push(`HTTP ${status} on ${attempt.model}`);
           if (advanceToNextAttempt()) {
             answer.resume();
