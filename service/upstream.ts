@@ -441,6 +441,13 @@ export const proxyChatCompletion = (
             sendAttempt(next);
             return;
           }
+          if (initialPool) {
+            // We've exhausted the pool list. Return a normalized 429 instead of the
+            // first raw relay response, which may obscure the upstream rate-limit reason.
+            answer.resume();
+            writeOpenAiError(response, 429, 'All available proxy pools are rate-limited. Wait for the upstream rate limit to reset.', 'rate_limit_exhausted');
+            return;
+          }
           // Direct upstream and all-pool cases have no safe failover target.
           // Keep the original 429 and its Retry-After header rather than looping.
         }
