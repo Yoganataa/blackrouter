@@ -2,8 +2,16 @@ import { describe, expect, it } from 'bun:test';
 
 import {
   autoDetectFilter,
+  compactBuildOutput,
+  compactDedupLog,
+  compactFind,
   compactGitDiff,
+  compactGitLog,
   compactGitStatus,
+  compactLs,
+  compactReadNumbered,
+  compactSearchList,
+  compactTree,
   compactGrep,
   compressMessages,
   smartTruncate,
@@ -73,6 +81,117 @@ describe('RTK token compression', () => {
     expect(compacted).toContain('[src/foo.ts] (6)');
     expect(compacted).toContain('+1 more');
     expect(compacted).toContain('[src/bar.ts] (1)');
+  });
+
+  it('detects and compacts detailed git log output without commit bodies', () => {
+    const gitLog = [
+      'commit abcdef1234567890',
+      'Author: Dev <dev@example.com>',
+      'Date:   Sat Oct 25 12:30:00 2026 +0700',
+      '',
+      '    Fix routing cooldown behavior',
+      '',
+      '    This repeated body contains implementation detail that is not useful in the compact summary.',
+      '    More explanation that should be removed from the prompt.',
+      'commit 0123456789abcdef',
+      'Author: Dev <dev@example.com>',
+      'Date:   Fri Oct 24 12:30:00 2026 +0700',
+      '',
+      '    Add request history',
+    ].join('\n');
+    expect(autoDetectFilter(gitLog)).toBe(compactGitLog);
+    const compacted = compactGitLog(gitLog);
+    expect(compacted).toContain('Fix routing cooldown behavior');
+    expect(compacted).toContain('Author: Dev');
+    expect(compacted).not.toContain('repeated body contains implementation');
+  });
+
+  it('keeps errors and final summaries from build output while dropping progress noise', () => {
+    const raw = [
+      'Compiling crate_a v1.0.0',
+      'Compiling crate_b v2.0.0',
+      'error[E0425]: cannot find value in this scope',
+      ' --> src/main.rs:3:5',
+      '  |',
+      '  = note: an explanatory compiler message',
+      '',
+      'Finished dev profile [unoptimized + debuginfo] target(s) in 0.20s',
+    ].join('\n');
+    expect(autoDetectFilter(raw)).toBe(compactBuildOutput);
+    const compacted = compactBuildOutput(raw);
+    expect(compacted).toContain('Compiled 2 packages');
+    expect(compacted).toContain('error[E0425]');
+    expect(compacted).toContain('src/main.rs:3:5');
+    expect(compacted).toContain('Finished dev profile');
+    expect(compacted).not.toContain('Compiling crate_a');
+  });
+
+  it('groups find results by directory and caps each directory listing', () => {
+    const raw = ['./src/a.ts\n./src/b.ts\n./tests/a.test.ts'];
+    expect(autoDetectFilter(raw[0] ?? '')).toBe(compactFind);
+    const compacted = compactFind(raw[0] ?? '');
+    expect(compacted).toContain('3 files in 2 dirs');
+    expect(compacted).toContain('src/  (2)');
+    expect(compacted).toContain('a.test.ts');
+  });
+
+  it('compacts ls -la output with a useful extension summary', () => {
+    const raw = [
+      'total 24',
+      'drwxr-xr-x 3 user group 4096 Oct 25 12:30 src',
+      '-rw-r--r-- 1 user group 512 Oct 25 12:30 package.json',
+      '-rw-r--r-- 1 user group 1024 Oct 25 12:31 README.md',
+    ].join('\n');
+    expect(autoDetectFilter(raw)).toBe(compactLs);
+    const compacted = compactLs(raw);
+    expect(compacted).toContain('src/');
+    expect(compacted).toContain('package.json');
+    expect(compacted).toContain('Summary: 2 files, 1 dirs');
+  });
+
+  it('removes tree summary rows and trailing blanks', () => {
+    const raw = 'project\n├── src\n│  └── index.ts\n1 directory, 1 file\n\n';
+    expect(autoDetectFilter(raw)).toBe(compactTree);
+    const compacted = compactTree(raw);
+    expect(compacted).toContain('index.ts');
+    expect(compacted).not.toContain('1 directory');
+    expect(compacted.endsWith('\n')).toBe(false);
+  });
+
+  it('special-cases line-numbered file reads with an explicit truncation marker', () => {
+    const lines = Array.from({ length: 100 }, (_, index) => '  ' + (index + 1) + '|const value' + index + ' = true;');
+    const raw = lines.join('\n');
+    expect(autoDetectFilter(raw)).toBe(compactReadNumbered);
+    const compacted = compactReadNumbered(raw);
+    expect(compacted).toContain('file continues');
+    expect(compacted).toContain('const value0');
+    expect(compacted).toContain('const value99');
+  });
+
+  it('collapses consecutive duplicate log lines with a count', () => {
+    const raw = [
+      'build started',
+      'warning: transient message',
+      'warning: transient message',
+      'warning: transient message',
+      'tests started',
+      'tests finished',
+    ].join('\n');
+    expect(autoDetectFilter(raw)).toBe(compactDedupLog);
+    expect(compactDedupLog(raw)).toContain('(2 duplicate lines)');
+  });
+
+  it('groups Cursor search-list output by directory', () => {
+    const raw = [
+      "Result of search in 'src' (total 3 files):",
+      '- src/a.ts',
+      '- src/b.ts',
+      '- src/utils/format.ts',
+    ].join('\n');
+    expect(autoDetectFilter(raw)).toBe(compactSearchList);
+    const compacted = compactSearchList(raw);
+    expect(compacted).toContain('3 files in 2 dirs');
+    expect(compacted).toContain('src/utils/ (1):');
   });
 
   it('truncates large generic text cleanly', () => {
