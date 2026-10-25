@@ -5368,6 +5368,8 @@ var parseRetryAfterMs = (value, now = Date.now(), fallbackMs = 5 * 60000) => {
       return fallback;
     requestedMs = seconds * 1000;
   } else {
+    if (/^[+-]/.test(trimmed))
+      return fallback;
     const date = Date.parse(trimmed);
     if (!Number.isFinite(date))
       return fallback;
