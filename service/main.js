@@ -3875,6 +3875,7 @@ var routerConfigSchema = objectType({
   apiKey: stringType().min(8),
   upstream: stringType(),
   selectedModels: arrayType(stringType()),
+  fallbackModels: arrayType(stringType().min(1)).max(2).default([]),
   proxyPools: arrayType(proxyPoolSchema),
   proxyStrategy: enumType(PROXY_STRATEGIES).default("single"),
   activePoolId: stringType().nullable().optional(),
@@ -3885,6 +3886,7 @@ var configPatchSchema = objectType({
   port: numberType().int().min(1024).max(65535).optional(),
   apiKey: stringType().min(1).optional(),
   selectedModels: arrayType(stringType()).optional(),
+  fallbackModels: arrayType(stringType().min(1)).max(2).optional(),
   proxyPools: arrayType(proxyPoolSchema).optional(),
   proxyStrategy: enumType(PROXY_STRATEGIES).optional(),
   activePoolId: stringType().nullable().optional(),
@@ -3969,6 +3971,7 @@ var defaultConfig = () => ({
   apiKey: createApiKey(),
   upstream: OPENCODE_ZEN,
   selectedModels: [],
+  fallbackModels: [],
   proxyPools: [],
   proxyStrategy: "single",
   activePoolId: null,
@@ -5708,8 +5711,8 @@ var chatToMessages = (body) => {
   }
   return result;
 };
-var prepareOpenCodeRequestBody = (raw, lane) => {
-  if (lane === "chat")
+var prepareOpenCodeRequestBody = (raw, lane, normalizeChatModelId = false) => {
+  if (lane === "chat" && !normalizeChatModelId)
     return raw;
   let parsed;
   try {
@@ -5721,6 +5724,11 @@ var prepareOpenCodeRequestBody = (raw, lane) => {
     throw new Error("The prepared upstream request must be a JSON object.");
   }
   const body = parsed;
+  if (lane === "chat") {
+    if (typeof body.model === "string")
+      body.model = cleanModelId(body.model);
+    return JSON.stringify(body);
+  }
   return JSON.stringify(lane === "responses" ? chatToResponses(body) : chatToMessages(body));
 };
 var parseFrame = (frame) => {
@@ -6451,6 +6459,29 @@ var prepareChat = (raw, options) => {
   return { body: JSON.stringify(parsed), stream, model };
 };
 
+// service/model-fallback.ts
+var MAX_FALLBACK_MODELS = 2;
+var MAX_MODELS_PER_REQUEST = MAX_FALLBACK_MODELS + 1;
+var canonicalModelId = (modelId) => {
+  const trimmed = modelId.trim().replace(/\([^()]+\)\s*$/, "").trim();
+  const bare = trimmed.includes("/") ? trimmed.split("/").pop() ?? trimmed : trimmed;
+  return bare.toLowerCase();
+};
+var resolveModelCandidates = (requestedModel, configuredFallbacks = []) => {
+  const result = [];
+  const seen = new Set;
+  for (const model of [requestedModel, ...configuredFallbacks].slice(0, 1 + MAX_FALLBACK_MODELS)) {
+    const cleaned = model.trim();
+    const canonical = canonicalModelId(cleaned);
+    if (!cleaned || !canonical || seen.has(canonical))
+      continue;
+    seen.add(canonical);
+    result.push(cleaned);
+  }
+  return result;
+};
+var isRetryableFallbackStatus = (status) => status === 404 || status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+
 // service/upstream.ts
 class TunnelAgent extends https2.Agent {
   proxyUrl;
@@ -6703,36 +6734,64 @@ var writeOpenAiError = (response, status, message, code, headers = {}) => {
 };
 var AGGREGATE_LIMIT_BYTES = 8 * 1024 * 1024;
 var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimit) => {
-  const lane = resolveOpenCodeLane(config.upstream, prepared.model);
-  let upstreamBody;
-  try {
-    upstreamBody = prepareOpenCodeRequestBody(prepared.body, lane);
-  } catch (error) {
-    writeOpenAiError(response, 400, error instanceof Error ? error.message : "Could not convert the OpenCode request body.", "invalid_request");
+  const modelCandidates = resolveModelCandidates(prepared.model, config.fallbackModels ?? []);
+  const activePools = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
+  const now = Date.now();
+  const healthyPools = activePools.filter((p) => !p.rateLimitedUntil || p.rateLimitedUntil <= now);
+  const initialPool = pool ?? null;
+  const poolCandidates = initialPool ? [initialPool, ...healthyPools.filter((p) => p.id !== initialPool.id)].slice(0, 2) : activePools.length === 0 ? [null] : healthyPools.slice(0, 2);
+  if (activePools.length > 0 && poolCandidates.length === 0) {
+    const nextAvailableAt = Math.min(...activePools.map((p) => p.rateLimitedUntil && p.rateLimitedUntil > now ? p.rateLimitedUntil : now + 5 * 60000));
+    const retryAfter = Math.max(1, Math.ceil((nextAvailableAt - now) / 1000));
+    writeOpenAiError(response, 429, "All configured proxy pools are cooling down. Wait before retrying the upstream.", "rate_limit_exhausted", { "retry-after": String(retryAfter) });
     return;
   }
-  const activePools = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
-  const attempted = new Set;
-  const initialPool = pool ?? null;
-  const healthyPools = activePools.filter((p) => !p.rateLimitedUntil || p.rateLimitedUntil <= Date.now());
-  const candidates = initialPool ? [initialPool, ...healthyPools.filter((p) => p.id !== initialPool.id)] : activePools.length === 0 ? [null] : healthyPools;
-  const sendAttempt = (candidate) => {
+  const attempts = modelCandidates.flatMap((model) => poolCandidates.map((candidatePool) => ({ model, pool: candidatePool })));
+  let attemptIndex = 0;
+  let lastRequestedModel = prepared.model;
+  const modelAwareBody = (model) => {
+    const lane = resolveOpenCodeLane(config.upstream, model);
+    let raw = prepared.body;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        parsed.model = model;
+        raw = JSON.stringify(parsed);
+      }
+    } catch {}
+    const isOpenCode = (() => {
+      try {
+        return new URL(config.upstream).hostname.toLowerCase().includes("opencode.ai");
+      } catch {
+        return false;
+      }
+    })();
+    return {
+      lane,
+      body: prepareOpenCodeRequestBody(raw, lane, isOpenCode)
+    };
+  };
+  const sendAttempt = () => {
     if (response.destroyed || response.writableEnded)
       return;
-    if (!candidate && activePools.length > 0) {
-      const now = Date.now();
-      const nextAvailableAt = Math.min(...activePools.map((p) => p.rateLimitedUntil && p.rateLimitedUntil > now ? p.rateLimitedUntil : now + 5 * 60000));
-      const retryAfter = Math.max(1, Math.ceil((nextAvailableAt - now) / 1000));
-      writeOpenAiError(response, 429, "All configured proxy pools are cooling down. Wait before retrying the upstream.", "rate_limit_exhausted", { "retry-after": String(retryAfter) });
+    const attempt = attempts[attemptIndex];
+    if (!attempt) {
+      writeOpenAiError(response, 502, "No model fallback attempt was available.", "fallback_exhausted");
       return;
     }
-    if (candidate && attempted.has(candidate.id)) {
-      writeOpenAiError(response, 429, "All available proxy pools have been tried or are cooling down. Wait for the upstream rate limit to reset.", "rate_limit_exhausted");
+    lastRequestedModel = attempt.model;
+    const candidate = attempt.pool;
+    let lane;
+    let upstreamBody;
+    try {
+      const preparedForModel = modelAwareBody(attempt.model);
+      lane = preparedForModel.lane;
+      upstreamBody = preparedForModel.body;
+    } catch (error) {
+      writeOpenAiError(response, 400, error instanceof Error ? error.message : "Could not convert the OpenCode request body.", "invalid_request");
       return;
     }
-    if (candidate)
-      attempted.add(candidate.id);
-    const target = buildTarget(config, "chat", candidate, prepared.model);
+    const target = buildTarget(config, "chat", candidate, attempt.model);
     const transport = target.url.protocol === "http:" ? http2 : https2;
     const upstream = transport.request(target.url, {
       method: "POST",
@@ -6750,29 +6809,34 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       if (status === 429 && onRateLimit) {
         const retryAfter = answer.headers["retry-after"];
         onRateLimit(candidate, typeof retryAfter === "string" ? retryAfter : undefined);
-        if (candidate) {
-          const next = candidates.find((p) => p !== null && !attempted.has(p.id) && (!p.rateLimitedUntil || p.rateLimitedUntil <= Date.now()));
-          if (next) {
-            answer.resume();
-            sendAttempt(next);
-            return;
-          }
-          if (initialPool) {
-            answer.resume();
-            writeOpenAiError(response, 429, "All available proxy pools are rate-limited. Wait for the upstream rate limit to reset.", "rate_limit_exhausted");
-            return;
-          }
-        }
+      }
+      if (isRetryableFallbackStatus(status) && attemptIndex + 1 < attempts.length) {
+        attemptIndex += 1;
+        answer.resume();
+        sendAttempt();
+        return;
       }
       if (status < 200 || status >= 300) {
-        response.writeHead(status, responseHeaders(answer.headers));
+        const headers = {
+          ...responseHeaders(answer.headers),
+          "x-blackrouter-requested-model": prepared.model,
+          "x-blackrouter-resolved-model": attempt.model,
+          ...attempt.model !== prepared.model ? { "x-blackrouter-fallback-used": "true" } : {}
+        };
+        response.writeHead(status, headers);
         pipeline(answer, response, () => {});
         return;
       }
       const contentType = typeof answer.headers["content-type"] === "string" ? answer.headers["content-type"].toLowerCase() : "";
-      const protocolTransform = lane !== "chat" && contentType.includes("text/event-stream") ? createOpenCodeResponseTransform(lane, prepared.model) : null;
+      const protocolTransform = lane !== "chat" && contentType.includes("text/event-stream") ? createOpenCodeResponseTransform(lane, attempt.model) : null;
+      const successHeaders = {
+        ...responseHeaders(answer.headers),
+        "x-blackrouter-requested-model": prepared.model,
+        "x-blackrouter-resolved-model": attempt.model,
+        ...attempt.model !== prepared.model ? { "x-blackrouter-fallback-used": "true" } : {}
+      };
       if (prepared.stream) {
-        response.writeHead(status, responseHeaders(answer.headers));
+        response.writeHead(status, successHeaders);
         if (protocolTransform) {
           pipeline(answer, protocolTransform, response, () => {});
         } else {
@@ -6791,17 +6855,24 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       const source = protocolTransform ?? answer;
       source.on("data", collect);
       source.on("end", () => {
-        const body = Buffer.concat(chunks).toString("utf8");
-        writeJson(response, status, aggregateStream(body));
+        writeJson(response, status, aggregateStream(Buffer.concat(chunks).toString("utf8")), successHeaders);
       });
       source.on("error", (error) => {
+        writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, "upstream_unreachable");
+      });
+      answer.on("error", (error) => {
         writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, "upstream_unreachable");
       });
       if (protocolTransform)
         answer.pipe(protocolTransform);
     });
     upstream.on("error", (error) => {
-      writeOpenAiError(response, 502, `The upstream did not answer: ${error.message}`, "upstream_unreachable");
+      if (attemptIndex + 1 < attempts.length && !response.headersSent && !response.destroyed) {
+        attemptIndex += 1;
+        sendAttempt();
+        return;
+      }
+      writeOpenAiError(response, 502, `The upstream did not answer for ${lastRequestedModel}: ${error.message}`, "upstream_unreachable");
     });
     response.on("close", () => {
       if (!response.writableEnded)
@@ -6809,7 +6880,7 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
     });
     upstream.end(upstreamBody);
   };
-  sendAttempt(initialPool);
+  sendAttempt();
 };
 
 // service/router-server.ts
@@ -7103,6 +7174,7 @@ var createRuntime = (store = createConfigStore()) => {
         port: patch.port ?? previous.port,
         apiKey: patch.apiKey ?? previous.apiKey,
         selectedModels: patch.selectedModels ?? previous.selectedModels,
+        fallbackModels: patch.fallbackModels ?? previous.fallbackModels,
         proxyPools: patch.proxyPools ?? previous.proxyPools,
         proxyStrategy: patch.proxyStrategy ?? previous.proxyStrategy,
         activePoolId: patch.activePoolId !== undefined ? patch.activePoolId : previous.activePoolId,
