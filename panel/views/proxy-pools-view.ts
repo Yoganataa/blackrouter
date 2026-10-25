@@ -513,7 +513,13 @@ export const createProxyPoolsView = (store: Store, client: ServiceClient, host: 
           ),
         );
 
-        if (pool.testStatus === 'active') {
+        const cooldownRemainingMs = typeof pool.rateLimitedUntil === 'number'
+          ? pool.rateLimitedUntil - Date.now()
+          : 0;
+        const isCoolingDown = cooldownRemainingMs > 0;
+        if (isCoolingDown) {
+          titleRow.append(el('span', 'br-badge br-badge-stopped', '429 cooldown'));
+        } else if (pool.testStatus === 'active') {
           titleRow.append(el('span', 'br-badge br-badge-running', 'Healthy'));
         } else if (pool.testStatus === 'error') {
           titleRow.append(el('span', 'br-badge br-badge-stopped', 'Failed'));
@@ -521,6 +527,15 @@ export const createProxyPoolsView = (store: Store, client: ServiceClient, host: 
 
         info.append(titleRow);
         info.append(el('span', 'br-pool-url', pool.proxyUrl));
+        if (isCoolingDown) {
+          const remainingSeconds = Math.ceil(cooldownRemainingMs / 1000);
+          const minutes = Math.floor(remainingSeconds / 60);
+          const seconds = remainingSeconds % 60;
+          const remaining = minutes > 0
+            ? minutes + 'm ' + String(seconds).padStart(2, '0') + 's'
+            : seconds + 's';
+          info.append(el('p', 'br-card-desc', 'Upstream rate-limited this pool. Requests skip it for another ' + remaining + '.'));
+        }
         left.append(info);
         poolCard.append(left);
 
@@ -542,8 +557,10 @@ export const createProxyPoolsView = (store: Store, client: ServiceClient, host: 
         }
 
         const isTesting = testingPoolId === pool.id;
+        const coolingDown = typeof pool.rateLimitedUntil === 'number' && pool.rateLimitedUntil > Date.now();
         const testBtn = btn(actions, isTesting ? 'Testing...' : 'Test', () => void testPool(pool.id));
-        testBtn.disabled = isTesting;
+        testBtn.disabled = isTesting || coolingDown;
+        if (coolingDown) testBtn.title = 'This pool is cooling down after HTTP 429; wait until the displayed cooldown ends.';
 
         if (pool.type !== 'http') {
           btn(actions, 'Copy Script', () => void copyRelaySource(pool.type));
