@@ -20,6 +20,7 @@ const config: RouterConfig = {
   apiKey: 'br-local-key',
   upstream: 'https://opencode.ai/zen/v1',
   selectedModels: [],
+  fallbackModels: [],
   proxyPools: [],
   proxyStrategy: 'single',
   activePoolId: null,
