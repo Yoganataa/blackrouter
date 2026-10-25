@@ -33,6 +33,8 @@ export const defaultConfig = (): RouterConfig => ({
   activePoolId: null,
   stickyLimit: 1,
   rtkEnabled: true,
+  cavemanLevel: 'off',
+  ponytailLevel: 'off',
 });
 
 export const defaultConfigPath = (home = homedir()): string =>

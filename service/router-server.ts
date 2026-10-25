@@ -146,7 +146,11 @@ export const startRouterServer = (deps: RouterServerDeps): Promise<RouterServer>
       if (request.method === 'POST' && (url.pathname === '/v1/chat/completions' || url.pathname === '/chat/completions')) {
         void readBody(request)
           .then((body) => {
-            const prepared = prepareChat(body, config.rtkEnabled);
+            const prepared = prepareChat(body, {
+              rtkEnabled: config.rtkEnabled,
+              cavemanLevel: config.cavemanLevel,
+              ponytailLevel: config.ponytailLevel,
+            });
             const pool = deps.pickPool ? deps.pickPool() : null;
             const tokenUsage: TokenUsage = {};
             response.on('close', () => {

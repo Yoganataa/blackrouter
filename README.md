@@ -26,6 +26,7 @@ https://opencode.ai/inference/v1/chat/completions (OpenCode Free models)
   - Routing strategies: `single`, `round-robin` (with configurable `stickyLimit`), and `random`.
   - Automatic 429 rate-limit cooldown: rate-limited pools enter a 5-minute cooldown and router automatically shifts traffic to clean pools.
   - One-click deployment from panel via API tokens.
+- **Caveman & Ponytail**: Optional prompt profiles for concise answers and minimal code changes; both default to Off and preserve technical literals and safety checks.
 - **RTK (Repetitive Tool Knowledge) Token Saver**:
   - Automatically compacts `git diff`, `git status`, `grep`, and large command outputs before upstream forwarding.
   - Saves 20% to 40% tokens per coding loop without losing vital context.

@@ -22,6 +22,8 @@ const baseConfig = (overrides: Partial<RouterConfig> = {}): RouterConfig => ({
   activePoolId: null,
   stickyLimit: 1,
   rtkEnabled: true,
+  cavemanLevel: 'off',
+  ponytailLevel: 'off',
   ...overrides,
   fallbackModels: overrides.fallbackModels ?? [],
   modelCombos: overrides.modelCombos ?? [],

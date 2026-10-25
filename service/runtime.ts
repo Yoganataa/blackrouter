@@ -269,6 +269,8 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         activePoolId: patch.activePoolId !== undefined ? patch.activePoolId : previous.activePoolId,
         stickyLimit: patch.stickyLimit ?? previous.stickyLimit,
         rtkEnabled: patch.rtkEnabled ?? previous.rtkEnabled,
+        cavemanLevel: patch.cavemanLevel ?? previous.cavemanLevel,
+        ponytailLevel: patch.ponytailLevel ?? previous.ponytailLevel,
       });
       if (patch.apiKey && patch.apiKey !== previous.apiKey) {
         refreshRegistration(true);

@@ -27,6 +27,8 @@ const config: RouterConfig = {
   activePoolId: null,
   stickyLimit: 1,
   rtkEnabled: true,
+  cavemanLevel: 'off',
+  ponytailLevel: 'off',
 };
 
 const withTempFile = (text: string | null, run: (file: string) => void): void => {

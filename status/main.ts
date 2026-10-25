@@ -168,7 +168,25 @@ const render = (): void => {
   rtkRow.append(rtkLeft, rtkRight);
   root.append(rtkRow);
 
-  // 4. Free Models row
+  // 4. Response/code-economy profiles
+  const styleRow = document.createElement('div');
+  styleRow.className = 'br-s-row';
+  const styleLeft = document.createElement('div');
+  styleLeft.className = 'br-s-left';
+  const styleLabel = document.createElement('span');
+  styleLabel.className = 'br-s-label';
+  styleLabel.textContent = 'Style Profiles';
+  styleLeft.append(styleLabel);
+  const styleRight = document.createElement('div');
+  styleRight.className = 'br-s-right';
+  const styleValue = document.createElement('span');
+  styleValue.className = 'br-s-value';
+  styleValue.textContent = 'Caveman ' + currentState.config.cavemanLevel + ' · Ponytail ' + currentState.config.ponytailLevel;
+  styleRight.append(styleValue);
+  styleRow.append(styleLeft, styleRight);
+  root.append(styleRow);
+
+  // 5. Free Models row
   const modelsRow = document.createElement('div');
   modelsRow.className = 'br-s-row';
   const modelsLeft = document.createElement('div');
@@ -187,7 +205,7 @@ const render = (): void => {
   modelsRow.append(modelsLeft, modelsRight);
   root.append(modelsRow);
 
-  // 5. Last Call (if available)
+  // 6. Last Call (if available)
   if (currentState.requests.length > 0) {
     const last = currentState.requests[0]!;
     const lastRow = document.createElement('div');
@@ -212,7 +230,7 @@ const render = (): void => {
     root.append(lastRow);
   }
 
-  // 6. Action buttons: Open Panel + Test Relay (if active pool)
+  // 7. Action buttons: Open Panel + Test Relay (if active pool)
   const actionsRow = document.createElement('div');
   actionsRow.className = 'br-s-actions';
 

@@ -177,7 +177,56 @@ export const createRouterView = (
     rtkBox.append(rtkVal);
     kvGrid.append(rtkBox);
 
-    // 2. Upstream Routing Card
+        // Optional response/code-economy profiles ported from 9Router's Caveman and Ponytail.
+    const cavemanBox = el('div', 'br-kv-box');
+    cavemanBox.append(el('span', 'br-kv-label', 'Caveman'));
+    const cavemanSelect = el('select', 'br-search-input') as HTMLSelectElement;
+    for (const option of [
+      { value: 'off', label: 'Off' },
+      { value: 'lite', label: 'Lite · concise sentences' },
+      { value: 'full', label: 'Full · terse technical' },
+      { value: 'ultra', label: 'Ultra · minimum words' },
+    ]) {
+      const item = document.createElement('option');
+      item.value = option.value;
+      item.textContent = option.label;
+      cavemanSelect.append(item);
+    }
+    cavemanSelect.value = state.config.cavemanLevel;
+    cavemanSelect.onchange = () => {
+      void store.run((service) => service.patchConfig({
+        cavemanLevel: cavemanSelect.value as 'off' | 'lite' | 'full' | 'ultra',
+      }));
+    };
+    cavemanBox.append(cavemanSelect);
+    cavemanBox.append(el('span', 'br-card-desc', 'Terse answers; technical literals and safety warnings stay intact.'));
+    kvGrid.append(cavemanBox);
+
+    const ponytailBox = el('div', 'br-kv-box');
+    ponytailBox.append(el('span', 'br-kv-label', 'Ponytail'));
+    const ponytailSelect = el('select', 'br-search-input') as HTMLSelectElement;
+    for (const option of [
+      { value: 'off', label: 'Off' },
+      { value: 'lite', label: 'Lite · minimal changes' },
+      { value: 'full', label: 'Full · YAGNI first' },
+      { value: 'ultra', label: 'Ultra · smallest diff' },
+    ]) {
+      const item = document.createElement('option');
+      item.value = option.value;
+      item.textContent = option.label;
+      ponytailSelect.append(item);
+    }
+    ponytailSelect.value = state.config.ponytailLevel;
+    ponytailSelect.onchange = () => {
+      void store.run((service) => service.patchConfig({
+        ponytailLevel: ponytailSelect.value as 'off' | 'lite' | 'full' | 'ultra',
+      }));
+    };
+    ponytailBox.append(ponytailSelect);
+    ponytailBox.append(el('span', 'br-card-desc', 'Encourages minimal code without skipping validation, security, or requested behavior.'));
+    kvGrid.append(ponytailBox);
+
+// 2. Upstream Routing Card
     const { card: routeCard } = card(
       root,
       'Upstream Routing',

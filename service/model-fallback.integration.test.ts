@@ -22,6 +22,8 @@ const configFor = (port: number): RouterConfig => ({
   activePoolId: null,
   stickyLimit: 1,
   rtkEnabled: true,
+  cavemanLevel: 'off',
+  ponytailLevel: 'off',
 });
 
 const readRequestBody = (request: http.IncomingMessage): Promise<string> =>

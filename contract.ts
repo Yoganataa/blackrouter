@@ -81,6 +81,12 @@ export type TestProxyPoolResult = z.infer<typeof testProxyPoolResultSchema>;
 export const PROXY_STRATEGIES = ['single', 'round-robin', 'random'] as const;
 export type ProxyStrategy = (typeof PROXY_STRATEGIES)[number];
 
+export const CAVEMAN_LEVELS = ['off', 'lite', 'full', 'ultra'] as const;
+export type CavemanLevel = (typeof CAVEMAN_LEVELS)[number];
+
+export const PONYTAIL_LEVELS = ['off', 'lite', 'full', 'ultra'] as const;
+export type PonytailLevel = (typeof PONYTAIL_LEVELS)[number];
+
 /**
  * A named model alias whose ordered member list acts as a bounded fallback chain.
  * OpenCode sees `blackrouter/combo/<id>`; the upstream only receives real model IDs.
@@ -142,8 +148,12 @@ export const routerConfigSchema = z.object({
   activePoolId: z.string().nullable().optional(),
   /** Consecutive request threshold per pool in round-robin before rotating. */
   stickyLimit: z.number().int().min(1).max(100).default(1),
-  /** Whether RTK token compression is enabled on chat completions. */
+  /** Whether RTK tool-output compression is enabled on chat completions. */
   rtkEnabled: z.boolean().default(true),
+  /** Optional terse-response prompt profile; off preserves model defaults. */
+  cavemanLevel: z.enum(CAVEMAN_LEVELS).default('off'),
+  /** Optional minimal-code prompt profile; off preserves model defaults. */
+  ponytailLevel: z.enum(PONYTAIL_LEVELS).default('off'),
 });
 export type RouterConfig = z.infer<typeof routerConfigSchema>;
 
@@ -159,6 +169,8 @@ export const configPatchSchema = z.object({
   activePoolId: z.string().nullable().optional(),
   stickyLimit: z.number().int().min(1).max(100).optional(),
   rtkEnabled: z.boolean().optional(),
+  cavemanLevel: z.enum(CAVEMAN_LEVELS).optional(),
+  ponytailLevel: z.enum(PONYTAIL_LEVELS).optional(),
 });
 export type ConfigPatch = z.infer<typeof configPatchSchema>;
 

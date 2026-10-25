@@ -53,6 +53,43 @@ describe('making a client body acceptable', () => {
     expect(JSON.parse(plain.body).stream).toBe(true);
   });
 
+  test('leaves the default model behavior unchanged when response style profiles are off', () => {
+    const prepared = prepareChat(JSON.stringify({
+      model: 'x-free',
+      messages: [{ role: 'user', content: 'Write a small function.' }],
+    }), { rtkEnabled: false, cavemanLevel: 'off', ponytailLevel: 'off' });
+    const parsed = JSON.parse(prepared.body);
+    expect(parsed.messages[0].role).toBe('user');
+    expect(parsed.messages[0].content).toBe('Write a small function.');
+  });
+
+  test('combines Caveman and Ponytail prompts with an existing system message', () => {
+    const prepared = prepareChat(JSON.stringify({
+      model: 'x-free',
+      messages: [
+        { role: 'system', content: 'Follow the repository conventions.' },
+        { role: 'user', content: 'Implement the requested fix.' },
+      ],
+    }), { rtkEnabled: false, cavemanLevel: 'lite', ponytailLevel: 'full' });
+    const parsed = JSON.parse(prepared.body);
+    expect(parsed.messages[0].role).toBe('system');
+    expect(parsed.messages[0].content).toContain('Follow the repository conventions.');
+    expect(parsed.messages[0].content).toContain('Remove pleasantries');
+    expect(parsed.messages[0].content).toContain('smallest correct diff');
+    expect(parsed.messages[1].content).toBe('Implement the requested fix.');
+  });
+
+  test('injects opt-in style prompts when the request has no system message', () => {
+    const prepared = prepareChat(JSON.stringify({
+      model: 'x-free',
+      messages: [{ role: 'user', content: 'Explain this error.' }],
+    }), { rtkEnabled: false, cavemanLevel: 'ultra' });
+    const parsed = JSON.parse(prepared.body);
+    expect(parsed.messages[0].role).toBe('system');
+    expect(parsed.messages[0].content).toContain('fewest words');
+    expect(parsed.messages[1].role).toBe('user');
+  });
+
   test('refuses a body that is not a chat request', () => {
     expect(() => prepareChat('not json')).toThrow(/not JSON/);
     expect(() => prepareChat('[]')).toThrow(/JSON object/);

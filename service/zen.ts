@@ -1,8 +1,10 @@
 import { randomBytes } from 'node:crypto';
 
+import type { CavemanLevel, PonytailLevel } from '../contract.ts';
 import type { JsonValue } from '../json.ts';
 import { isJsonObject, type JsonObject } from './json.ts';
 import { compressMessages } from './rtk.ts';
+import { applyTokenSaverStyles } from './token-saver-styles.ts';
 
 /**
  * The client identity the OpenCode Zen free tier expects.
@@ -155,6 +157,8 @@ export type PreparedChat = {
 
 export type PrepareChatOptions = {
   rtkEnabled?: boolean;
+  cavemanLevel?: CavemanLevel;
+  ponytailLevel?: PonytailLevel;
 };
 
 /**
@@ -179,6 +183,15 @@ export const prepareChat = (raw: string, options?: boolean | PrepareChatOptions)
   if (!parsed.messages) {
     throw new Error('The request body has no messages.');
   }
+  const effectiveOptions: PrepareChatOptions = typeof options === 'boolean'
+    ? { rtkEnabled: options }
+    : (options ?? {});
+  applyTokenSaverStyles(
+    parsed,
+    effectiveOptions.cavemanLevel ?? 'off',
+    effectiveOptions.ponytailLevel ?? 'off',
+  );
+
   ensureFreeTierTools(parsed);
 
   // Zen reasoning models reject multi-turn history whose assistant messages
@@ -194,7 +207,7 @@ export const prepareChat = (raw: string, options?: boolean | PrepareChatOptions)
     }
   }
 
-  const rtkEnabled = typeof options === 'boolean' ? options : (options?.rtkEnabled ?? true);
+  const rtkEnabled = effectiveOptions.rtkEnabled ?? true;
   if (rtkEnabled) {
     compressMessages(parsed as Record<string, unknown>, true);
   }

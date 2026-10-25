@@ -22,6 +22,8 @@ describe('the router settings', () => {
     expect(config.modelCombos).toEqual([]);
     expect(config.proxyStrategy).toBe('single');
     expect(config.stickyLimit).toBe(1);
+    expect(config.cavemanLevel).toBe('off');
+    expect(config.ponytailLevel).toBe('off');
     expect(config.apiKey.startsWith('sk-')).toBe(true);
     expect(createApiKey()).not.toBe(createApiKey());
     expect(defaultConfigPath('/home/person').endsWith(path.join('.openchamber', 'blackrouter', 'config.json'))).toBe(true);
@@ -57,6 +59,8 @@ describe('the router settings', () => {
       );
       const loaded = createConfigStore(file).load();
       expect(loaded.modelCombos).toEqual([]);
+      expect(loaded.cavemanLevel).toBe('off');
+      expect(loaded.ponytailLevel).toBe('off');
       expect(loaded.proxyPools.length).toBe(1);
       expect(loaded.proxyPools[0]?.type).toBe('cloudflare');
       expect(loaded.proxyPools[0]?.proxyUrl).toBe('https://migrated.workers.dev');
