@@ -3869,6 +3869,8 @@ var testProxyPoolResultSchema = objectType({
   error: stringType().nullable().optional()
 });
 var PROXY_STRATEGIES = ["single", "round-robin", "random"];
+var CAVEMAN_LEVELS = ["off", "lite", "full", "ultra"];
+var PONYTAIL_LEVELS = ["off", "lite", "full", "ultra"];
 var modelComboSchema = objectType({
   id: stringType().trim().toLowerCase().min(1).max(40).regex(/^[a-z0-9][a-z0-9._-]*$/, "Use a lowercase model-combo slug."),
   name: stringType().trim().min(1).max(80),
@@ -3913,7 +3915,9 @@ var routerConfigSchema = objectType({
   proxyStrategy: enumType(PROXY_STRATEGIES).default("single"),
   activePoolId: stringType().nullable().optional(),
   stickyLimit: numberType().int().min(1).max(100).default(1),
-  rtkEnabled: booleanType().default(true)
+  rtkEnabled: booleanType().default(true),
+  cavemanLevel: enumType(CAVEMAN_LEVELS).default("off"),
+  ponytailLevel: enumType(PONYTAIL_LEVELS).default("off")
 });
 var configPatchSchema = objectType({
   port: numberType().int().min(1024).max(65535).optional(),
@@ -3925,7 +3929,9 @@ var configPatchSchema = objectType({
   proxyStrategy: enumType(PROXY_STRATEGIES).optional(),
   activePoolId: stringType().nullable().optional(),
   stickyLimit: numberType().int().min(1).max(100).optional(),
-  rtkEnabled: booleanType().optional()
+  rtkEnabled: booleanType().optional(),
+  cavemanLevel: enumType(CAVEMAN_LEVELS).optional(),
+  ponytailLevel: enumType(PONYTAIL_LEVELS).optional()
 });
 var testModelInputSchema = objectType({
   modelId: stringType().min(1)
@@ -4018,7 +4024,9 @@ var defaultConfig = () => ({
   proxyStrategy: "single",
   activePoolId: null,
   stickyLimit: 1,
-  rtkEnabled: true
+  rtkEnabled: true,
+  cavemanLevel: "off",
+  ponytailLevel: "off"
 });
 var defaultConfigPath = (home = homedir()) => path.join(home, ".openchamber", "blackrouter", "config.json");
 var writeOwnerOnly = (file, text) => {
@@ -6948,6 +6956,68 @@ function compressMessages(body, enabled = true) {
   return anyCompressed;
 }
 
+// service/token-saver-styles.ts
+var CAVEMAN_PROMPTS = {
+  lite: [
+    "Answer concisely in complete sentences. Remove pleasantries, filler, repetition, and unnecessary hedging.",
+    "Preserve the user’s language and exact code, identifiers, paths, commands, URLs, and error strings.",
+    "Keep security warnings, irreversible-action confirmations, and ordered steps clear."
+  ].join(" "),
+  full: [
+    "Use terse technical language; compact phrases are acceptable when unambiguous.",
+    "Remove filler and redundant explanations. Preserve the user’s language and all technical literals exactly.",
+    "Do not compress security warnings, irreversible-action confirmations, or ordered steps where ambiguity could cause mistakes."
+  ].join(" "),
+  ultra: [
+    "Use the fewest words that retain correctness and clarity. Prefer compact, direct answers.",
+    "Never alter code, identifiers, paths, commands, URLs, or error strings.",
+    "Keep safety warnings and destructive-action confirmations explicit. Keep multi-step sequences unambiguous."
+  ].join(" ")
+};
+var PONYTAIL_PROMPTS = {
+  lite: [
+    "When writing code, prefer the smallest correct change.",
+    "Check YAGNI, standard library, native platform features, and already-installed dependencies before adding abstractions or packages.",
+    "Never omit explicitly requested behavior, trust-boundary validation, error handling, security, or accessibility.",
+    "For non-trivial logic, include one runnable check or a focused test."
+  ].join(" "),
+  full: [
+    "Act as an efficient senior developer. Prefer deletion over addition and the smallest correct diff.",
+    "Use standard library, native platform features, and existing dependencies first.",
+    "Avoid unrequested factories, one-implementation interfaces, configuration that never changes, and scaffolding for hypothetical future needs.",
+    "Never remove required behavior, validation, error handling, security, or accessibility. Test non-trivial logic."
+  ].join(" "),
+  ultra: [
+    "Minimize implementation and explanation aggressively. Choose the smallest correct change; delete unnecessary code before adding code.",
+    "Do not add new dependencies, abstractions, or future-proof scaffolding unless the task requires them.",
+    "Do not simplify away requested behavior, validation, error handling, security, or accessibility. Add a runnable check for non-trivial logic."
+  ].join(" ")
+};
+var applyTokenSaverStyles = (body, cavemanLevel = "off", ponytailLevel = "off") => {
+  const prompts = [];
+  if (cavemanLevel !== "off")
+    prompts.push(CAVEMAN_PROMPTS[cavemanLevel]);
+  if (ponytailLevel !== "off")
+    prompts.push(PONYTAIL_PROMPTS[ponytailLevel]);
+  if (prompts.length === 0 || !Array.isArray(body.messages))
+    return false;
+  const instruction = prompts.join(`
+
+`);
+  const messages = body.messages;
+  const systemIndex = messages.findIndex((message) => !!message && typeof message === "object" && !Array.isArray(message) && message.role === "system");
+  const current = systemIndex >= 0 ? messages[systemIndex] : null;
+  if (current && typeof current.content === "string") {
+    const existing = current.content.trim();
+    current.content = existing ? existing + `
+
+` + instruction : instruction;
+  } else {
+    messages.unshift({ role: "system", content: instruction });
+  }
+  return true;
+};
+
 // service/zen.ts
 var BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 var FINGERPRINT_TOOLS = ["read", "shell"];
@@ -7064,6 +7134,8 @@ var prepareChat = (raw, options) => {
   if (!parsed.messages) {
     throw new Error("The request body has no messages.");
   }
+  const effectiveOptions = typeof options === "boolean" ? { rtkEnabled: options } : options ?? {};
+  applyTokenSaverStyles(parsed, effectiveOptions.cavemanLevel ?? "off", effectiveOptions.ponytailLevel ?? "off");
   ensureFreeTierTools(parsed);
   if (Array.isArray(parsed.messages)) {
     for (const msg of parsed.messages) {
@@ -7074,7 +7146,7 @@ var prepareChat = (raw, options) => {
       }
     }
   }
-  const rtkEnabled = typeof options === "boolean" ? options : options?.rtkEnabled ?? true;
+  const rtkEnabled = effectiveOptions.rtkEnabled ?? true;
   if (rtkEnabled) {
     compressMessages(parsed, true);
   }
@@ -7719,7 +7791,11 @@ var startRouterServer = (deps) => new Promise((resolve, reject) => {
     }
     if (request.method === "POST" && (url.pathname === "/v1/chat/completions" || url.pathname === "/chat/completions")) {
       readBody(request).then((body) => {
-        const prepared = prepareChat(body, config.rtkEnabled);
+        const prepared = prepareChat(body, {
+          rtkEnabled: config.rtkEnabled,
+          cavemanLevel: config.cavemanLevel,
+          ponytailLevel: config.ponytailLevel
+        });
         const pool = deps.pickPool ? deps.pickPool() : null;
         const tokenUsage = {};
         response.on("close", () => {
@@ -7941,7 +8017,9 @@ var createRuntime = (store = createConfigStore()) => {
         proxyStrategy: patch.proxyStrategy ?? previous.proxyStrategy,
         activePoolId: patch.activePoolId !== undefined ? patch.activePoolId : previous.activePoolId,
         stickyLimit: patch.stickyLimit ?? previous.stickyLimit,
-        rtkEnabled: patch.rtkEnabled ?? previous.rtkEnabled
+        rtkEnabled: patch.rtkEnabled ?? previous.rtkEnabled,
+        cavemanLevel: patch.cavemanLevel ?? previous.cavemanLevel,
+        ponytailLevel: patch.ponytailLevel ?? previous.ponytailLevel
       });
       if (patch.apiKey && patch.apiKey !== previous.apiKey) {
         refreshRegistration(true);
