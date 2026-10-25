@@ -370,8 +370,7 @@ export function compactFind(input: string): string {
     if (files.length > FIND_PER_DIR_MAX) out += '  +' + (files.length - FIND_PER_DIR_MAX) + '\n';
   }
   if (dirs.length > FIND_TOTAL_DIR_MAX) out += '\n+' + (dirs.length - FIND_TOTAL_DIR_MAX) + ' more dirs\n';
-  const result = out.replace(/\n+$/, '');
-  return result.length < input.length ? result : input;
+  return out.replace(/\n+$/, '');
 }
 
 export function compactLs(input: string): string {
@@ -468,8 +467,7 @@ export function compactSearchList(input: string): string {
     out += '\n';
   }
   if (dirs.length > SEARCH_LIST_TOTAL_DIR_MAX) out += '+' + (dirs.length - SEARCH_LIST_TOTAL_DIR_MAX) + ' more dirs\n';
-  const result = out.replace(/\n+$/, '');
-  return result.length < input.length ? result : input;
+  return out.replace(/\n+$/, '');
 }
 
 export function compactReadNumbered(input: string): string {
@@ -558,6 +556,7 @@ export function autoDetectFilter(text: string): FilterFn | null {
   if (RE_BUILD_OUTPUT.test(head)) return compactBuildOutput;
 
   const lines = head.split('\n');
+  const allLines = text.split('\n');
   const nonEmpty = lines.filter((line) => line.trim().length > 0);
   const firstFive = nonEmpty.slice(0, 5);
   if (firstFive.some(isGrepLine)) return compactGrep;
@@ -565,7 +564,7 @@ export function autoDetectFilter(text: string): FilterFn | null {
   if (RE_TREE_GLYPH.test(head)) return compactTree;
   if (RE_LS_TOTAL.test(head) || countMatches(head, RE_LS_ROW) >= 3) return compactLs;
   if (RE_SEARCH_LIST_HEADER.test(head)) return compactSearchList;
-  if (lines.length >= SMART_TRUNCATE_MIN_LINES && isLineNumbered(lines)) return compactReadNumbered;
+  if (allLines.length >= SMART_TRUNCATE_MIN_LINES && isLineNumbered(allLines)) return compactReadNumbered;
   if (nonEmpty.length >= 5) return compactDedupLog;
   if (text.split('\n').length >= SMART_TRUNCATE_MIN_LINES) return compactSmartTruncate;
   return null;
