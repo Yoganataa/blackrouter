@@ -289,7 +289,7 @@ export const createRouterView = (
     upstreamUrlInput.type = 'url';
     upstreamUrlInput.value = upstream;
     upstreamUrlInput.placeholder = 'https://api.openai.com/v1';
-    upstreamUrlInput.autocomplete = 'url';
+    upstreamUrlInput.autocomplete = 'off';
     upstreamUrlInput.oninput = () => { upstream = upstreamUrlInput.value; };
     upstreamUrlBox.append(upstreamUrlInput);
     upstreamUrlBox.append(el('span', 'br-card-desc', 'Enter the API base, not the /chat/completions path. OpenCode Zen remains the default.'));

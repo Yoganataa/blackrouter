@@ -165,9 +165,10 @@ describe('where a call goes', () => {
   });
 
   test('loads a complete catalog from a custom OpenAI-compatible upstream', async () => {
-    let capturedHeaders: Headers | null = null;
+    const capturedHeaders: string[] = [];
     const fakeFetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      capturedHeaders = new Headers(init?.headers);
+      const headers = new Headers(init?.headers);
+      capturedHeaders.push(headers.get('authorization') ?? '', headers.get('user-agent') ?? '');
       return new Response(JSON.stringify({
         data: [{ id: 'gpt-5.6' }, { id: 'vendor/custom-model' }],
       }), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -178,8 +179,7 @@ describe('where a call goes', () => {
     }), fakeFetch as typeof fetch);
     expect(result.ids).toEqual(['gpt-5.6', 'vendor/custom-model']);
     expect(result.free).toEqual(['gpt-5.6', 'vendor/custom-model']);
-    expect(capturedHeaders?.get('authorization')).toBe('Bearer sk-provider-secret');
-    expect(capturedHeaders?.get('user-agent')).toBe('BlackRouter/1.0');
+    expect(capturedHeaders).toEqual(['Bearer sk-provider-secret', 'BlackRouter/1.0']);
   });
 
   test('respects explicit poolOverride passed from pool selector', () => {
