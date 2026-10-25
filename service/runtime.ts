@@ -170,6 +170,19 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         getModels: () => models,
         refreshModels: loadModels,
         pickPool: () => poolSelector.pickPool(config),
+        markRateLimited: (pool: ProxyPool, retryAfter?: string) => {
+          const retrySeconds = retryAfter ? Number(retryAfter) : NaN;
+          const cooldownMs = Number.isFinite(retrySeconds) && retrySeconds >= 0
+            ? Math.min(retrySeconds * 1000, 60 * 60_000)
+            : 5 * 60_000;
+          const limitedUntil = Date.now() + cooldownMs;
+          const updatedPools = config.proxyPools.map((entry) =>
+            entry.id === pool.id
+              ? { ...entry, rateLimitedUntil: limitedUntil, testStatus: 'error' as const, lastError: 'Rate limit (HTTP 429)', lastTestedAt: Date.now() }
+              : entry,
+          );
+          persist({ ...config, proxyPools: updatedPools });
+        },
         record: (entry: RequestEntry) => {
           requests.unshift(entry);
           if (requests.length > REQUEST_LOG_LIMIT) requests.length = REQUEST_LOG_LIMIT;
