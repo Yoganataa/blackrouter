@@ -5,6 +5,7 @@ import type { ServerResponse } from 'node:http';
 import type { ProxyPool, RequestEntry, RouterConfig, RouterModel } from '../contract.ts';
 import { proxyChatCompletion, writeJson, writeOpenAiError } from './upstream.ts';
 import { prepareChat, sessionId } from './zen.ts';
+import type { TokenUsage } from './usage-observer.ts';
 
 /**
  * The OpenAI-compatible listener OpenCode calls.
@@ -147,17 +148,28 @@ export const startRouterServer = (deps: RouterServerDeps): Promise<RouterServer>
           .then((body) => {
             const prepared = prepareChat(body, config.rtkEnabled);
             const pool = deps.pickPool ? deps.pickPool() : null;
+            const tokenUsage: TokenUsage = {};
             response.on('close', () => {
+              const resolvedModel = response.getHeader('x-blackrouter-resolved-model');
+              const resolvedPool = response.getHeader('x-blackrouter-resolved-pool');
+              const fallbackReason = response.getHeader('x-blackrouter-fallback-reason');
+              const fallbackUsed = response.getHeader('x-blackrouter-fallback-used') === 'true';
+              const status = response.statusCode;
               deps.record({
                 at: started,
                 method: 'POST',
                 path: '/v1/chat/completions',
-                model: typeof response.getHeader('x-blackrouter-resolved-model') === 'string'
-                  ? response.getHeader('x-blackrouter-resolved-model') as string
-                  : prepared.model,
-                status: response.statusCode,
+                model: typeof resolvedModel === 'string' ? resolvedModel : prepared.model,
+                requestedModel: prepared.model,
+                status,
                 ms: Date.now() - started,
-                poolName: pool ? pool.name : 'Direct',
+                poolName: typeof resolvedPool === 'string' ? resolvedPool : pool ? pool.name : 'Direct',
+                fallbackUsed,
+                ...(typeof fallbackReason === 'string' ? { fallbackReason } : {}),
+                ...(tokenUsage.inputTokens !== undefined ? { inputTokens: tokenUsage.inputTokens } : {}),
+                ...(tokenUsage.outputTokens !== undefined ? { outputTokens: tokenUsage.outputTokens } : {}),
+                ...(tokenUsage.totalTokens !== undefined ? { totalTokens: tokenUsage.totalTokens } : {}),
+                ...(typeof status === 'number' && status >= 400 ? { error: `HTTP ${status}` } : {}),
               });
             });
 
@@ -184,6 +196,8 @@ export const startRouterServer = (deps: RouterServerDeps): Promise<RouterServer>
                 rateLimitedPool.lastError = 'Rate limit (HTTP 429)';
                 rateLimitedPool.lastTestedAt = Date.now();
               }
+            }, (usage) => {
+              Object.assign(tokenUsage, usage);
             });
           })
           .catch((error: unknown) => {
