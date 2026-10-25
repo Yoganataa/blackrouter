@@ -48,12 +48,25 @@ jobs:
       - name: Commit generated guest bundles when changed
         shell: bash
         run: |
-          if ! git diff --quiet -- service/main.js panel/main.js status/main.js; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add service/main.js panel/main.js status/main.js
-            git commit -m "build: sync OpenChamber guest bundles"
-            git push
-          else
+          if git diff --quiet -- service/main.js panel/main.js status/main.js; then
             echo "Guest bundles are already up to date."
+            exit 0
+          fi
+
+          # Avoid publishing a bundle built from an older commit over newer source.
+          git fetch origin main
+          checkout_sha="$(git rev-parse HEAD)"
+          remote_sha="$(git rev-parse origin/main)"
+          if [[ "$checkout_sha" != "$remote_sha" ]]; then
+            echo "main advanced during verification; skip this bundle commit so the newest run can build from current source."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add service/main.js panel/main.js status/main.js
+          git commit -m "build: sync OpenChamber guest bundles"
+          if ! git push origin HEAD:main; then
+            echo "main advanced while publishing; the newer push will trigger another bundle build."
+            exit 0
           fi
