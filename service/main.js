@@ -5242,6 +5242,7 @@ var buildComboRouterModels = (combos, availableModels) => combos.map((combo) => 
   };
 });
 var isRetryableFallbackStatus = (status) => status === 404 || status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+var shouldAdvanceAfterStatus = (status, usedProxyPool) => isRetryableFallbackStatus(status) && (status !== 429 || usedProxyPool);
 
 // service/pool-selector.ts
 var createPoolSelector = () => {
@@ -7609,7 +7610,7 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
           onRateLimit(candidate, typeof retryAfter === "string" ? retryAfter : undefined);
         }
       }
-      if (isRetryableFallbackStatus(status)) {
+      if (shouldAdvanceAfterStatus(status, candidate !== null)) {
         fallbackReasons.push(`HTTP ${status} on ${attempt.model}`);
         if (advanceToNextAttempt()) {
           answer.resume();
