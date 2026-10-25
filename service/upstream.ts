@@ -436,6 +436,26 @@ export const proxyChatCompletion = (
   let attemptIndex = 0;
   let lastRequestedModel = prepared.model;
   const fallbackReasons: string[] = [];
+  const rateLimitedPoolIds = new Set<string>();
+
+  // An HTTP 429 cools down a whole pool in the runtime. Do not revisit that
+  // pool later in this request just because the next model candidate is tried.
+  // A direct request (pool === null) may still try another model because its
+  // rate limit can be model-specific.
+  const advanceToNextAttempt = (): boolean => {
+    let nextIndex = attemptIndex + 1;
+    while (nextIndex < attempts.length) {
+      const nextAttempt = attempts[nextIndex];
+      if (nextAttempt?.pool && rateLimitedPoolIds.has(nextAttempt.pool.id)) {
+        nextIndex += 1;
+        continue;
+      }
+      break;
+    }
+    if (nextIndex >= attempts.length) return false;
+    attemptIndex = nextIndex;
+    return true;
+  };
 
   const routingHeaders = (attempt: Attempt): Record<string, string> => ({
     'x-blackrouter-requested-model': prepared.model,
@@ -517,17 +537,19 @@ export const proxyChatCompletion = (
       },
       (answer) => {
         const status = answer.statusCode ?? 502;
-        if (status === 429 && onRateLimit) {
-          const retryAfter = answer.headers['retry-after'];
-          onRateLimit(candidate, typeof retryAfter === 'string' ? retryAfter : undefined);
+        if (status === 429) {
+          if (candidate) rateLimitedPoolIds.add(candidate.id);
+          if (onRateLimit) {
+            const retryAfter = answer.headers['retry-after'];
+            onRateLimit(candidate, typeof retryAfter === 'string' ? retryAfter : undefined);
+          }
         }
 
         // Until a successful response starts streaming, fail over only to the
-        // next bounded model/pool pair. Do not retry malformed/auth requests.
+        // next bounded and eligible model/pool pair. Do not retry malformed/auth requests.
         if (isRetryableFallbackStatus(status)) {
           fallbackReasons.push(`HTTP ${status} on ${attempt.model}`);
-          if (attemptIndex + 1 < attempts.length) {
-            attemptIndex += 1;
+          if (advanceToNextAttempt()) {
             answer.resume();
             sendAttempt();
             return;
@@ -596,9 +618,8 @@ export const proxyChatCompletion = (
     upstream.on('error', (error) => {
       // Network failures can also use the bounded model/pool chain. If there
       // is no remaining candidate, expose the final transport error.
-      if (attemptIndex + 1 < attempts.length && !response.headersSent && !response.destroyed) {
+      if (!response.headersSent && !response.destroyed && advanceToNextAttempt()) {
         fallbackReasons.push(`network error on ${lastRequestedModel}`);
-        attemptIndex += 1;
         sendAttempt();
         return;
       }
