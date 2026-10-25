@@ -42,6 +42,7 @@ import {
   PROVIDER_ID,
 } from './opencode-config.ts';
 import { createPoolSelector } from './pool-selector.ts';
+import { parseRetryAfterMs } from './retry-after.ts';
 import { startRouterServer, type RouterServer } from './router-server.ts';
 import { aggregateStream } from './sse.ts';
 import { buildTarget, fetchModelIds, toModels } from './upstream.ts';
@@ -103,6 +104,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
   const requests: RequestEntry[] = [];
   let router: RouterServer | null = null;
   let routerError = '';
+  let directRateLimitedUntil = 0;
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   const configFile = resolveConfigFile();
@@ -170,12 +172,13 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         getModels: () => models,
         refreshModels: loadModels,
         pickPool: () => poolSelector.pickPool(config),
-        markRateLimited: (pool: ProxyPool, retryAfter?: string) => {
-          const retrySeconds = retryAfter ? Number(retryAfter) : NaN;
-          const cooldownMs = Number.isFinite(retrySeconds) && retrySeconds >= 0
-            ? Math.min(retrySeconds * 1000, 60 * 60_000)
-            : 5 * 60_000;
-          const limitedUntil = Date.now() + cooldownMs;
+        getDirectRateLimitedUntil: () => directRateLimitedUntil,
+        markRateLimited: (pool: ProxyPool | null, retryAfter?: string) => {
+          const limitedUntil = Date.now() + parseRetryAfterMs(retryAfter);
+          if (!pool) {
+            directRateLimitedUntil = limitedUntil;
+            return;
+          }
           const updatedPools = config.proxyPools.map((entry) =>
             entry.id === pool.id
               ? { ...entry, rateLimitedUntil: limitedUntil, testStatus: 'error' as const, lastError: 'Rate limit (HTTP 429)', lastTestedAt: Date.now() }
@@ -450,23 +453,23 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
 
           lastError = `HTTP ${status}: ${resultText.slice(0, 300)}`;
           if (status !== 429) break;
-          if (!pool && config.proxyPools.some((p) => p.isActive && p.proxyUrl.trim())) {
+          const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
+          if (!pool && activePoolCount === 0) {
+            directRateLimitedUntil = Date.now() + parseRetryAfterMs(retryAfter);
+            lastError = `HTTP 429: upstream rate-limited; retry after approximately ${Math.ceil((directRateLimitedUntil - Date.now()) / 1000)} seconds.`;
+            break;
+          }
+          if (!pool && activePoolCount > 0) {
             // All configured pools are cooling down. Do not bypass them by silently going direct.
             lastError = 'All configured proxy pools are cooling down. Wait for the upstream rate limit to reset.';
             break;
           }
           if (pool) {
-            const retrySeconds = retryAfter ? Number(retryAfter) : NaN;
-            const cooldownMs = Number.isFinite(retrySeconds) && retrySeconds >= 0
-              ? Math.min(retrySeconds * 1000, 60 * 60_000)
-              : 5 * 60_000;
+            const limitedUntil = Date.now() + parseRetryAfterMs(retryAfter);
             const updated = config.proxyPools.map((p) => p.id === pool.id
-              ? { ...p, testStatus: 'error' as const, lastTestedAt: Date.now(), lastError: 'Rate limit (HTTP 429)', rateLimitedUntil: Date.now() + cooldownMs }
+              ? { ...p, testStatus: 'error' as const, lastTestedAt: Date.now(), lastError: 'Rate limit (HTTP 429)', rateLimitedUntil: limitedUntil }
               : p);
             persist({ ...config, proxyPools: updated });
-          } else {
-            // Direct upstream itself is rate-limited; retrying immediately will worsen it.
-            break;
           }
         } catch (err) {
           lastError = err instanceof Error ? err.message : String(err);
