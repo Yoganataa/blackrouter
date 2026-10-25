@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import http4 from "node:http";
 import https3 from "node:https";
-import path3 from "node:path";
+import path4 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // node_modules/zod/v3/helpers/util.js
@@ -5208,6 +5208,50 @@ var createPoolSelector = () => {
   return { pickPool, reset };
 };
 
+// service/request-history.ts
+import { chmodSync as chmodSync2, existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import path3 from "node:path";
+var REQUEST_HISTORY_LIMIT = 200;
+var HISTORY_FILE_NAME = "requests.jsonl";
+var createRequestHistoryStore = (configFilePath, limit = REQUEST_HISTORY_LIMIT) => {
+  const file = path3.join(path3.dirname(configFilePath), HISTORY_FILE_NAME);
+  const boundedLimit = Math.max(1, Math.min(Math.floor(limit), 5000));
+  const load = () => {
+    if (!existsSync3(file))
+      return [];
+    try {
+      const lines = readFileSync3(file, "utf8").split(/\r?\n/).filter((line) => line.trim().length > 0).slice(0, boundedLimit);
+      const entries = [];
+      for (const line of lines) {
+        try {
+          const value = JSON.parse(line);
+          const parsed = requestEntrySchema.safeParse(value);
+          if (parsed.success)
+            entries.push(parsed.data);
+        } catch {}
+      }
+      return entries;
+    } catch (error) {
+      console.warn("[blackrouter] could not read request history:", error);
+      return [];
+    }
+  };
+  const save = (entries) => {
+    const recent = entries.slice(0, boundedLimit).map((entry) => requestEntrySchema.parse(entry));
+    mkdirSync3(path3.dirname(file), { recursive: true, mode: 448 });
+    const temp = `${file}.tmp`;
+    const text = recent.map((entry) => JSON.stringify(entry)).join(`
+`);
+    writeFileSync3(temp, text ? `${text}
+` : "", { encoding: "utf8", mode: 384 });
+    renameSync3(temp, file);
+    try {
+      chmodSync2(file, 384);
+    } catch {}
+  };
+  return { path: file, load, save };
+};
+
 // service/retry-after.ts
 var parseRetryAfterMs = (value, now = Date.now(), fallbackMs = 5 * 60000) => {
   const fallback = Math.max(1000, Math.min(fallbackMs, 60 * 60000));
@@ -7046,14 +7090,14 @@ var startRouterServer = (deps) => new Promise((resolve, reject) => {
 
 // service/runtime.ts
 var REFRESH_INTERVAL_MS = 10 * 60000;
-var REQUEST_LOG_LIMIT = 25;
-var PACKAGE_ROOT = path3.dirname(path3.dirname(fileURLToPath(import.meta.url)));
+var REQUEST_LOG_LIMIT = REQUEST_HISTORY_LIMIT;
+var PACKAGE_ROOT = path4.dirname(path4.dirname(fileURLToPath(import.meta.url)));
 var RELAY_FILES = {
-  http: path3.join("relays", "cloudflare", "worker.js"),
-  cloudflare: path3.join("relays", "cloudflare", "worker.js"),
-  vercel: path3.join("relays", "vercel", "api", "relay.js"),
-  netlify: path3.join("relays", "netlify", "functions", "relay.mjs"),
-  deno: path3.join("relays", "deno", "main.ts")
+  http: path4.join("relays", "cloudflare", "worker.js"),
+  cloudflare: path4.join("relays", "cloudflare", "worker.js"),
+  vercel: path4.join("relays", "vercel", "api", "relay.js"),
+  netlify: path4.join("relays", "netlify", "functions", "relay.mjs"),
+  deno: path4.join("relays", "deno", "main.ts")
 };
 var createRuntime = (store = createConfigStore()) => {
   let config = store.load();
@@ -7064,7 +7108,8 @@ var createRuntime = (store = createConfigStore()) => {
   let modelsError = "";
   let upstreamCount = 0;
   let warnings = [];
-  const requests = [];
+  const requestHistory = createRequestHistoryStore(store.path);
+  const requests = requestHistory.load();
   let router = null;
   let routerError = "";
   let directRateLimitedUntil = 0;
@@ -7135,6 +7180,11 @@ var createRuntime = (store = createConfigStore()) => {
           requests.unshift(entry);
           if (requests.length > REQUEST_LOG_LIMIT)
             requests.length = REQUEST_LOG_LIMIT;
+          try {
+            requestHistory.save(requests);
+          } catch (error) {
+            console.warn("[blackrouter] could not persist request history:", error);
+          }
         }
       });
     } catch (error) {
@@ -7248,7 +7298,7 @@ var createRuntime = (store = createConfigStore()) => {
         };
       }
       const file = RELAY_FILES[kind];
-      const code = await readFile(path3.join(PACKAGE_ROOT, file), "utf8");
+      const code = await readFile(path4.join(PACKAGE_ROOT, file), "utf8");
       return { kind, code };
     },
     createProxyPool: async (input) => {
