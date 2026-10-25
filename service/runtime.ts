@@ -246,6 +246,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         port: patch.port ?? previous.port,
         apiKey: patch.apiKey ?? previous.apiKey,
         selectedModels: patch.selectedModels ?? previous.selectedModels,
+        fallbackModels: patch.fallbackModels ?? previous.fallbackModels,
         proxyPools: patch.proxyPools ?? previous.proxyPools,
         proxyStrategy: patch.proxyStrategy ?? previous.proxyStrategy,
         activePoolId: patch.activePoolId !== undefined ? patch.activePoolId : previous.activePoolId,
