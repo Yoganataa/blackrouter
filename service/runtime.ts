@@ -446,6 +446,11 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
 
           lastError = `HTTP ${status}: ${resultText.slice(0, 300)}`;
           if (status !== 429) break;
+          if (!pool && config.proxyPools.some((p) => p.isActive && p.proxyUrl.trim())) {
+            // All configured pools are cooling down. Do not bypass them by silently going direct.
+            lastError = 'All configured proxy pools are cooling down. Wait for the upstream rate limit to reset.';
+            break;
+          }
           if (pool) {
             const retrySeconds = retryAfter ? Number(retryAfter) : NaN;
             const cooldownMs = Number.isFinite(retrySeconds) && retrySeconds >= 0
