@@ -21,6 +21,8 @@ export const parseRetryAfterMs = (
     if (!Number.isFinite(seconds) || seconds < 0) return fallback;
     requestedMs = seconds * 1_000;
   } else {
+    // Date.parse accepts signed numbers such as "-1" as legacy dates, but Retry-After delta-seconds cannot be signed.
+    if (/^[+-]/.test(trimmed)) return fallback;
     const date = Date.parse(trimmed);
     if (!Number.isFinite(date)) return fallback;
     requestedMs = date - now;
