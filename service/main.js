@@ -3869,6 +3869,38 @@ var testProxyPoolResultSchema = objectType({
   error: stringType().nullable().optional()
 });
 var PROXY_STRATEGIES = ["single", "round-robin", "random"];
+var modelComboSchema = objectType({
+  id: stringType().trim().toLowerCase().min(1).max(40).regex(/^[a-z0-9][a-z0-9._-]*$/, "Use a lowercase model-combo slug."),
+  name: stringType().trim().min(1).max(80),
+  models: arrayType(stringType().trim().min(1).max(200)).min(2).max(6)
+}).superRefine((combo, ctx) => {
+  const seen = new Set;
+  combo.models.forEach((model, index) => {
+    const key = model.trim().toLowerCase();
+    if (seen.has(key)) {
+      ctx.addIssue({
+        code: ZodIssueCode.custom,
+        path: ["models", index],
+        message: "A model can appear only once in a combo."
+      });
+    }
+    seen.add(key);
+  });
+});
+var modelCombosSchema = arrayType(modelComboSchema).max(20).superRefine((combos, ctx) => {
+  const seen = new Set;
+  combos.forEach((combo, index) => {
+    const key = combo.id.toLowerCase();
+    if (seen.has(key)) {
+      ctx.addIssue({
+        code: ZodIssueCode.custom,
+        path: [index, "id"],
+        message: "Model-combo IDs must be unique."
+      });
+    }
+    seen.add(key);
+  });
+});
 var routerConfigSchema = objectType({
   version: literalType(1),
   port: numberType().int().min(1024).max(65535),
@@ -3876,6 +3908,7 @@ var routerConfigSchema = objectType({
   upstream: stringType(),
   selectedModels: arrayType(stringType()),
   fallbackModels: arrayType(stringType().min(1)).max(2).default([]),
+  modelCombos: modelCombosSchema.default([]),
   proxyPools: arrayType(proxyPoolSchema),
   proxyStrategy: enumType(PROXY_STRATEGIES).default("single"),
   activePoolId: stringType().nullable().optional(),
@@ -3887,6 +3920,7 @@ var configPatchSchema = objectType({
   apiKey: stringType().min(1).optional(),
   selectedModels: arrayType(stringType()).optional(),
   fallbackModels: arrayType(stringType().min(1)).max(2).optional(),
+  modelCombos: modelCombosSchema.optional(),
   proxyPools: arrayType(proxyPoolSchema).optional(),
   proxyStrategy: enumType(PROXY_STRATEGIES).optional(),
   activePoolId: stringType().nullable().optional(),
@@ -3979,6 +4013,7 @@ var defaultConfig = () => ({
   upstream: OPENCODE_ZEN,
   selectedModels: [],
   fallbackModels: [],
+  modelCombos: [],
   proxyPools: [],
   proxyStrategy: "single",
   activePoolId: null,
@@ -5153,6 +5188,52 @@ var removeProvider = (file) => {
   }
   return { registration: readRegistration(file), warnings };
 };
+
+// service/model-fallback.ts
+var MAX_FALLBACK_MODELS = 2;
+var MAX_MODELS_PER_REQUEST = MAX_FALLBACK_MODELS + 1;
+var MAX_COMBO_MODELS = 6;
+var modelComboModelId = (comboId) => `combo/${comboId.trim().toLowerCase()}`;
+var canonicalModelId = (modelId) => {
+  const trimmed = modelId.trim().replace(/\([^()]+\)\s*$/, "").trim();
+  const upstreamId = trimmed.startsWith("blackrouter/") ? trimmed.slice("blackrouter/".length) : trimmed;
+  return upstreamId.toLowerCase();
+};
+var uniqueModelIds = (models, limit) => {
+  const result = [];
+  const seen = new Set;
+  for (const model of models) {
+    const cleaned = model.trim();
+    const canonical = canonicalModelId(cleaned);
+    if (!cleaned || !canonical || seen.has(canonical))
+      continue;
+    seen.add(canonical);
+    result.push(cleaned);
+    if (result.length >= limit)
+      break;
+  }
+  return result;
+};
+var resolveModelCandidates = (requestedModel, configuredFallbacks = [], modelCombos = []) => {
+  const requestedCanonical = canonicalModelId(requestedModel);
+  const combo = modelCombos.find((candidate) => canonicalModelId(modelComboModelId(candidate.id)) === requestedCanonical);
+  if (combo) {
+    return uniqueModelIds(combo.models, MAX_COMBO_MODELS);
+  }
+  return uniqueModelIds([requestedModel, ...configuredFallbacks], 1 + MAX_FALLBACK_MODELS);
+};
+var buildComboRouterModels = (combos, availableModels) => combos.map((combo) => {
+  const primaryId = combo.models[0] ?? "";
+  const primary = availableModels.find((model) => canonicalModelId(model.id) === canonicalModelId(primaryId));
+  return {
+    id: modelComboModelId(combo.id),
+    name: combo.name,
+    ...primary?.limit ? { limit: primary.limit } : {},
+    ...primary?.capabilities ? { capabilities: primary.capabilities } : {},
+    ...primary?.variants ? { variants: primary.variants } : {}
+  };
+});
+var isRetryableFallbackStatus = (status) => status === 404 || status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
 
 // service/pool-selector.ts
 var createPoolSelector = () => {
@@ -6508,29 +6589,6 @@ var prepareChat = (raw, options) => {
   return { body: JSON.stringify(parsed), stream, model };
 };
 
-// service/model-fallback.ts
-var MAX_FALLBACK_MODELS = 2;
-var MAX_MODELS_PER_REQUEST = MAX_FALLBACK_MODELS + 1;
-var canonicalModelId = (modelId) => {
-  const trimmed = modelId.trim().replace(/\([^()]+\)\s*$/, "").trim();
-  const upstreamId = trimmed.startsWith("blackrouter/") ? trimmed.slice("blackrouter/".length) : trimmed;
-  return upstreamId.toLowerCase();
-};
-var resolveModelCandidates = (requestedModel, configuredFallbacks = []) => {
-  const result = [];
-  const seen = new Set;
-  for (const model of [requestedModel, ...configuredFallbacks].slice(0, 1 + MAX_FALLBACK_MODELS)) {
-    const cleaned = model.trim();
-    const canonical = canonicalModelId(cleaned);
-    if (!cleaned || !canonical || seen.has(canonical))
-      continue;
-    seen.add(canonical);
-    result.push(cleaned);
-  }
-  return result;
-};
-var isRetryableFallbackStatus = (status) => status === 404 || status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
-
 // service/usage-observer.ts
 import { Transform as Transform2 } from "node:stream";
 import { StringDecoder as StringDecoder2 } from "node:string_decoder";
@@ -6876,7 +6934,7 @@ var writeOpenAiError = (response, status, message, code, headers = {}) => {
 };
 var AGGREGATE_LIMIT_BYTES = 8 * 1024 * 1024;
 var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimit, onUsage) => {
-  const modelCandidates = resolveModelCandidates(prepared.model, config.fallbackModels ?? []);
+  const modelCandidates = resolveModelCandidates(prepared.model, config.fallbackModels ?? [], config.modelCombos ?? []);
   const activePools = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
   const now = Date.now();
   const healthyPools = activePools.filter((p) => !p.rateLimitedUntil || p.rateLimitedUntil <= now);
@@ -7261,7 +7319,11 @@ var createRuntime = (store = createConfigStore()) => {
     const selected = new Set(config.selectedModels);
     return selected.size === 0 ? models : models.filter((model) => selected.has(model.id));
   };
-  const preview = () => JSON.stringify({ providers: { [PROVIDER_ID]: buildProviderEntry(config, pickedModels()) } }, null, 2);
+  const modelsToRegister = () => [
+    ...pickedModels(),
+    ...buildComboRouterModels(config.modelCombos ?? [], models)
+  ];
+  const preview = () => JSON.stringify({ providers: { [PROVIDER_ID]: buildProviderEntry(config, modelsToRegister()) } }, null, 2);
   let isLoadingModels = false;
   const ensureFreshModels = () => {
     if (isLoadingModels)
@@ -7304,7 +7366,7 @@ var createRuntime = (store = createConfigStore()) => {
     try {
       router = await startRouterServer({
         getConfig: () => config,
-        getModels: () => models,
+        getModels: () => modelsToRegister(),
         refreshModels: loadModels,
         pickPool: () => poolSelector.pickPool(config),
         getDirectRateLimitedUntil: () => directRateLimitedUntil,
@@ -7347,7 +7409,6 @@ var createRuntime = (store = createConfigStore()) => {
       modelsError = error instanceof Error ? error.message : String(error);
     }
   };
-  const modelsToRegister = () => pickedModels();
   const refreshRegistration = (force = false) => {
     const current = registration();
     if (!current.installed && !force)
@@ -7362,6 +7423,7 @@ var createRuntime = (store = createConfigStore()) => {
       const portChanged = patch.port !== undefined && patch.port !== previous.port;
       const selectionChanged = patch.selectedModels !== undefined && JSON.stringify(patch.selectedModels) !== JSON.stringify(previous.selectedModels);
       const poolsChanged = patch.proxyPools !== undefined && JSON.stringify(patch.proxyPools) !== JSON.stringify(previous.proxyPools);
+      const combosChanged = patch.modelCombos !== undefined && JSON.stringify(patch.modelCombos) !== JSON.stringify(previous.modelCombos);
       if (portChanged && patch.port !== undefined) {
         if (patch.port < 1024 || patch.port > 65535) {
           throw badRequest("The port must be between 1024 and 65535.");
@@ -7375,6 +7437,7 @@ var createRuntime = (store = createConfigStore()) => {
         apiKey: patch.apiKey ?? previous.apiKey,
         selectedModels: patch.selectedModels ?? previous.selectedModels,
         fallbackModels: patch.fallbackModels ?? previous.fallbackModels,
+        modelCombos: patch.modelCombos ?? previous.modelCombos,
         proxyPools: patch.proxyPools ?? previous.proxyPools,
         proxyStrategy: patch.proxyStrategy ?? previous.proxyStrategy,
         activePoolId: patch.activePoolId !== undefined ? patch.activePoolId : previous.activePoolId,
@@ -7394,7 +7457,7 @@ var createRuntime = (store = createConfigStore()) => {
         }
         refreshRegistration(true);
       }
-      if (selectionChanged) {
+      if (selectionChanged || combosChanged) {
         refreshRegistration(true);
       }
       if (poolsChanged) {
