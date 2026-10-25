@@ -6,11 +6,10 @@ export type OpenCodeLane = 'chat' | 'responses' | 'messages';
 type AnyObject = Record<string, any>;
 
 const cleanModelId = (modelId: string): string => {
-  let clean = modelId.replace(/\([^()]+\)\s*$/, '').trim();
-  // OpenCode sends provider-qualified ids (for example blackrouter/model-id),
-  // while the Zen inference endpoints only accept the upstream model id.
-  if (clean.includes('/')) clean = clean.split('/').pop() ?? clean;
-  return clean.trim();
+  const clean = modelId.replace(/\([^()]+\)\s*$/, '').trim();
+  // Strip only our OpenCode provider namespace. Some upstream model ids
+  // contain their own namespace (for example vendor/model); keep that intact.
+  return clean.startsWith('blackrouter/') ? clean.slice('blackrouter/'.length) : clean;
 };
 
 export const resolveOpenCodeLane = (upstream: string, modelId: string): OpenCodeLane => {
