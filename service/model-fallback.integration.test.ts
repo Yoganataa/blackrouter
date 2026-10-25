@@ -99,11 +99,16 @@ describe('model fallback request path', () => {
         const model = body.model ?? '';
         const poolName = request.url.slice(1);
         poolAttempts.push(`${poolName}:${model}`);
-        // Both pools are rate-limited for the primary model. Pool A remains
-        // unavailable for this request even when the model fallback begins.
-        if (poolName === 'pool-a' || model === 'primary-model') {
+        // Pool A is rate-limited and must be excluded for this request.
+        // Pool B has a transient primary-model error, then serves the fallback model.
+        if (poolName === 'pool-a') {
           response.writeHead(429, { 'content-type': 'application/json', 'retry-after': '1' });
           response.end(JSON.stringify({ error: { message: `${poolName} is rate limited for ${model}` } }));
+          return;
+        }
+        if (model === 'primary-model') {
+          response.writeHead(503, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ error: { message: `${poolName} is temporarily unavailable for ${model}` } }));
           return;
         }
         response.writeHead(200, { 'content-type': 'text/event-stream' });
