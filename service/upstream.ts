@@ -12,6 +12,7 @@ import { aggregateStream } from './sse.ts';
 import { createOpenCodeResponseTransform, prepareOpenCodeRequestBody, resolveOpenCodeLane } from './opencode-protocol.ts';
 import { freeTierHeaders, type PreparedChat } from './zen.ts';
 import { isRetryableFallbackStatus, resolveModelCandidates } from './model-fallback.ts';
+import { createUsageObserver, extractTokenUsage, type TokenUsage } from './usage-observer.ts';
 
 /**
  * Talking to the OpenCode Zen free pool, directly or through a relay/proxy pool.
@@ -400,6 +401,7 @@ export const proxyChatCompletion = (
   response: ServerResponse,
   pool?: ProxyPool | null,
   onRateLimit?: (pool: ProxyPool | null, retryAfter?: string) => void,
+  onUsage?: (usage: TokenUsage) => void,
 ): void => {
   const modelCandidates = resolveModelCandidates(prepared.model, config.fallbackModels ?? []);
   const activePools = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
@@ -433,6 +435,15 @@ export const proxyChatCompletion = (
   );
   let attemptIndex = 0;
   let lastRequestedModel = prepared.model;
+  const fallbackReasons: string[] = [];
+
+  const routingHeaders = (attempt: Attempt): Record<string, string> => ({
+    'x-blackrouter-requested-model': prepared.model,
+    'x-blackrouter-resolved-model': attempt.model,
+    'x-blackrouter-resolved-pool': attempt.pool?.name ?? 'Direct',
+    ...(attempt.model !== prepared.model ? { 'x-blackrouter-fallback-used': 'true' } : {}),
+    ...(fallbackReasons.length > 0 ? { 'x-blackrouter-fallback-reason': fallbackReasons.join(' -> ') } : {}),
+  });
 
   const modelAwareBody = (model: string): { lane: ReturnType<typeof resolveOpenCodeLane>; body: string } => {
     const lane = resolveOpenCodeLane(config.upstream, model);
@@ -506,11 +517,6 @@ export const proxyChatCompletion = (
       },
       (answer) => {
         const status = answer.statusCode ?? 502;
-        // Store the resolved model on ServerResponse as well as in wire headers,
-        // so the request log can report the model that actually served the turn.
-        response.setHeader('x-blackrouter-requested-model', prepared.model);
-        response.setHeader('x-blackrouter-resolved-model', attempt.model);
-        if (attempt.model !== prepared.model) response.setHeader('x-blackrouter-fallback-used', 'true');
         if (status === 429 && onRateLimit) {
           const retryAfter = answer.headers['retry-after'];
           onRateLimit(candidate, typeof retryAfter === 'string' ? retryAfter : undefined);
@@ -518,21 +524,24 @@ export const proxyChatCompletion = (
 
         // Until a successful response starts streaming, fail over only to the
         // next bounded model/pool pair. Do not retry malformed/auth requests.
-        if (isRetryableFallbackStatus(status) && attemptIndex + 1 < attempts.length) {
-          attemptIndex += 1;
-          answer.resume();
-          sendAttempt();
-          return;
+        if (isRetryableFallbackStatus(status)) {
+          fallbackReasons.push(`HTTP ${status} on ${attempt.model}`);
+          if (attemptIndex + 1 < attempts.length) {
+            attemptIndex += 1;
+            answer.resume();
+            sendAttempt();
+            return;
+          }
         }
 
+        const routeHeaders = routingHeaders(attempt);
+        for (const [name, value] of Object.entries(routeHeaders)) response.setHeader(name, value);
+
         if (status < 200 || status >= 300) {
-          const headers = {
+          response.writeHead(status, {
             ...responseHeaders(answer.headers),
-            'x-blackrouter-requested-model': prepared.model,
-            'x-blackrouter-resolved-model': attempt.model,
-            ...(attempt.model !== prepared.model ? { 'x-blackrouter-fallback-used': 'true' } : {}),
-          };
-          response.writeHead(status, headers);
+            ...routeHeaders,
+          });
           pipeline(answer, response, () => {});
           return;
         }
@@ -545,17 +554,16 @@ export const proxyChatCompletion = (
           : null;
         const successHeaders = {
           ...responseHeaders(answer.headers),
-          'x-blackrouter-requested-model': prepared.model,
-          'x-blackrouter-resolved-model': attempt.model,
-          ...(attempt.model !== prepared.model ? { 'x-blackrouter-fallback-used': 'true' } : {}),
+          ...routeHeaders,
         };
 
         if (prepared.stream) {
           response.writeHead(status, successHeaders);
+          const observer = createUsageObserver((usage) => onUsage?.(usage));
           if (protocolTransform) {
-            pipeline(answer, protocolTransform, response, () => {});
+            pipeline(answer, protocolTransform, observer, response, () => {});
           } else {
-            pipeline(answer, response, () => {});
+            pipeline(answer, observer, response, () => {});
           }
           return;
         }
@@ -570,7 +578,10 @@ export const proxyChatCompletion = (
         const source = protocolTransform ?? answer;
         source.on('data', collect);
         source.on('end', () => {
-          writeJson(response, status, aggregateStream(Buffer.concat(chunks).toString('utf8')), successHeaders);
+          const completion = aggregateStream(Buffer.concat(chunks).toString('utf8'));
+          const usage = extractTokenUsage(completion);
+          if (usage) onUsage?.(usage);
+          writeJson(response, status, completion, successHeaders);
         });
         source.on('error', (error) => {
           writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, 'upstream_unreachable');
@@ -586,15 +597,20 @@ export const proxyChatCompletion = (
       // Network failures can also use the bounded model/pool chain. If there
       // is no remaining candidate, expose the final transport error.
       if (attemptIndex + 1 < attempts.length && !response.headersSent && !response.destroyed) {
+        fallbackReasons.push(`network error on ${lastRequestedModel}`);
         attemptIndex += 1;
         sendAttempt();
         return;
       }
+      const finalAttempt = attempt;
+      const routeHeaders = routingHeaders(finalAttempt);
+      for (const [name, value] of Object.entries(routeHeaders)) response.setHeader(name, value);
       writeOpenAiError(
         response,
         502,
         `The upstream did not answer for ${lastRequestedModel}: ${error.message}`,
         'upstream_unreachable',
+        routeHeaders,
       );
     });
 
