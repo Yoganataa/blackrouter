@@ -9,6 +9,7 @@ import type { ProxyPool, RouterConfig, RouterModel } from '../contract.ts';
 import { upstreamError } from './errors.ts';
 import { resolveModelMetadata } from './model-metadata.ts';
 import { aggregateStream } from './sse.ts';
+import { createOpenCodeResponseTransform, prepareOpenCodeRequestBody, resolveOpenCodeLane } from './opencode-protocol.ts';
 import { freeTierHeaders, type PreparedChat } from './zen.ts';
 
 /**
@@ -399,11 +400,24 @@ export const proxyChatCompletion = (
   pool?: ProxyPool | null,
   onRateLimit?: (pool: ProxyPool | null, retryAfter?: string) => void,
 ): void => {
+  const lane = resolveOpenCodeLane(config.upstream, prepared.model);
+  let upstreamBody: string;
+  try {
+    upstreamBody = prepareOpenCodeRequestBody(prepared.body, lane);
+  } catch (error) {
+    writeOpenAiError(
+      response,
+      400,
+      error instanceof Error ? error.message : 'Could not convert the OpenCode request body.',
+      'invalid_request',
+    );
+    return;
+  }
+
   const activePools = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
   const attempted = new Set<string>();
   const initialPool = pool ?? null;
   const healthyPools = activePools.filter((p) => !p.rateLimitedUntil || p.rateLimitedUntil <= Date.now());
-  // A direct initial attempt is used only when the user has no configured active pools.
   const candidates: Array<ProxyPool | null> = initialPool
     ? [initialPool, ...healthyPools.filter((p) => p.id !== initialPool.id)]
     : activePools.length === 0 ? [null] : healthyPools;
@@ -411,8 +425,9 @@ export const proxyChatCompletion = (
   const sendAttempt = (candidate: ProxyPool | null): void => {
     if (response.destroyed || response.writableEnded) return;
     if (!candidate && activePools.length > 0) {
-      const nextAvailableAt = Math.min(...activePools.map((p) => p.rateLimitedUntil && p.rateLimitedUntil > Date.now() ? p.rateLimitedUntil : Date.now() + 5 * 60_000));
-      const retryAfter = Math.max(1, Math.ceil((nextAvailableAt - Date.now()) / 1000));
+      const now = Date.now();
+      const nextAvailableAt = Math.min(...activePools.map((p) => p.rateLimitedUntil && p.rateLimitedUntil > now ? p.rateLimitedUntil : now + 5 * 60_000));
+      const retryAfter = Math.max(1, Math.ceil((nextAvailableAt - now) / 1000));
       writeOpenAiError(
         response,
         429,
@@ -438,9 +453,10 @@ export const proxyChatCompletion = (
         headers: {
           ...target.headers,
           ...freeTierHeaders(session),
+          ...(lane === 'messages' ? { 'anthropic-version': '2023-06-01' } : {}),
           'content-type': 'application/json',
           accept: 'text/event-stream',
-          'content-length': String(Buffer.byteLength(prepared.body)),
+          'content-length': String(Buffer.byteLength(upstreamBody)),
         },
       },
       (answer) => {
@@ -450,7 +466,6 @@ export const proxyChatCompletion = (
           onRateLimit(candidate, typeof retryAfter === 'string' ? retryAfter : undefined);
 
           if (candidate) {
-            // Only fail over before headers/body have been sent to the client.
             const next = candidates.find((p) => p !== null && !attempted.has(p.id) && (!p.rateLimitedUntil || p.rateLimitedUntil <= Date.now()));
             if (next) {
               answer.resume();
@@ -458,36 +473,51 @@ export const proxyChatCompletion = (
               return;
             }
             if (initialPool) {
-              // We've exhausted the pool list. Return a normalized 429 instead of the
-              // first raw relay response, which may obscure the upstream rate-limit reason.
               answer.resume();
               writeOpenAiError(response, 429, 'All available proxy pools are rate-limited. Wait for the upstream rate limit to reset.', 'rate_limit_exhausted');
               return;
             }
           }
-          // Direct upstream is also cooled down, then the original 429 is returned
-          // with its Retry-After header. The next request is rejected locally.
         }
-        if (prepared.stream || status !== 200) {
+
+        if (status < 200 || status >= 300) {
           response.writeHead(status, responseHeaders(answer.headers));
-          pipeline(answer, response, () => {
-            // End of this exchange.
-          });
+          pipeline(answer, response, () => {});
+          return;
+        }
+
+        const contentType = typeof answer.headers['content-type'] === 'string' ? answer.headers['content-type'].toLowerCase() : '';
+        const protocolTransform = lane !== 'chat' && contentType.includes('text/event-stream')
+          ? createOpenCodeResponseTransform(lane, prepared.model)
+          : null;
+
+        if (prepared.stream) {
+          response.writeHead(status, responseHeaders(answer.headers));
+          if (protocolTransform) {
+            pipeline(answer, protocolTransform, response, () => {});
+          } else {
+            pipeline(answer, response, () => {});
+          }
           return;
         }
 
         const chunks: Buffer[] = [];
         let size = 0;
-        answer.on('data', (chunk: Buffer) => {
-          size += chunk.length;
-          if (size <= AGGREGATE_LIMIT_BYTES) chunks.push(chunk);
+        const collect = (chunk: Buffer | string): void => {
+          const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          size += value.length;
+          if (size <= AGGREGATE_LIMIT_BYTES) chunks.push(value);
+        };
+        const source = protocolTransform ?? answer;
+        source.on('data', collect);
+        source.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf8');
+          writeJson(response, status, aggregateStream(body));
         });
-        answer.on('end', () => {
-          writeJson(response, status, aggregateStream(Buffer.concat(chunks).toString('utf8')));
-        });
-        answer.on('error', (error) => {
+        source.on('error', (error) => {
           writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, 'upstream_unreachable');
         });
+        if (protocolTransform) answer.pipe(protocolTransform);
       },
     );
 
@@ -504,7 +534,7 @@ export const proxyChatCompletion = (
       if (!response.writableEnded) upstream.destroy();
     });
 
-    upstream.end(prepared.body);
+    upstream.end(upstreamBody);
   };
 
   sendAttempt(initialPool);
