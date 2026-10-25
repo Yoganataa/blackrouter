@@ -36,7 +36,14 @@ export const createPoolSelector = (): PoolSelector => {
 
     const now = Date.now();
     const available = active.filter((p) => !p.rateLimitedUntil || p.rateLimitedUntil <= now);
-    const pools = available.length > 0 ? available : active;
+    // Never send traffic to a pool while it is in its rate-limit cooldown.
+    // `null` lets callers make an explicit direct request or report that all pools are cooling down.
+    const pools = available;
+
+    if (pools.length === 0) {
+      reset();
+      return null;
+    }
 
     const strategy = config.proxyStrategy || 'single';
 
