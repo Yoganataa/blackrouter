@@ -393,62 +393,87 @@ export const proxyChatCompletion = (
   pool?: ProxyPool | null,
   onRateLimit?: (pool: ProxyPool, retryAfter?: string) => void,
 ): void => {
-  const target = buildTarget(config, 'chat', pool, prepared.model);
-  const transport = target.url.protocol === 'http:' ? http : https;
-  const upstream = transport.request(
-    target.url,
-    {
-      method: 'POST',
-      agent: target.agent,
-      headers: {
-        ...target.headers,
-        ...freeTierHeaders(session),
-        'content-type': 'application/json',
-        accept: 'text/event-stream',
-        'content-length': String(Buffer.byteLength(prepared.body)),
+  const activePools = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
+  const attempted = new Set<string>();
+  const initialPool = pool ?? null;
+  const candidates: Array<ProxyPool | null> = initialPool
+    ? [initialPool, ...activePools.filter((p) => p.id !== initialPool.id && (!p.rateLimitedUntil || p.rateLimitedUntil <= Date.now()))]
+    : [null];
+
+  const sendAttempt = (candidate: ProxyPool | null): void => {
+    if (response.destroyed || response.writableEnded) return;
+    if (candidate && attempted.has(candidate.id)) {
+      writeOpenAiError(response, 429, 'All available proxy pools have been tried or are cooling down. Wait for the upstream rate limit to reset.', 'rate_limit_exhausted');
+      return;
+    }
+    if (candidate) attempted.add(candidate.id);
+
+    const target = buildTarget(config, 'chat', candidate, prepared.model);
+    const transport = target.url.protocol === 'http:' ? http : https;
+    const upstream = transport.request(
+      target.url,
+      {
+        method: 'POST',
+        agent: target.agent,
+        headers: {
+          ...target.headers,
+          ...freeTierHeaders(session),
+          'content-type': 'application/json',
+          accept: 'text/event-stream',
+          'content-length': String(Buffer.byteLength(prepared.body)),
+        },
       },
-    },
-    (answer) => {
-      const status = answer.statusCode ?? 502;
-      if (status === 429 && pool && onRateLimit) {
-        const retryAfter = answer.headers['retry-after'];
-        onRateLimit(pool, typeof retryAfter === 'string' ? retryAfter : undefined);
-      }
-      if (prepared.stream || status !== 200) {
-        response.writeHead(status, responseHeaders(answer.headers));
-        pipeline(answer, response, () => {
-          // Either side ending is the end of this exchange; nothing is retried.
+      (answer) => {
+        const status = answer.statusCode ?? 502;
+        if (status === 429 && candidate && onRateLimit) {
+          const retryAfter = answer.headers['retry-after'];
+          onRateLimit(candidate, typeof retryAfter === 'string' ? retryAfter : undefined);
+          // Only fail over before headers/body have been sent to the client.
+          const next = candidates.find((p) => p !== null && !attempted.has(p.id) && (!p.rateLimitedUntil || p.rateLimitedUntil <= Date.now()));
+          if (next) {
+            answer.resume();
+            sendAttempt(next);
+            return;
+          }
+        }
+        if (prepared.stream || status !== 200) {
+          response.writeHead(status, responseHeaders(answer.headers));
+          pipeline(answer, response, () => {
+            // End of this exchange.
+          });
+          return;
+        }
+
+        const chunks: Buffer[] = [];
+        let size = 0;
+        answer.on('data', (chunk: Buffer) => {
+          size += chunk.length;
+          if (size <= AGGREGATE_LIMIT_BYTES) chunks.push(chunk);
         });
-        return;
-      }
-
-      const chunks: Buffer[] = [];
-      let size = 0;
-      answer.on('data', (chunk: Buffer) => {
-        size += chunk.length;
-        if (size <= AGGREGATE_LIMIT_BYTES) chunks.push(chunk);
-      });
-      answer.on('end', () => {
-        writeJson(response, status, aggregateStream(Buffer.concat(chunks).toString('utf8')));
-      });
-      answer.on('error', (error) => {
-        writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, 'upstream_unreachable');
-      });
-    },
-  );
-
-  upstream.on('error', (error) => {
-    writeOpenAiError(
-      response,
-      502,
-      `The upstream did not answer: ${error.message}`,
-      'upstream_unreachable',
+        answer.on('end', () => {
+          writeJson(response, status, aggregateStream(Buffer.concat(chunks).toString('utf8')));
+        });
+        answer.on('error', (error) => {
+          writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, 'upstream_unreachable');
+        });
+      },
     );
-  });
 
-  response.on('close', () => {
-    if (!response.writableEnded) upstream.destroy();
-  });
+    upstream.on('error', (error) => {
+      writeOpenAiError(
+        response,
+        502,
+        `The upstream did not answer: ${error.message}`,
+        'upstream_unreachable',
+      );
+    });
 
-  upstream.end(prepared.body);
+    response.on('close', () => {
+      if (!response.writableEnded) upstream.destroy();
+    });
+
+    upstream.end(prepared.body);
+  };
+
+  sendAttempt(initialPool);
 };
