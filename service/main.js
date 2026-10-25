@@ -5162,7 +5162,11 @@ var createPoolSelector = () => {
     }
     const now = Date.now();
     const available = active.filter((p) => !p.rateLimitedUntil || p.rateLimitedUntil <= now);
-    const pools = available.length > 0 ? available : active;
+    const pools = available;
+    if (pools.length === 0) {
+      reset();
+      return null;
+    }
     const strategy = config.proxyStrategy || "single";
     if (strategy === "single") {
       if (config.activePoolId) {
@@ -5967,7 +5971,8 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
   }, (answer) => {
     const status = answer.statusCode ?? 502;
     if (status === 429 && pool && onRateLimit) {
-      onRateLimit(pool);
+      const retryAfter = answer.headers["retry-after"];
+      onRateLimit(pool, typeof retryAfter === "string" ? retryAfter : void 0);
     }
     if (prepared.stream || status !== 200) {
       response.writeHead(status, responseHeaders(answer.headers));
@@ -6382,7 +6387,7 @@ var createRuntime = (store = createConfigStore()) => {
       const chatPayload = JSON.stringify({
         model: modelId,
         messages: [{ role: "user", content: 'Say "OK"' }],
-        max_tokens: 1024,
+        max_tokens: 8,
         stream: false
       });
       const prepared = prepareChat(chatPayload, { rtkEnabled: false });
