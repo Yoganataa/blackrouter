@@ -391,7 +391,7 @@ export const proxyChatCompletion = (
   prepared: PreparedChat,
   response: ServerResponse,
   pool?: ProxyPool | null,
-  onRateLimit?: (pool: ProxyPool, retryAfter?: string) => void,
+  onRateLimit?: (pool: ProxyPool | null, retryAfter?: string) => void,
 ): void => {
   const activePools = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
   const attempted = new Set<string>();
@@ -431,25 +431,28 @@ export const proxyChatCompletion = (
       },
       (answer) => {
         const status = answer.statusCode ?? 502;
-        if (status === 429 && candidate && onRateLimit) {
+        if (status === 429 && onRateLimit) {
           const retryAfter = answer.headers['retry-after'];
           onRateLimit(candidate, typeof retryAfter === 'string' ? retryAfter : undefined);
-          // Only fail over before headers/body have been sent to the client.
-          const next = candidates.find((p) => p !== null && !attempted.has(p.id) && (!p.rateLimitedUntil || p.rateLimitedUntil <= Date.now()));
-          if (next) {
-            answer.resume();
-            sendAttempt(next);
-            return;
+
+          if (candidate) {
+            // Only fail over before headers/body have been sent to the client.
+            const next = candidates.find((p) => p !== null && !attempted.has(p.id) && (!p.rateLimitedUntil || p.rateLimitedUntil <= Date.now()));
+            if (next) {
+              answer.resume();
+              sendAttempt(next);
+              return;
+            }
+            if (initialPool) {
+              // We've exhausted the pool list. Return a normalized 429 instead of the
+              // first raw relay response, which may obscure the upstream rate-limit reason.
+              answer.resume();
+              writeOpenAiError(response, 429, 'All available proxy pools are rate-limited. Wait for the upstream rate limit to reset.', 'rate_limit_exhausted');
+              return;
+            }
           }
-          if (initialPool) {
-            // We've exhausted the pool list. Return a normalized 429 instead of the
-            // first raw relay response, which may obscure the upstream rate-limit reason.
-            answer.resume();
-            writeOpenAiError(response, 429, 'All available proxy pools are rate-limited. Wait for the upstream rate limit to reset.', 'rate_limit_exhausted');
-            return;
-          }
-          // Direct upstream and all-pool cases have no safe failover target.
-          // Keep the original 429 and its Retry-After header rather than looping.
+          // Direct upstream is also cooled down, then the original 429 is returned
+          // with its Retry-After header. The next request is rejected locally.
         }
         if (prepared.stream || status !== 200) {
           response.writeHead(status, responseHeaders(answer.headers));
