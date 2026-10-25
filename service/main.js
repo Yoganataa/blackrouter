@@ -7146,15 +7146,28 @@ var startRouterServer = (deps) => new Promise((resolve, reject) => {
       readBody(request).then((body) => {
         const prepared = prepareChat(body, config.rtkEnabled);
         const pool = deps.pickPool ? deps.pickPool() : null;
+        const tokenUsage = {};
         response.on("close", () => {
+          const resolvedModel = response.getHeader("x-blackrouter-resolved-model");
+          const resolvedPool = response.getHeader("x-blackrouter-resolved-pool");
+          const fallbackReason = response.getHeader("x-blackrouter-fallback-reason");
+          const fallbackUsed = response.getHeader("x-blackrouter-fallback-used") === "true";
+          const status = response.statusCode;
           deps.record({
             at: started,
             method: "POST",
             path: "/v1/chat/completions",
-            model: typeof response.getHeader("x-blackrouter-resolved-model") === "string" ? response.getHeader("x-blackrouter-resolved-model") : prepared.model,
-            status: response.statusCode,
+            model: typeof resolvedModel === "string" ? resolvedModel : prepared.model,
+            requestedModel: prepared.model,
+            status,
             ms: Date.now() - started,
-            poolName: pool ? pool.name : "Direct"
+            poolName: typeof resolvedPool === "string" ? resolvedPool : pool ? pool.name : "Direct",
+            fallbackUsed,
+            ...typeof fallbackReason === "string" ? { fallbackReason } : {},
+            ...tokenUsage.inputTokens !== undefined ? { inputTokens: tokenUsage.inputTokens } : {},
+            ...tokenUsage.outputTokens !== undefined ? { outputTokens: tokenUsage.outputTokens } : {},
+            ...tokenUsage.totalTokens !== undefined ? { totalTokens: tokenUsage.totalTokens } : {},
+            ...typeof status === "number" && status >= 400 ? { error: `HTTP ${status}` } : {}
           });
         });
         const activePoolsExist = config.proxyPools.some((p) => p.isActive && p.proxyUrl.trim());
@@ -7175,6 +7188,8 @@ var startRouterServer = (deps) => new Promise((resolve, reject) => {
             rateLimitedPool.lastError = "Rate limit (HTTP 429)";
             rateLimitedPool.lastTestedAt = Date.now();
           }
+        }, (usage) => {
+          Object.assign(tokenUsage, usage);
         });
       }).catch((error) => {
         writeOpenAiError(response, 400, error instanceof Error ? error.message : "The request body could not be read.", "invalid_request");
