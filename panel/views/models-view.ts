@@ -8,8 +8,10 @@ import { btn, card, el, stack } from '../ui/dom.ts';
 
 const clockOf = (at: number | null): string => (at === null ? 'never' : new Date(at).toLocaleTimeString());
 
-const canonicalModel = (id: string): string =>
-  id.trim().replace(/\([^()]+\)\s*$/, '').split('/').pop()?.toLowerCase() ?? '';
+const canonicalModel = (id: string): string => {
+  const trimmed = id.trim().replace(/\([^()]+\)\s*$/, '');
+  return (trimmed.startsWith('blackrouter/') ? trimmed.slice('blackrouter/'.length) : trimmed).toLowerCase();
+};
 
 const formatTokens = (tokens: number): string => {
   if (tokens >= 1_000_000) {
