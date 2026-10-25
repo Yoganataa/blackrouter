@@ -7331,6 +7331,13 @@ var isOpenCodeUpstream = (upstream) => {
     return false;
   }
 };
+var hasSameUpstreamOrigin = (left, right) => {
+  try {
+    return new URL(left).origin === new URL(right).origin;
+  } catch {
+    return left === right;
+  }
+};
 var isMuseSparkModel = (id) => /^muse[-_]?spark(?:$|[-_:.\s])/i.test(id);
 var isUnionAlphaModel = (id) => /^union[-_]?alpha(?:$|[-_:.\s])/i.test(id);
 var resolveOpencodePath = (call, modelId) => {
@@ -8036,6 +8043,7 @@ var createRuntime = (store = createConfigStore()) => {
       const poolsChanged = patch.proxyPools !== undefined && JSON.stringify(patch.proxyPools) !== JSON.stringify(previous.proxyPools);
       const combosChanged = patch.modelCombos !== undefined && JSON.stringify(patch.modelCombos) !== JSON.stringify(previous.modelCombos);
       const upstreamChanged = patch.upstream !== undefined && patch.upstream !== previous.upstream;
+      const upstreamOriginChanged = patch.upstream !== undefined && !hasSameUpstreamOrigin(previous.upstream, patch.upstream);
       const upstreamApiKeyChanged = patch.upstreamApiKey !== undefined && patch.upstreamApiKey !== (previous.upstreamApiKey ?? "");
       if (portChanged && patch.port !== undefined) {
         if (patch.port < 1024 || patch.port > 65535) {
@@ -8049,7 +8057,7 @@ var createRuntime = (store = createConfigStore()) => {
         port: patch.port ?? previous.port,
         apiKey: patch.apiKey ?? previous.apiKey,
         upstream: patch.upstream ?? previous.upstream,
-        upstreamApiKey: patch.upstreamApiKey !== undefined ? patch.upstreamApiKey : previous.upstreamApiKey ?? "",
+        upstreamApiKey: patch.upstreamApiKey !== undefined ? patch.upstreamApiKey : upstreamOriginChanged ? "" : previous.upstreamApiKey ?? "",
         selectedModels: (upstreamChanged || upstreamApiKeyChanged) && patch.selectedModels === undefined ? [] : patch.selectedModels ?? previous.selectedModels,
         fallbackModels: patch.fallbackModels ?? previous.fallbackModels,
         modelCombos: patch.modelCombos ?? previous.modelCombos,
