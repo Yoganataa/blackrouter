@@ -6062,6 +6062,11 @@ var presentedKey = (request) => {
   const match = /^Bearer\s+(.+)$/i.exec(authorization.trim());
   return match?.[1]?.trim() ?? "";
 };
+var writeRateLimitedError = (response, until, message) => {
+  const retrySeconds = Math.max(1, Math.ceil((until - Date.now()) / 1000));
+  response.writeHead(429, { "content-type": "application/json", "retry-after": String(retrySeconds) });
+  response.end(JSON.stringify({ error: { message, type: "rate_limit_error", code: "rate_limit_exhausted" } }));
+};
 var readBody = (request) => new Promise((resolve, reject) => {
   const chunks = [];
   let size = 0;
@@ -6134,12 +6139,24 @@ var startRouterServer = (deps) => new Promise((resolve, reject) => {
             poolName: pool ? pool.name : "Direct"
           });
         });
+        const activePoolsExist = config.proxyPools.some((p) => p.isActive && p.proxyUrl.trim());
+        if (!pool && !activePoolsExist) {
+          const directCooldownUntil = deps.getDirectRateLimitedUntil?.() ?? 0;
+          if (directCooldownUntil > Date.now()) {
+            writeRateLimitedError(response, directCooldownUntil, "The direct OpenCode upstream is in rate-limit cooldown.");
+            return;
+          }
+        }
         const reqSession = resolveRequestSession(request, session);
-        proxyChatCompletion(config, reqSession, prepared, response, pool, (rateLimitedPool) => {
-          rateLimitedPool.rateLimitedUntil = Date.now() + 5 * 60000;
-          rateLimitedPool.testStatus = "error";
-          rateLimitedPool.lastError = "Rate limit (HTTP 429)";
-          rateLimitedPool.lastTestedAt = Date.now();
+        proxyChatCompletion(config, reqSession, prepared, response, pool, (rateLimitedPool, retryAfter) => {
+          if (deps.markRateLimited) {
+            deps.markRateLimited(rateLimitedPool, retryAfter);
+          } else if (rateLimitedPool) {
+            rateLimitedPool.rateLimitedUntil = Date.now() + parseRetryAfterMs(retryAfter);
+            rateLimitedPool.testStatus = "error";
+            rateLimitedPool.lastError = "Rate limit (HTTP 429)";
+            rateLimitedPool.lastTestedAt = Date.now();
+          }
         });
       }).catch((error) => {
         writeOpenAiError(response, 400, error instanceof Error ? error.message : "The request body could not be read.", "invalid_request");
