@@ -3925,9 +3925,16 @@ var requestEntrySchema = objectType({
   method: stringType(),
   path: stringType(),
   model: stringType(),
+  requestedModel: stringType().optional(),
   status: numberType(),
   ms: numberType(),
-  poolName: stringType().optional()
+  poolName: stringType().optional(),
+  fallbackUsed: booleanType().optional(),
+  fallbackReason: stringType().optional(),
+  inputTokens: numberType().int().nonnegative().optional(),
+  outputTokens: numberType().int().nonnegative().optional(),
+  totalTokens: numberType().int().nonnegative().optional(),
+  error: stringType().optional()
 });
 var registrationSchema = objectType({
   providerId: stringType(),
