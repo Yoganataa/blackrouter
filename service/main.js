@@ -6804,6 +6804,10 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       }
     }, (answer) => {
       const status = answer.statusCode ?? 502;
+      response.setHeader("x-blackrouter-requested-model", prepared.model);
+      response.setHeader("x-blackrouter-resolved-model", attempt.model);
+      if (attempt.model !== prepared.model)
+        response.setHeader("x-blackrouter-fallback-used", "true");
       if (status === 429 && onRateLimit) {
         const retryAfter = answer.headers["retry-after"];
         onRateLimit(candidate, typeof retryAfter === "string" ? retryAfter : undefined);
