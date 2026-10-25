@@ -3908,6 +3908,7 @@ var routerConfigSchema = objectType({
   port: numberType().int().min(1024).max(65535),
   apiKey: stringType().min(8),
   upstream: stringType(),
+  upstreamApiKey: stringType().max(4096).optional(),
   selectedModels: arrayType(stringType()),
   fallbackModels: arrayType(stringType().min(1)).max(2).default([]),
   modelCombos: modelCombosSchema.default([]),
@@ -3919,9 +3920,19 @@ var routerConfigSchema = objectType({
   cavemanLevel: enumType(CAVEMAN_LEVELS).default("off"),
   ponytailLevel: enumType(PONYTAIL_LEVELS).default("off")
 });
+var upstreamUrlSchema = stringType().url().refine((value) => {
+  try {
+    const parsed = new URL(value);
+    return (parsed.protocol === "http:" || parsed.protocol === "https:") && !parsed.username && !parsed.password && !parsed.hash;
+  } catch {
+    return false;
+  }
+}, "Use an HTTP(S) base URL without embedded credentials or a fragment.");
 var configPatchSchema = objectType({
   port: numberType().int().min(1024).max(65535).optional(),
   apiKey: stringType().min(1).optional(),
+  upstream: upstreamUrlSchema.optional(),
+  upstreamApiKey: stringType().max(4096).optional(),
   selectedModels: arrayType(stringType()).optional(),
   fallbackModels: arrayType(stringType().min(1)).max(2).optional(),
   modelCombos: modelCombosSchema.optional(),
@@ -3988,6 +3999,7 @@ var routerStateSchema = objectType({
   routerError: stringType(),
   endpoint: stringType(),
   config: routerConfigSchema,
+  upstreamApiKeyConfigured: booleanType(),
   models: arrayType(modelSchema),
   modelsFetchedAt: numberType().nullable(),
   modelsError: stringType(),
@@ -4017,6 +4029,7 @@ var defaultConfig = () => ({
   port: DEFAULT_PORT,
   apiKey: createApiKey(),
   upstream: OPENCODE_ZEN,
+  upstreamApiKey: "",
   selectedModels: [],
   fallbackModels: [],
   modelCombos: [],
@@ -5475,7 +5488,8 @@ var cleanModelId = (modelId) => {
 var resolveOpenCodeLane = (upstream, modelId) => {
   let isOpenCode = false;
   try {
-    isOpenCode = new URL(upstream).hostname.toLowerCase().includes("opencode.ai");
+    const hostname = new URL(upstream).hostname.toLowerCase();
+    isOpenCode = hostname === "opencode.ai" || hostname.endsWith(".opencode.ai");
   } catch {
     return "chat";
   }
@@ -7137,12 +7151,15 @@ var prepareChat = (raw, options) => {
   }
   const effectiveOptions = typeof options === "boolean" ? { rtkEnabled: options } : options ?? {};
   applyTokenSaverStyles(parsed, effectiveOptions.cavemanLevel ?? "off", effectiveOptions.ponytailLevel ?? "off");
-  ensureFreeTierTools(parsed);
-  if (Array.isArray(parsed.messages)) {
-    for (const msg of parsed.messages) {
-      if (isJsonObject(msg) && msg.role === "assistant") {
-        if (typeof msg.reasoning_content !== "string" || msg.reasoning_content.length === 0) {
-          msg.reasoning_content = " ";
+  const openCodeFreeTier = effectiveOptions.openCodeFreeTier ?? true;
+  if (openCodeFreeTier) {
+    ensureFreeTierTools(parsed);
+    if (Array.isArray(parsed.messages)) {
+      for (const msg of parsed.messages) {
+        if (isJsonObject(msg) && msg.role === "assistant") {
+          if (typeof msg.reasoning_content !== "string" || msg.reasoning_content.length === 0) {
+            msg.reasoning_content = " ";
+          }
         }
       }
     }
@@ -7306,6 +7323,14 @@ class TunnelAgent extends https2.Agent {
   }
 }
 var createTunnelAgent = (proxyUrlString) => new TunnelAgent(proxyUrlString);
+var isOpenCodeUpstream = (upstream) => {
+  try {
+    const hostname = new URL(upstream).hostname.toLowerCase();
+    return hostname === "opencode.ai" || hostname.endsWith(".opencode.ai");
+  } catch {
+    return false;
+  }
+};
 var isMuseSparkModel = (id) => /^muse[-_]?spark(?:$|[-_:.\s])/i.test(id);
 var isUnionAlphaModel = (id) => /^union[-_]?alpha(?:$|[-_:.\s])/i.test(id);
 var resolveOpencodePath = (call, modelId) => {
@@ -7322,7 +7347,8 @@ var resolveOpencodePath = (call, modelId) => {
 var buildTarget = (config, call, poolOverride, modelId) => {
   const activePool = poolOverride !== undefined ? poolOverride : (config.proxyPools || []).find((p) => p.isActive && p.proxyUrl.trim()) ?? null;
   const parsed = new URL(config.upstream);
-  const isOpenCode = parsed.hostname.toLowerCase().includes("opencode.ai");
+  const isOpenCode = isOpenCodeUpstream(config.upstream);
+  const upstreamAuthHeaders = !isOpenCode && config.upstreamApiKey?.trim() ? { authorization: `Bearer ${config.upstreamApiKey.trim()}` } : {};
   let targetOrigin;
   let targetPath;
   if (isOpenCode) {
@@ -7339,19 +7365,20 @@ var buildTarget = (config, call, poolOverride, modelId) => {
     if (activePool.type === "http") {
       return {
         url: upstreamUrl,
-        headers: {},
+        headers: upstreamAuthHeaders,
         agent: createTunnelAgent(activePool.proxyUrl)
       };
     }
     return {
       url: new URL(activePool.proxyUrl),
       headers: {
+        ...upstreamAuthHeaders,
         "x-relay-target": targetOrigin,
         "x-relay-path": targetPath
       }
     };
   }
-  return { url: upstreamUrl, headers: {} };
+  return { url: upstreamUrl, headers: upstreamAuthHeaders };
 };
 var KNOWN_FREE_MODELS = new Set([
   "big-pickle",
@@ -7400,6 +7427,8 @@ var toModels = (ids, rawEntries) => ids.map((id) => {
 });
 var fetchModelIds = async (config, fetchImpl = fetch) => {
   const target = buildTarget(config, "models");
+  const isOpenCode = isOpenCodeUpstream(config.upstream);
+  const upstreamUserAgent = isOpenCode ? "opencode/latest/2.0.26/cli" : "BlackRouter/1.0";
   let payload;
   if (target.agent && fetchImpl === fetch) {
     try {
@@ -7411,7 +7440,7 @@ var fetchModelIds = async (config, fetchImpl = fetch) => {
           headers: {
             accept: "application/json",
             ...target.headers,
-            "user-agent": "opencode/latest/2.0.26/cli"
+            "user-agent": upstreamUserAgent
           }
         }, (res) => {
           if (res.statusCode !== 200) {
@@ -7449,7 +7478,7 @@ var fetchModelIds = async (config, fetchImpl = fetch) => {
         headers: {
           accept: "application/json",
           ...target.headers,
-          "user-agent": "opencode/latest/2.0.26/cli"
+          "user-agent": upstreamUserAgent
         },
         signal: AbortSignal.timeout(12000)
       });
@@ -7471,7 +7500,7 @@ var fetchModelIds = async (config, fetchImpl = fetch) => {
   if (ids.length === 0) {
     throw upstreamError("The model list was empty. Check the proxy pool URL and status.");
   }
-  return { ids, free: freeModelIds(ids), rawEntries };
+  return { ids, free: isOpenCode ? freeModelIds(ids) : ids, rawEntries };
 };
 var FORWARDED_RESPONSE_HEADERS = [
   "content-type",
@@ -7555,13 +7584,7 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
         raw = JSON.stringify(parsed);
       }
     } catch {}
-    const isOpenCode = (() => {
-      try {
-        return new URL(config.upstream).hostname.toLowerCase().includes("opencode.ai");
-      } catch {
-        return false;
-      }
-    })();
+    const isOpenCode = isOpenCodeUpstream(config.upstream);
     return {
       lane,
       body: prepareOpenCodeRequestBody(raw, lane, isOpenCode)
@@ -7593,8 +7616,8 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       method: "POST",
       agent: target.agent,
       headers: {
+        ...isOpenCodeUpstream(config.upstream) ? freeTierHeaders(session) : {},
         ...target.headers,
-        ...freeTierHeaders(session),
         ...lane === "messages" ? { "anthropic-version": "2023-06-01" } : {},
         "content-type": "application/json",
         accept: "text/event-stream",
@@ -7804,7 +7827,8 @@ var startRouterServer = (deps) => new Promise((resolve, reject) => {
         const prepared = prepareChat(body, {
           rtkEnabled: config.rtkEnabled,
           cavemanLevel: config.cavemanLevel,
-          ponytailLevel: config.ponytailLevel
+          ponytailLevel: config.ponytailLevel,
+          openCodeFreeTier: isOpenCodeUpstream(config.upstream)
         });
         const pool = deps.pickPool ? deps.pickPool() : null;
         const tokenUsage = {};
@@ -7928,7 +7952,8 @@ var createRuntime = (store = createConfigStore()) => {
       running: router !== null,
       routerError,
       endpoint: endpointFor(config),
-      config,
+      config: { ...config, upstreamApiKey: "" },
+      upstreamApiKeyConfigured: Boolean(config.upstreamApiKey?.trim()),
       models,
       modelsFetchedAt,
       modelsError,
@@ -8010,6 +8035,8 @@ var createRuntime = (store = createConfigStore()) => {
       const selectionChanged = patch.selectedModels !== undefined && JSON.stringify(patch.selectedModels) !== JSON.stringify(previous.selectedModels);
       const poolsChanged = patch.proxyPools !== undefined && JSON.stringify(patch.proxyPools) !== JSON.stringify(previous.proxyPools);
       const combosChanged = patch.modelCombos !== undefined && JSON.stringify(patch.modelCombos) !== JSON.stringify(previous.modelCombos);
+      const upstreamChanged = patch.upstream !== undefined && patch.upstream !== previous.upstream;
+      const upstreamApiKeyChanged = patch.upstreamApiKey !== undefined && patch.upstreamApiKey !== (previous.upstreamApiKey ?? "");
       if (portChanged && patch.port !== undefined) {
         if (patch.port < 1024 || patch.port > 65535) {
           throw badRequest("The port must be between 1024 and 65535.");
@@ -8021,7 +8048,9 @@ var createRuntime = (store = createConfigStore()) => {
         ...previous,
         port: patch.port ?? previous.port,
         apiKey: patch.apiKey ?? previous.apiKey,
-        selectedModels: patch.selectedModels ?? previous.selectedModels,
+        upstream: patch.upstream ?? previous.upstream,
+        upstreamApiKey: patch.upstreamApiKey !== undefined ? patch.upstreamApiKey : previous.upstreamApiKey ?? "",
+        selectedModels: (upstreamChanged || upstreamApiKeyChanged) && patch.selectedModels === undefined ? [] : patch.selectedModels ?? previous.selectedModels,
         fallbackModels: patch.fallbackModels ?? previous.fallbackModels,
         modelCombos: patch.modelCombos ?? previous.modelCombos,
         proxyPools: patch.proxyPools ?? previous.proxyPools,
@@ -8045,11 +8074,15 @@ var createRuntime = (store = createConfigStore()) => {
         }
         refreshRegistration(true);
       }
+      if (upstreamChanged || upstreamApiKeyChanged) {
+        directRateLimitedUntil = 0;
+        await loadModels();
+        refreshRegistration(true);
+      } else if (poolsChanged) {
+        await loadModels();
+      }
       if (selectionChanged || combosChanged) {
         refreshRegistration(true);
-      }
-      if (poolsChanged) {
-        await loadModels();
       }
       return state();
     },
@@ -8160,7 +8193,10 @@ var createRuntime = (store = createConfigStore()) => {
         max_tokens: 8,
         stream: false
       });
-      const prepared = prepareChat(chatPayload, { rtkEnabled: false });
+      const prepared = prepareChat(chatPayload, {
+        rtkEnabled: false,
+        openCodeFreeTier: isOpenCodeUpstream(config.upstream)
+      });
       for (let attempt = 0;attempt < maxAttempts; attempt += 1) {
         const pool = modelTestPoolSelector.pickPool(config, attempted);
         const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
@@ -8169,7 +8205,7 @@ var createRuntime = (store = createConfigStore()) => {
           break;
         }
         if (!pool && activePoolCount === 0 && directRateLimitedUntil > Date.now()) {
-          lastError = `The direct OpenCode upstream is rate-limited. Retry in approximately ${Math.ceil((directRateLimitedUntil - Date.now()) / 1000)} seconds.`;
+          lastError = `The configured upstream is rate-limited. Retry in approximately ${Math.ceil((directRateLimitedUntil - Date.now()) / 1000)} seconds.`;
           break;
         }
         if (pool && attempted.has(pool.id))
@@ -8178,7 +8214,7 @@ var createRuntime = (store = createConfigStore()) => {
           attempted.add(pool.id);
         const target = buildTarget(config, "chat", pool, modelId);
         const testHeaders = {
-          ...freeTierHeaders(runtimeSession),
+          ...isOpenCodeUpstream(config.upstream) ? freeTierHeaders(runtimeSession) : {},
           ...target.headers,
           "Content-Type": "application/json",
           Accept: "text/event-stream"
