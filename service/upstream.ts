@@ -11,6 +11,7 @@ import { resolveModelMetadata } from './model-metadata.ts';
 import { aggregateStream } from './sse.ts';
 import { createOpenCodeResponseTransform, prepareOpenCodeRequestBody, resolveOpenCodeLane } from './opencode-protocol.ts';
 import { freeTierHeaders, type PreparedChat } from './zen.ts';
+import { isRetryableFallbackStatus, resolveModelCandidates } from './model-fallback.ts';
 
 /**
  * Talking to the OpenCode Zen free pool, directly or through a relay/proxy pool.
@@ -393,57 +394,101 @@ const AGGREGATE_LIMIT_BYTES = 8 * 1024 * 1024;
  * not ask for a stream gets the stream folded back into one JSON answer.
  */
 export const proxyChatCompletion = (
-  config: Pick<RouterConfig, 'upstream' | 'proxyPools'>,
+  config: Pick<RouterConfig, 'upstream' | 'proxyPools' | 'fallbackModels'>,
   session: string,
   prepared: PreparedChat,
   response: ServerResponse,
   pool?: ProxyPool | null,
   onRateLimit?: (pool: ProxyPool | null, retryAfter?: string) => void,
 ): void => {
-  const lane = resolveOpenCodeLane(config.upstream, prepared.model);
-  let upstreamBody: string;
-  try {
-    upstreamBody = prepareOpenCodeRequestBody(prepared.body, lane);
-  } catch (error) {
+  const modelCandidates = resolveModelCandidates(prepared.model, config.fallbackModels ?? []);
+  const activePools = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
+  const now = Date.now();
+  const healthyPools = activePools.filter((p) => !p.rateLimitedUntil || p.rateLimitedUntil <= now);
+  const initialPool = pool ?? null;
+  const poolCandidates: Array<ProxyPool | null> = initialPool
+    ? [initialPool, ...healthyPools.filter((p) => p.id !== initialPool.id)].slice(0, 2)
+    : activePools.length === 0
+      ? [null]
+      : healthyPools.slice(0, 2);
+
+  if (activePools.length > 0 && poolCandidates.length === 0) {
+    const nextAvailableAt = Math.min(...activePools.map((p) =>
+      p.rateLimitedUntil && p.rateLimitedUntil > now ? p.rateLimitedUntil : now + 5 * 60_000,
+    ));
+    const retryAfter = Math.max(1, Math.ceil((nextAvailableAt - now) / 1000));
     writeOpenAiError(
       response,
-      400,
-      error instanceof Error ? error.message : 'Could not convert the OpenCode request body.',
-      'invalid_request',
+      429,
+      'All configured proxy pools are cooling down. Wait before retrying the upstream.',
+      'rate_limit_exhausted',
+      { 'retry-after': String(retryAfter) },
     );
     return;
   }
 
-  const activePools = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
-  const attempted = new Set<string>();
-  const initialPool = pool ?? null;
-  const healthyPools = activePools.filter((p) => !p.rateLimitedUntil || p.rateLimitedUntil <= Date.now());
-  const candidates: Array<ProxyPool | null> = initialPool
-    ? [initialPool, ...healthyPools.filter((p) => p.id !== initialPool.id)]
-    : activePools.length === 0 ? [null] : healthyPools;
+  type Attempt = { model: string; pool: ProxyPool | null };
+  const attempts: Attempt[] = modelCandidates.flatMap((model) =>
+    poolCandidates.map((candidatePool) => ({ model, pool: candidatePool })),
+  );
+  let attemptIndex = 0;
+  let lastRequestedModel = prepared.model;
 
-  const sendAttempt = (candidate: ProxyPool | null): void => {
+  const modelAwareBody = (model: string): { lane: ReturnType<typeof resolveOpenCodeLane>; body: string } => {
+    const lane = resolveOpenCodeLane(config.upstream, model);
+    let raw = prepared.body;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        (parsed as Record<string, unknown>).model = model;
+        raw = JSON.stringify(parsed);
+      }
+    } catch {
+      // prepareChat already validated the request body; keep the original body
+      // so the request still surfaces a useful conversion error below.
+    }
+    const isOpenCode = (() => {
+      try { return new URL(config.upstream).hostname.toLowerCase().includes('opencode.ai'); }
+      catch { return false; }
+    })();
+    return {
+      lane,
+      body: prepareOpenCodeRequestBody(raw, lane, isOpenCode),
+    };
+  };
+
+  const sendAttempt = (): void => {
     if (response.destroyed || response.writableEnded) return;
-    if (!candidate && activePools.length > 0) {
-      const now = Date.now();
-      const nextAvailableAt = Math.min(...activePools.map((p) => p.rateLimitedUntil && p.rateLimitedUntil > now ? p.rateLimitedUntil : now + 5 * 60_000));
-      const retryAfter = Math.max(1, Math.ceil((nextAvailableAt - now) / 1000));
+    const attempt = attempts[attemptIndex];
+    if (!attempt) {
       writeOpenAiError(
         response,
-        429,
-        'All configured proxy pools are cooling down. Wait before retrying the upstream.',
-        'rate_limit_exhausted',
-        { 'retry-after': String(retryAfter) },
+        502,
+        'No model fallback attempt was available.',
+        'fallback_exhausted',
       );
       return;
     }
-    if (candidate && attempted.has(candidate.id)) {
-      writeOpenAiError(response, 429, 'All available proxy pools have been tried or are cooling down. Wait for the upstream rate limit to reset.', 'rate_limit_exhausted');
+
+    lastRequestedModel = attempt.model;
+    const candidate = attempt.pool;
+    let lane: ReturnType<typeof resolveOpenCodeLane>;
+    let upstreamBody: string;
+    try {
+      const preparedForModel = modelAwareBody(attempt.model);
+      lane = preparedForModel.lane;
+      upstreamBody = preparedForModel.body;
+    } catch (error) {
+      writeOpenAiError(
+        response,
+        400,
+        error instanceof Error ? error.message : 'Could not convert the OpenCode request body.',
+        'invalid_request',
+      );
       return;
     }
-    if (candidate) attempted.add(candidate.id);
 
-    const target = buildTarget(config, 'chat', candidate, prepared.model);
+    const target = buildTarget(config, 'chat', candidate, attempt.model);
     const transport = target.url.protocol === 'http:' ? http : https;
     const upstream = transport.request(
       target.url,
@@ -464,35 +509,44 @@ export const proxyChatCompletion = (
         if (status === 429 && onRateLimit) {
           const retryAfter = answer.headers['retry-after'];
           onRateLimit(candidate, typeof retryAfter === 'string' ? retryAfter : undefined);
+        }
 
-          if (candidate) {
-            const next = candidates.find((p) => p !== null && !attempted.has(p.id) && (!p.rateLimitedUntil || p.rateLimitedUntil <= Date.now()));
-            if (next) {
-              answer.resume();
-              sendAttempt(next);
-              return;
-            }
-            if (initialPool) {
-              answer.resume();
-              writeOpenAiError(response, 429, 'All available proxy pools are rate-limited. Wait for the upstream rate limit to reset.', 'rate_limit_exhausted');
-              return;
-            }
-          }
+        // Until a successful response starts streaming, fail over only to the
+        // next bounded model/pool pair. Do not retry malformed/auth requests.
+        if (isRetryableFallbackStatus(status) && attemptIndex + 1 < attempts.length) {
+          attemptIndex += 1;
+          answer.resume();
+          sendAttempt();
+          return;
         }
 
         if (status < 200 || status >= 300) {
-          response.writeHead(status, responseHeaders(answer.headers));
+          const headers = {
+            ...responseHeaders(answer.headers),
+            'x-blackrouter-requested-model': prepared.model,
+            'x-blackrouter-resolved-model': attempt.model,
+            ...(attempt.model !== prepared.model ? { 'x-blackrouter-fallback-used': 'true' } : {}),
+          };
+          response.writeHead(status, headers);
           pipeline(answer, response, () => {});
           return;
         }
 
-        const contentType = typeof answer.headers['content-type'] === 'string' ? answer.headers['content-type'].toLowerCase() : '';
+        const contentType = typeof answer.headers['content-type'] === 'string'
+          ? answer.headers['content-type'].toLowerCase()
+          : '';
         const protocolTransform = lane !== 'chat' && contentType.includes('text/event-stream')
-          ? createOpenCodeResponseTransform(lane, prepared.model)
+          ? createOpenCodeResponseTransform(lane, attempt.model)
           : null;
+        const successHeaders = {
+          ...responseHeaders(answer.headers),
+          'x-blackrouter-requested-model': prepared.model,
+          'x-blackrouter-resolved-model': attempt.model,
+          ...(attempt.model !== prepared.model ? { 'x-blackrouter-fallback-used': 'true' } : {}),
+        };
 
         if (prepared.stream) {
-          response.writeHead(status, responseHeaders(answer.headers));
+          response.writeHead(status, successHeaders);
           if (protocolTransform) {
             pipeline(answer, protocolTransform, response, () => {});
           } else {
@@ -511,10 +565,12 @@ export const proxyChatCompletion = (
         const source = protocolTransform ?? answer;
         source.on('data', collect);
         source.on('end', () => {
-          const body = Buffer.concat(chunks).toString('utf8');
-          writeJson(response, status, aggregateStream(body));
+          writeJson(response, status, aggregateStream(Buffer.concat(chunks).toString('utf8')), successHeaders);
         });
         source.on('error', (error) => {
+          writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, 'upstream_unreachable');
+        });
+        answer.on('error', (error) => {
           writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, 'upstream_unreachable');
         });
         if (protocolTransform) answer.pipe(protocolTransform);
@@ -522,10 +578,17 @@ export const proxyChatCompletion = (
     );
 
     upstream.on('error', (error) => {
+      // Network failures can also use the bounded model/pool chain. If there
+      // is no remaining candidate, expose the final transport error.
+      if (attemptIndex + 1 < attempts.length && !response.headersSent && !response.destroyed) {
+        attemptIndex += 1;
+        sendAttempt();
+        return;
+      }
       writeOpenAiError(
         response,
         502,
-        `The upstream did not answer: ${error.message}`,
+        `The upstream did not answer for ${lastRequestedModel}: ${error.message}`,
         'upstream_unreachable',
       );
     });
@@ -537,5 +600,5 @@ export const proxyChatCompletion = (
     upstream.end(upstreamBody);
   };
 
-  sendAttempt(initialPool);
+  sendAttempt();
 };
