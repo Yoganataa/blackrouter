@@ -5943,16 +5943,16 @@ var responseHeaders = (headers) => {
     picked["content-type"] = "application/json";
   return picked;
 };
-var writeJson = (response, status, body) => {
+var writeJson = (response, status, body, headers = {}) => {
   if (response.headersSent) {
     response.destroy();
     return;
   }
-  response.writeHead(status, { "content-type": "application/json" });
+  response.writeHead(status, { "content-type": "application/json", ...headers });
   response.end(JSON.stringify(body));
 };
-var writeOpenAiError = (response, status, message, code) => {
-  writeJson(response, status, { error: { message, type: "invalid_request_error", code } });
+var writeOpenAiError = (response, status, message, code, headers = {}) => {
+  writeJson(response, status, { error: { message, type: "invalid_request_error", code } }, headers);
 };
 var AGGREGATE_LIMIT_BYTES = 8 * 1024 * 1024;
 var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimit) => {
@@ -5964,7 +5964,10 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
   const sendAttempt = (candidate) => {
     if (response.destroyed || response.writableEnded) return;
     if (!candidate && activePools.length > 0) {
-      writeOpenAiError(response, 429, "All configured proxy pools are cooling down. Wait before retrying the upstream.", "rate_limit_exhausted");
+      const now = Date.now();
+      const nextAvailableAt = Math.min(...activePools.map((p) => p.rateLimitedUntil && p.rateLimitedUntil > now ? p.rateLimitedUntil : now + 5 * 60000));
+      const retryAfter = Math.max(1, Math.ceil((nextAvailableAt - now) / 1000));
+      writeOpenAiError(response, 429, "All configured proxy pools are cooling down. Wait before retrying the upstream.", "rate_limit_exhausted", { "retry-after": String(retryAfter) });
       return;
     }
     if (candidate && attempted.has(candidate.id)) {
@@ -5986,19 +5989,21 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       }
     }, (answer) => {
       const status = answer.statusCode ?? 502;
-      if (status === 429 && candidate && onRateLimit) {
+      if (status === 429 && onRateLimit) {
         const retryAfter = answer.headers["retry-after"];
         onRateLimit(candidate, typeof retryAfter === "string" ? retryAfter : void 0);
-        const next = candidates.find((p) => p !== null && !attempted.has(p.id) && (!p.rateLimitedUntil || p.rateLimitedUntil <= Date.now()));
-        if (next) {
-          answer.resume();
-          sendAttempt(next);
-          return;
-        }
-        if (initialPool) {
-          answer.resume();
-          writeOpenAiError(response, 429, "All available proxy pools are rate-limited. Wait for the upstream rate limit to reset.", "rate_limit_exhausted");
-          return;
+        if (candidate) {
+          const next = candidates.find((p) => p !== null && !attempted.has(p.id) && (!p.rateLimitedUntil || p.rateLimitedUntil <= Date.now()));
+          if (next) {
+            answer.resume();
+            sendAttempt(next);
+            return;
+          }
+          if (initialPool) {
+            answer.resume();
+            writeOpenAiError(response, 429, "All available proxy pools are rate-limited. Wait for the upstream rate limit to reset.", "rate_limit_exhausted");
+            return;
+          }
         }
       }
       if (prepared.stream || status !== 200) {
@@ -6157,6 +6162,22 @@ var startRouterServer = (deps) => new Promise((resolve, reject) => {
 });
 
 // service/runtime.ts
+var parseRetryAfterMs = (value, now = Date.now(), fallbackMs = 5 * 60000) => {
+  const fallback = Math.max(1000, Math.min(fallbackMs, 60 * 60 * 1000));
+  if (typeof value !== "string" || value.trim() === "") return fallback;
+  const trimmed = value.trim();
+  let requestedMs;
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    if (!Number.isFinite(seconds) || seconds < 0) return fallback;
+    requestedMs = seconds * 1000;
+  } else {
+    const date = Date.parse(trimmed);
+    if (!Number.isFinite(date)) return fallback;
+    requestedMs = date - now;
+  }
+  return Math.max(1000, Math.min(requestedMs, 60 * 60 * 1000));
+};
 var REFRESH_INTERVAL_MS = 10 * 60000;
 var REQUEST_LOG_LIMIT = 25;
 var PACKAGE_ROOT = path3.dirname(path3.dirname(fileURLToPath(import.meta.url)));
@@ -6179,6 +6200,7 @@ var createRuntime = (store = createConfigStore()) => {
   const requests = [];
   let router = null;
   let routerError = "";
+  let directRateLimitedUntil = 0;
   let refreshTimer = null;
   const configFile = resolveConfigFile();
   const registration = () => readRegistration(configFile);
@@ -6232,6 +6254,18 @@ var createRuntime = (store = createConfigStore()) => {
         getModels: () => models,
         refreshModels: loadModels,
         pickPool: () => poolSelector.pickPool(config),
+        getDirectRateLimitedUntil: () => directRateLimitedUntil,
+        markRateLimited: (pool, retryAfter) => {
+          const limitedUntil = Date.now() + parseRetryAfterMs(retryAfter);
+          if (!pool) {
+            directRateLimitedUntil = limitedUntil;
+            return;
+          }
+          const updatedPools = config.proxyPools.map((entry) => entry.id === pool.id
+            ? { ...entry, rateLimitedUntil: limitedUntil, testStatus: "error", lastError: "Rate limit (HTTP 429)", lastTestedAt: Date.now() }
+            : entry);
+          persist({ ...config, proxyPools: updatedPools });
+        },
         record: (entry) => {
           requests.unshift(entry);
           if (requests.length > REQUEST_LOG_LIMIT)
@@ -6422,8 +6456,13 @@ var createRuntime = (store = createConfigStore()) => {
       const prepared = prepareChat(chatPayload, { rtkEnabled: false });
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const pool = poolSelector.pickPool(config);
-        if (!pool && config.proxyPools.some((p) => p.isActive && p.proxyUrl.trim())) {
+        const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
+        if (!pool && activePoolCount > 0) {
           lastError = "All configured proxy pools are cooling down. Wait for the upstream rate limit to reset.";
+          break;
+        }
+        if (!pool && activePoolCount === 0 && directRateLimitedUntil > Date.now()) {
+          lastError = `The direct OpenCode upstream is rate-limited. Retry in approximately ${Math.ceil((directRateLimitedUntil - Date.now()) / 1000)} seconds.`;
           break;
         }
         if (pool && attempted.has(pool.id)) break;
@@ -6481,17 +6520,20 @@ var createRuntime = (store = createConfigStore()) => {
           }
           lastError = `HTTP ${status}: ${resultText.slice(0, 300)}`;
           if (status !== 429) break;
-          if (!pool && config.proxyPools.some((p) => p.isActive && p.proxyUrl.trim())) {
+          const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
+          if (!pool && activePoolCount === 0) {
+            directRateLimitedUntil = Date.now() + parseRetryAfterMs(retryAfter);
+            lastError = `HTTP 429: upstream rate-limited; retry after approximately ${Math.ceil((directRateLimitedUntil - Date.now()) / 1000)} seconds.`;
+            break;
+          }
+          if (!pool && activePoolCount > 0) {
             lastError = "All configured proxy pools are cooling down. Wait for the upstream rate limit to reset.";
             break;
           }
           if (pool) {
-            const retrySeconds = retryAfter ? Number(retryAfter) : NaN;
-            const cooldownMs = Number.isFinite(retrySeconds) && retrySeconds >= 0 ? Math.min(retrySeconds * 1000, 60 * 60_000) : 5 * 60_000;
-            const updated = config.proxyPools.map((p) => p.id === pool.id ? { ...p, testStatus: "error", lastTestedAt: Date.now(), lastError: "Rate limit (HTTP 429)", rateLimitedUntil: Date.now() + cooldownMs } : p);
+            const limitedUntil = Date.now() + parseRetryAfterMs(retryAfter);
+            const updated = config.proxyPools.map((p) => p.id === pool.id ? { ...p, testStatus: "error", lastTestedAt: Date.now(), lastError: "Rate limit (HTTP 429)", rateLimitedUntil: limitedUntil } : p);
             persist({ ...config, proxyPools: updated });
-          } else {
-            break;
           }
         } catch (err) {
           lastError = err instanceof Error ? err.message : String(err);
