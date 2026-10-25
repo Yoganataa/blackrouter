@@ -47,6 +47,15 @@ describe('OpenCode model-specific wire formats', () => {
     expect(resolveOpenCodeLane('https://opencode.ai/zen/v1', 'deepseek-v4.1-flash-free')).toBe('chat');
   });
 
+  test('strips only the BlackRouter provider namespace from regular chat model ids', () => {
+    const raw = JSON.stringify({
+      model: 'blackrouter/vendor-a/model-free',
+      messages: [{ role: 'user', content: 'Hi' }],
+    });
+    expect(JSON.parse(prepareOpenCodeRequestBody(raw, 'chat', true)).model).toBe('vendor-a/model-free');
+    expect(JSON.parse(prepareOpenCodeRequestBody(raw, 'chat', false)).model).toBe('blackrouter/vendor-a/model-free');
+  });
+
   test('converts Chat Completions into a Responses body, flattening tools and preserving tool linkage', () => {
     const prepared = prepareOpenCodeRequestBody(JSON.stringify({
       model: 'blackrouter/muse-spark-1.3-contributor-free',
