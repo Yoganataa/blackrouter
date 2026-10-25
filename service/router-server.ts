@@ -24,6 +24,7 @@ export type RouterServerDeps = {
   refreshModels(): Promise<void>;
   record(entry: RequestEntry): void;
   pickPool?(): ProxyPool | null;
+  markRateLimited?(pool: ProxyPool, retryAfter?: string): void;
 };
 
 export type RouterServer = { close(): Promise<void> };
@@ -142,11 +143,19 @@ export const startRouterServer = (deps: RouterServerDeps): Promise<RouterServer>
               });
             });
             const reqSession = resolveRequestSession(request, session);
-            proxyChatCompletion(config, reqSession, prepared, response, pool, (rateLimitedPool) => {
-              rateLimitedPool.rateLimitedUntil = Date.now() + 5 * 60_000;
-              rateLimitedPool.testStatus = 'error';
-              rateLimitedPool.lastError = 'Rate limit (HTTP 429)';
-              rateLimitedPool.lastTestedAt = Date.now();
+            proxyChatCompletion(config, reqSession, prepared, response, pool, (rateLimitedPool, retryAfter) => {
+              if (deps.markRateLimited) {
+                deps.markRateLimited(rateLimitedPool, retryAfter);
+              } else {
+                const retrySeconds = retryAfter ? Number(retryAfter) : NaN;
+                const cooldownMs = Number.isFinite(retrySeconds) && retrySeconds >= 0
+                  ? Math.min(retrySeconds * 1000, 60 * 60_000)
+                  : 5 * 60_000;
+                rateLimitedPool.rateLimitedUntil = Date.now() + cooldownMs;
+                rateLimitedPool.testStatus = 'error';
+                rateLimitedPool.lastError = 'Rate limit (HTTP 429)';
+                rateLimitedPool.lastTestedAt = Date.now();
+              }
             });
           })
           .catch((error: unknown) => {
