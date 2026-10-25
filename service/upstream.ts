@@ -356,12 +356,17 @@ const responseHeaders = (headers: http.IncomingHttpHeaders): Record<string, stri
   return picked;
 };
 
-export const writeJson = (response: ServerResponse, status: number, body: unknown): void => {
+export const writeJson = (
+  response: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+): void => {
   if (response.headersSent) {
     response.destroy();
     return;
   }
-  response.writeHead(status, { 'content-type': 'application/json' });
+  response.writeHead(status, { 'content-type': 'application/json', ...headers });
   response.end(JSON.stringify(body));
 };
 
@@ -370,8 +375,9 @@ export const writeOpenAiError = (
   status: number,
   message: string,
   code: string,
+  headers: Record<string, string> = {},
 ): void => {
-  writeJson(response, status, { error: { message, type: 'invalid_request_error', code } });
+  writeJson(response, status, { error: { message, type: 'invalid_request_error', code } }, headers);
 };
 
 /** A folded stream stays in memory; this is far more than one answer needs. */
@@ -405,7 +411,15 @@ export const proxyChatCompletion = (
   const sendAttempt = (candidate: ProxyPool | null): void => {
     if (response.destroyed || response.writableEnded) return;
     if (!candidate && activePools.length > 0) {
-      writeOpenAiError(response, 429, 'All configured proxy pools are cooling down. Wait before retrying the upstream.', 'rate_limit_exhausted');
+      const nextAvailableAt = Math.min(...activePools.map((p) => p.rateLimitedUntil && p.rateLimitedUntil > Date.now() ? p.rateLimitedUntil : Date.now() + 5 * 60_000));
+      const retryAfter = Math.max(1, Math.ceil((nextAvailableAt - Date.now()) / 1000));
+      writeOpenAiError(
+        response,
+        429,
+        'All configured proxy pools are cooling down. Wait before retrying the upstream.',
+        'rate_limit_exhausted',
+        { 'retry-after': String(retryAfter) },
+      );
       return;
     }
     if (candidate && attempted.has(candidate.id)) {
