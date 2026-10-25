@@ -95,8 +95,9 @@ describe('model fallback', () => {
     }
   });
 
-  test('does not fan a direct upstream 429 out to more models', () => {
+  test('does not fan a direct upstream 429 out to more models without a short Retry-After', () => {
     expect(shouldAdvanceAfterStatus(429, false)).toBe(false);
+    expect(shouldAdvanceAfterStatus(429, false, true)).toBe(true);
     expect(shouldAdvanceAfterStatus(429, true)).toBe(true);
   });
 
