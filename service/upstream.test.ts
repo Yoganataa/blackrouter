@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import type { RouterConfig } from '../contract.ts';
-import { buildTarget, fetchModelIds, freeModelIds, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels } from './upstream.ts';
+import { buildTarget, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels } from './upstream.ts';
 
 const config = (overrides: Partial<RouterConfig> = {}): RouterConfig => ({
   version: 1,
@@ -86,6 +86,12 @@ describe('where a call goes', () => {
     expect(isOpenCodeUpstream('https://api.opencode.ai/v1')).toBe(true);
     expect(isOpenCodeUpstream('https://notopencode.ai/v1')).toBe(false);
     expect(isOpenCodeUpstream('https://example.com/opencode.ai/v1')).toBe(false);
+  });
+
+  test('compares origins before reusing a stored upstream credential', () => {
+    expect(hasSameUpstreamOrigin('https://api.example.com/v1', 'https://api.example.com/v2')).toBe(true);
+    expect(hasSameUpstreamOrigin('https://api.example.com/v1', 'https://other.example.com/v1')).toBe(false);
+    expect(hasSameUpstreamOrigin('https://api.example.com/v1', 'http://api.example.com/v1')).toBe(false);
   });
 
   test('uses a configured Bearer key for a generic OpenAI-compatible upstream', () => {

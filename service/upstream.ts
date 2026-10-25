@@ -117,6 +117,15 @@ export const isOpenCodeUpstream = (upstream: string): boolean => {
   }
 };
 
+/** Keep credentials scoped to the origin where the user configured them. */
+export const hasSameUpstreamOrigin = (left: string, right: string): boolean => {
+  try {
+    return new URL(left).origin === new URL(right).origin;
+  } catch {
+    return left === right;
+  }
+};
+
 export const isMuseSparkModel = (id: string): boolean => /^muse[-_]?spark(?:$|[-_:.\s])/i.test(id);
 export const isUnionAlphaModel = (id: string): boolean => /^union[-_]?alpha(?:$|[-_:.\s])/i.test(id);
 

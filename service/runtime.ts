@@ -47,7 +47,7 @@ import { createRequestHistoryStore, REQUEST_HISTORY_LIMIT } from './request-hist
 import { parseRetryAfterMs } from './retry-after.ts';
 import { startRouterServer, type RouterServer } from './router-server.ts';
 import { aggregateStream } from './sse.ts';
-import { buildTarget, fetchModelIds, isOpenCodeUpstream, toModels } from './upstream.ts';
+import { buildTarget, fetchModelIds, hasSameUpstreamOrigin, isOpenCodeUpstream, toModels } from './upstream.ts';
 import { freeTierHeaders, prepareChat, sessionId } from './zen.ts';
 
 /**
@@ -253,6 +253,8 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         patch.modelCombos !== undefined &&
         JSON.stringify(patch.modelCombos) !== JSON.stringify(previous.modelCombos);
       const upstreamChanged = patch.upstream !== undefined && patch.upstream !== previous.upstream;
+      const upstreamOriginChanged = patch.upstream !== undefined &&
+        !hasSameUpstreamOrigin(previous.upstream, patch.upstream);
       const upstreamApiKeyChanged = patch.upstreamApiKey !== undefined &&
         patch.upstreamApiKey !== (previous.upstreamApiKey ?? '');
 
@@ -268,9 +270,10 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         port: patch.port ?? previous.port,
         apiKey: patch.apiKey ?? previous.apiKey,
         upstream: patch.upstream ?? previous.upstream,
+        // Never send a saved credential to a different origin after an endpoint switch.
         upstreamApiKey: patch.upstreamApiKey !== undefined
           ? patch.upstreamApiKey
-          : previous.upstreamApiKey ?? '',
+          : upstreamOriginChanged ? '' : previous.upstreamApiKey ?? '',
         selectedModels: (upstreamChanged || upstreamApiKeyChanged) && patch.selectedModels === undefined
           ? []
           : patch.selectedModels ?? previous.selectedModels,
