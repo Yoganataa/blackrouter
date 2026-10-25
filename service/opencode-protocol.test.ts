@@ -22,6 +22,9 @@ const collect = (lane: 'responses' | 'messages', model: string, input: string): 
     transform.end(input);
   });
 
+const frame = (event: string, payload: unknown): string =>
+  `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+
 const parseOpenAiChunks = (sse: string): Array<Record<string, any>> =>
   sse.split(/\r?\n/).flatMap((line) => {
     const trimmed = line.trim();
@@ -102,9 +105,16 @@ describe('OpenCode model-specific wire formats', () => {
 
   test('converts Responses SSE into OpenAI Chat Completions SSE', async () => {
     const output = await collect('responses', 'muse-spark-1.3-contributor-free', [
-      'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_1","model":"muse-spark-1.3-contributor-free"}}\n\n',
-      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"Hello"}\n\n',
-      'event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":12,"output_tokens":3,"total_tokens":15},"output":[{"type":"message"}]}}\n\n',
+      frame('response.created', { type: 'response.created', response: { id: 'resp_1', model: 'muse-spark-1.3-contributor-free' } }),
+      frame('response.output_text.delta', { type: 'response.output_text.delta', delta: 'Hello' }),
+      frame('response.completed', {
+        type: 'response.completed',
+        response: {
+          status: 'completed',
+          usage: { input_tokens: 12, output_tokens: 3, total_tokens: 15 },
+          output: [{ type: 'message' }],
+        },
+      }),
     ].join(''));
     const chunks = parseOpenAiChunks(output);
 
@@ -116,13 +126,13 @@ describe('OpenCode model-specific wire formats', () => {
 
   test('converts Messages SSE text and tool-use events into OpenAI chunks', async () => {
     const output = await collect('messages', 'union-alpha', [
-      'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":5}}}\n\n',
-      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"Hi "}}\n\n',
-      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"there"}}\n\n',
-      'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-1","name":"shell","input":{}}}\n\n',
-      'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"command\\":\\"ls\\"}"}}\n\n',
-      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}\n\n',
-      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      frame('message_start', { type: 'message_start', message: { id: 'msg_1', usage: { input_tokens: 5 } } }),
+      frame('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: 'Hi ' } }),
+      frame('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'there' } }),
+      frame('content_block_start', { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'tool-1', name: 'shell', input: {} } }),
+      frame('content_block_delta', { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"command":"ls"}' } }),
+      frame('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 2 } }),
+      frame('message_stop', { type: 'message_stop' }),
     ].join(''));
     const chunks = parseOpenAiChunks(output);
 
