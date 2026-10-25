@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import http from 'node:http';
 
-import type { RouterConfig } from '../contract.ts';
+import type { ProxyPool, RouterConfig } from '../contract.ts';
 import { proxyChatCompletion } from './upstream.ts';
 
 const requestedModels: string[] = [];
+const poolAttempts: string[] = [];
 let server: http.Server;
 let baseUrl = '';
 
@@ -59,6 +60,73 @@ describe('model fallback request path', () => {
           null,
           () => {},
         );
+        return;
+      }
+
+      if (request.url === '/pool-test') {
+        await readRequestBody(request);
+        const address = server.address();
+        if (!address || typeof address === 'string') {
+          response.writeHead(500);
+          response.end('No listener address');
+          return;
+        }
+        const pools: ProxyPool[] = [
+          { id: 'pool-a', name: 'Pool A', type: 'cloudflare', proxyUrl: `http://127.0.0.1:${address.port}/pool-a`, isActive: true },
+          { id: 'pool-b', name: 'Pool B', type: 'cloudflare', proxyUrl: `http://127.0.0.1:${address.port}/pool-b`, isActive: true },
+        ];
+        proxyChatCompletion(
+          { ...configFor(address.port), proxyPools: pools },
+          'ses_test_pool',
+          {
+            model: 'primary-model',
+            stream: true,
+            body: JSON.stringify({
+              model: 'primary-model',
+              stream: true,
+              messages: [{ role: 'user', content: 'Reply with OK.' }],
+            }),
+          },
+          response,
+          pools[0],
+          () => {},
+        );
+        return;
+      }
+
+      if (request.url === '/pool-a' || request.url === '/pool-b') {
+        const body = JSON.parse(await readRequestBody(request)) as { model?: string };
+        const model = body.model ?? '';
+        const poolName = request.url.slice(1);
+        poolAttempts.push(`${poolName}:${model}`);
+        // Both pools are rate-limited for the primary model. Pool A remains
+        // unavailable for this request even when the model fallback begins.
+        if (poolName === 'pool-a' || model === 'primary-model') {
+          response.writeHead(429, { 'content-type': 'application/json', 'retry-after': '1' });
+          response.end(JSON.stringify({ error: { message: `${poolName} is rate limited for ${model}` } }));
+          return;
+        }
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        response.end([
+          'data: ' + JSON.stringify({
+            id: 'chatcmpl-pool-fallback',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model,
+            choices: [{ index: 0, delta: { content: 'OK' }, finish_reason: null }],
+          }),
+          '',
+          'data: ' + JSON.stringify({
+            id: 'chatcmpl-pool-fallback',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model,
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          }),
+          '',
+          'data: [DONE]',
+          '',
+        ].join('\\n'));
         return;
       }
 
@@ -122,7 +190,8 @@ describe('model fallback request path', () => {
     }
   });
 
-  test('falls back to the next configured model after 429 and reports the resolved model', async () => {
+  test('falls back to another model after 429 and reports the resolved model', async () => {
+    requestedModels.length = 0;
     const response = await fetch(`${baseUrl}/test`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -136,5 +205,25 @@ describe('model fallback request path', () => {
     expect(response.headers.get('x-blackrouter-fallback-used')).toBe('true');
     expect(body).toContain('OK');
     expect(requestedModels).toEqual(['primary-model', 'fallback-model']);
+  });
+
+  test('does not revisit a pool after 429 while trying model fallbacks', async () => {
+    poolAttempts.length = 0;
+    const response = await fetch(`${baseUrl}/pool-test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: true }),
+    });
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-blackrouter-resolved-pool')).toBe('Pool B');
+    expect(response.headers.get('x-blackrouter-resolved-model')).toBe('fallback-model');
+    expect(body).toContain('OK');
+    expect(poolAttempts).toEqual([
+      'pool-a:primary-model',
+      'pool-b:primary-model',
+      'pool-b:fallback-model',
+    ]);
   });
 });
