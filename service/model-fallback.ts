@@ -11,8 +11,8 @@ export const MAX_MODELS_PER_REQUEST = MAX_FALLBACK_MODELS + 1;
 
 export const canonicalModelId = (modelId: string): string => {
   const trimmed = modelId.trim().replace(/\([^()]+\)\s*$/, '').trim();
-  const bare = trimmed.includes('/') ? trimmed.split('/').pop() ?? trimmed : trimmed;
-  return bare.toLowerCase();
+  const upstreamId = trimmed.startsWith('blackrouter/') ? trimmed.slice('blackrouter/'.length) : trimmed;
+  return upstreamId.toLowerCase();
 };
 
 export const resolveModelCandidates = (
