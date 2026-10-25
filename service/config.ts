@@ -26,6 +26,7 @@ export const defaultConfig = (): RouterConfig => ({
   apiKey: createApiKey(),
   upstream: OPENCODE_ZEN,
   selectedModels: [],
+  fallbackModels: [],
   proxyPools: [],
   proxyStrategy: 'single',
   activePoolId: null,
