@@ -21,6 +21,29 @@ describe('RTK token compression', () => {
     expect(compacted).toContain('+150 -0');
   });
 
+  it('preserves context before and after edits in compacted git diffs', () => {
+    const diff = [
+      'diff --git a/src/router.ts b/src/router.ts',
+      'index 1234567..89abcde 100644',
+      '--- a/src/router.ts',
+      '+++ b/src/router.ts',
+      '@@ -1,4 +1,4 @@',
+      ' const before = true;',
+      '-const oldRoute = 1;',
+      '+const newRoute = 1;',
+      ' const after = true;',
+      '\\ No newline at end of file',
+    ].join('\\n');
+
+    const compacted = compactGitDiff(diff);
+    expect(compacted).toContain('const before = true;');
+    expect(compacted).toContain('-const oldRoute = 1;');
+    expect(compacted).toContain('+const newRoute = 1;');
+    expect(compacted).toContain('const after = true;');
+    expect(compacted).toContain('+1 -1');
+    expect(compacted).not.toContain('No newline at end of file');
+  });
+
   it('compacts git status output into branch and counts', () => {
     const raw = `## main\n M src/contract.ts\n M src/zen.ts\n?? new-file.txt\n`;
     const compacted = compactGitStatus(raw);

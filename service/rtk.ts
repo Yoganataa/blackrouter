@@ -69,6 +69,14 @@ export function compactGitDiff(diff: string): string {
         } else {
           hunkSkipped += 1;
         }
+      } else if (line.startsWith('\\')) {
+        // Do not include unified-diff metadata such as "\\ No newline at end of file".
+      } else if (hunkShown < GIT_DIFF_HUNK_MAX_LINES) {
+        // Context is essential for code agents; keep it within the same hunk cap.
+        result.push(`  ${line}`);
+        hunkShown += 1;
+      } else {
+        hunkSkipped += 1;
       }
     }
   }
