@@ -1,0 +1,51 @@
+{
+  "name": "blackrouter",
+  "version": "1.0.0",
+  "description": "Local OpenAI-compatible proxy gateway for OpenCode Free models with proxy pools, dynamic routing, RTK token compression, and adaptive reasoning support",
+  "type": "module",
+  "author": "Yoganataa",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Yoganataa/blackrouter.git"
+  },
+  "scripts": {
+    "build": "bun scripts/bundle-guest.ts --node service/main.ts service/main.js && bun scripts/bundle-guest.ts panel/main.ts panel/main.js && bun scripts/bundle-guest.ts status/main.ts status/main.js",
+    "test": "bun test",
+    "type-check": "tsc --noEmit"
+  },
+  "openchamber": {
+    "apiVersion": 1,
+    "engines": {
+      "openchamber": ">=1.22.0"
+    },
+    "contributes": {
+      "panel": {
+        "id": "blackrouter",
+        "name": "BlackRouter",
+        "icon": "icon.svg",
+        "entry": "panel/index.html"
+      },
+      "statusSection": {
+        "entry": "status/index.html",
+        "title": "BlackRouter",
+        "height": 140,
+        "defaultExpanded": true,
+        "requiresProject": false
+      },
+      "service": {
+        "entry": "service/main.js",
+        "runtime": "host"
+      }
+    }
+  },
+  "dependencies": {
+    "@openchamber/sdk": "^1.0.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "bun-types": "^1.4.4",
+    "typescript": "^5.8.2"
+  }
+}

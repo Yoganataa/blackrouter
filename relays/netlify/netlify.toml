@@ -1,0 +1,8 @@
+[build]
+  publish = "public"
+
+[[redirects]]
+  from = "/v1/*"
+  to = "/.netlify/functions/relay?path=:splat"
+  status = 200
+  force = true
