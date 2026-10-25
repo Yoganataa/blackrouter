@@ -9,6 +9,7 @@ const config = (overrides: Partial<RouterConfig> = {}): RouterConfig => ({
   apiKey: 'sk-test',
   upstream: 'https://opencode.ai/zen/v1',
   selectedModels: [],
+  fallbackModels: [],
   proxyPools: [],
   proxyStrategy: 'single',
   activePoolId: null,
