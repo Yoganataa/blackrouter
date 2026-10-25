@@ -237,11 +237,68 @@ export const createRouterView = (
     routeRow.append(routeActions);
     routeCard.append(routeRow);
 
-    // 3. Recent Calls Card
+    // 3. Usage & Reliability — aggregate only the persisted request metadata we actually know.
+    const recentRequests = state.requests;
+    const requestCount = recentRequests.length;
+    const successfulCount = recentRequests.filter((entry) => entry.status >= 200 && entry.status < 300).length;
+    const rateLimitedCount = recentRequests.filter((entry) => entry.status === 429).length;
+    const fallbackCount = recentRequests.filter((entry) => entry.fallbackUsed === true).length;
+    const failedCount = recentRequests.filter((entry) => entry.status < 200 || entry.status >= 300).length;
+    const avgLatencyMs = requestCount > 0
+      ? Math.round(recentRequests.reduce((sum, entry) => sum + Math.max(0, entry.ms), 0) / requestCount)
+      : null;
+    const tokenReportedRequests = recentRequests.filter((entry) =>
+      entry.inputTokens !== undefined || entry.outputTokens !== undefined || entry.totalTokens !== undefined,
+    ).length;
+    const inputTokenTotal = recentRequests.reduce((sum, entry) => sum + (entry.inputTokens ?? 0), 0);
+    const outputTokenTotal = recentRequests.reduce((sum, entry) => sum + (entry.outputTokens ?? 0), 0);
+    const totalTokenTotal = recentRequests.reduce(
+      (sum, entry) => sum + (
+        entry.totalTokens
+        ?? (entry.inputTokens !== undefined && entry.outputTokens !== undefined
+          ? entry.inputTokens + entry.outputTokens
+          : 0)
+      ),
+      0,
+    );
+    const numberFormat = new Intl.NumberFormat();
+
+    const { card: usageCard } = card(
+      root,
+      'Usage & Reliability',
+      'Summary of the most recent persisted request records. Token figures include only usage reported by the upstream.',
+    );
+    const usageGrid = el('div', 'br-kv-grid');
+    const addMetric = (label: string, value: string, detail?: string): void => {
+      const box = el('div', 'br-kv-box');
+      box.append(el('span', 'br-kv-label', label));
+      const valueRow = el('div', 'br-kv-val');
+      valueRow.append(el('span', 'br-kv-text', value));
+      box.append(valueRow);
+      if (detail) box.append(el('span', 'br-card-desc', detail));
+      usageGrid.append(box);
+    };
+    const successPercent = requestCount > 0 ? Math.round((successfulCount / requestCount) * 100) : null;
+    addMetric('Requests', numberFormat.format(requestCount), 'Stored request records');
+    addMetric('Success rate', successPercent === null ? '—' : successPercent + '%', numberFormat.format(successfulCount) + ' successful');
+    addMetric('Errors', numberFormat.format(failedCount), numberFormat.format(rateLimitedCount) + ' rate-limited (429)');
+    addMetric('Fallbacks', numberFormat.format(fallbackCount), 'Requests answered by a fallback model');
+    addMetric('Average latency', avgLatencyMs === null ? '—' : avgLatencyMs + ' ms', 'Across stored requests');
+    addMetric(
+      'Reported tokens',
+      tokenReportedRequests > 0 ? numberFormat.format(totalTokenTotal) : 'Not reported',
+      tokenReportedRequests > 0
+        ? numberFormat.format(inputTokenTotal) + ' input · ' + numberFormat.format(outputTokenTotal) +
+          ' output · reported on ' + tokenReportedRequests + '/' + requestCount + ' requests'
+        : 'No upstream token usage was available in this history',
+    );
+    usageCard.append(usageGrid);
+
+    // 4. Recent Calls Card
     const { card: activityCard } = card(
       root,
       'Recent Calls',
-      'The last requests answered by this router. Kept in memory.',
+      'The most recent request metadata is stored locally; prompts, tool output, and response bodies are not saved.',
     );
 
     if (state.requests.length === 0) {
@@ -262,13 +319,32 @@ export const createRouterView = (
           String(entry.status),
         );
         itemLeft.append(badge);
-        itemLeft.append(el('span', 'br-call-name', entry.model || entry.path));
+        const modelLabel = entry.requestedModel && entry.requestedModel !== entry.model
+          ? entry.requestedModel + ' → ' + (entry.model || entry.path)
+          : entry.model || entry.path;
+        itemLeft.append(el('span', 'br-call-name', modelLabel));
         if (entry.poolName) {
           itemLeft.append(el('span', 'br-badge br-badge-neutral', entry.poolName));
         }
+        if (entry.fallbackUsed) {
+          itemLeft.append(el('span', 'br-badge br-badge-primary', 'Fallback'));
+        }
         item.append(itemLeft);
-        item.append(el('span', 'br-call-ms', `${entry.ms}ms`));
+        const callMeta: string[] = [];
+        if (entry.totalTokens !== undefined) {
+          callMeta.push(numberFormat.format(entry.totalTokens) + ' tokens');
+        } else if (entry.inputTokens !== undefined || entry.outputTokens !== undefined) {
+          const partialTokens = (entry.inputTokens ?? 0) + (entry.outputTokens ?? 0);
+          callMeta.push(numberFormat.format(partialTokens) + ' reported tokens');
+        }
+        callMeta.push(entry.ms + 'ms');
+        item.append(el('span', 'br-call-ms', callMeta.join(' · ')));
         feed.append(item);
+        if (entry.fallbackReason) {
+          const reason = el('p', 'br-card-desc', 'Fallback reason: ' + entry.fallbackReason);
+          reason.style.margin = '0 0 8px 0';
+          feed.append(reason);
+        }
       }
       activityCard.append(feed);
     }
