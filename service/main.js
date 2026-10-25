@@ -1,4 +1,5 @@
 // service/main.ts
+import { createOpenCodeResponseTransform, prepareOpenCodeRequestBody, resolveOpenCodeLane } from "./opencode-protocol-runtime.js";
 import http5 from "node:http";
 
 // service/runtime.ts
@@ -6795,6 +6796,9 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
         writeJson(response, status, aggregateStream(body));
       });
       source.on("error", (error) => {
+        writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, "upstream_unreachable");
+      });
+      answer.on("error", (error) => {
         writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, "upstream_unreachable");
       });
       if (protocolTransform)
