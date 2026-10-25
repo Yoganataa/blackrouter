@@ -16,6 +16,7 @@ const config = (overrides: Partial<RouterConfig> = {}): RouterConfig => ({
   stickyLimit: 1,
   rtkEnabled: true,
   ...overrides,
+  fallbackModels: overrides.fallbackModels ?? [],
 });
 
 describe('the free pool', () => {
