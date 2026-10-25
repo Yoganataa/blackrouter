@@ -5242,7 +5242,7 @@ var buildComboRouterModels = (combos, availableModels) => combos.map((combo) => 
   };
 });
 var isRetryableFallbackStatus = (status) => status === 404 || status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
-var shouldAdvanceAfterStatus = (status, usedProxyPool) => isRetryableFallbackStatus(status) && (status !== 429 || usedProxyPool);
+var shouldAdvanceAfterStatus = (status, usedProxyPool, allowShortDirect429Fallback = false) => isRetryableFallbackStatus(status) && (status !== 429 || usedProxyPool || allowShortDirect429Fallback);
 
 // service/pool-selector.ts
 var createPoolSelector = () => {
@@ -7602,19 +7602,28 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       }
     }, (answer) => {
       const status = answer.statusCode ?? 502;
+      const retryAfterHeader = answer.headers["retry-after"];
+      const retryAfter = typeof retryAfterHeader === "string" ? retryAfterHeader : undefined;
+      const isShortDirect429 = status === 429 && candidate === null && retryAfter !== undefined && parseRetryAfterMs(retryAfter) <= 2000;
       if (status === 429) {
         if (candidate)
           rateLimitedPoolIds.add(candidate.id);
-        if (onRateLimit) {
-          const retryAfter = answer.headers["retry-after"];
-          onRateLimit(candidate, typeof retryAfter === "string" ? retryAfter : undefined);
-        }
+        onRateLimit?.(candidate, retryAfter);
       }
-      if (shouldAdvanceAfterStatus(status, candidate !== null)) {
-        fallbackReasons.push(`HTTP ${status} on ${attempt.model}`);
+      if (shouldAdvanceAfterStatus(status, candidate !== null, isShortDirect429)) {
         if (advanceToNextAttempt()) {
+          fallbackReasons.push(`HTTP ${status} on ${attempt.model}`);
           answer.resume();
-          sendAttempt();
+          if (isShortDirect429) {
+            const waitMs = parseRetryAfterMs(retryAfter);
+            const jitterMs = 100 + Math.floor(Math.random() * 301);
+            setTimeout(() => {
+              if (!response.destroyed && !response.writableEnded)
+                sendAttempt();
+            }, waitMs + jitterMs);
+          } else {
+            sendAttempt();
+          }
           return;
         }
       }
