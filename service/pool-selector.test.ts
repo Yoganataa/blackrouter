@@ -150,4 +150,32 @@ describe('PoolSelector', () => {
     expect(selector.pickPool(config)?.id).toBe('p2');
   });
 
+  it('excludes explicitly attempted pools and returns null after all are excluded', () => {
+    const selector = createPoolSelector();
+    const config = baseConfig({ proxyStrategy: 'single', activePoolId: 'p1' });
+
+    expect(selector.pickPool(config, new Set(['p1']))?.id).toBe('p2');
+    expect(selector.pickPool(config, new Set(['p1', 'p2']))?.id).toBe('p3');
+    expect(selector.pickPool(config, new Set(['p1', 'p2', 'p3']))).toBeNull();
+  });
+
+  it('can enumerate unique pools with exclusions under round-robin strategy', () => {
+    const selector = createPoolSelector();
+    const config = baseConfig({ proxyStrategy: 'round-robin', stickyLimit: 1 });
+    const attempted = new Set<string>();
+    const selected: string[] = [];
+
+    for (let i = 0; i < 3; i += 1) {
+      const picked = selector.pickPool(config, attempted);
+      expect(picked).not.toBeNull();
+      if (picked) {
+        selected.push(picked.id);
+        attempted.add(picked.id);
+      }
+    }
+
+    expect(new Set(selected).size).toBe(3);
+    expect(selector.pickPool(config, attempted)).toBeNull();
+  });
+
 });
