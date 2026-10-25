@@ -10,7 +10,7 @@ export type PoolSelector = {
 /**
  * Manages upstream proxy pool routing strategies (single, round-robin, random).
  *
- * - single: routes always through activePoolId, or the first active pool.
+ * - single: routes through activePoolId, or the first non-rate-limited pool.
  * - random: uniform random pick across all active pools per request.
  * - round-robin: rotates sequentially through active pools, respecting stickyLimit.
  */
