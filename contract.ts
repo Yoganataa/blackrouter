@@ -168,10 +168,19 @@ export const requestEntrySchema = z.object({
   at: z.number(),
   method: z.string(),
   path: z.string(),
+  /** Model that actually answered, or the last attempted model on failure. */
   model: z.string(),
+  /** Model requested by OpenChamber before any automatic fallback. */
+  requestedModel: z.string().optional(),
   status: z.number(),
   ms: z.number(),
   poolName: z.string().optional(),
+  fallbackUsed: z.boolean().optional(),
+  fallbackReason: z.string().optional(),
+  inputTokens: z.number().int().nonnegative().optional(),
+  outputTokens: z.number().int().nonnegative().optional(),
+  totalTokens: z.number().int().nonnegative().optional(),
+  error: z.string().optional(),
 });
 export type RequestEntry = z.infer<typeof requestEntrySchema>;
 
