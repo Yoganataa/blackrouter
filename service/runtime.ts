@@ -98,6 +98,8 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
   let config = store.load();
   const runtimeSession = sessionId();
   const poolSelector = createPoolSelector();
+  // Model tests must not mutate round-robin/sticky state used by live chat requests.
+  const modelTestPoolSelector = createPoolSelector();
   let models: RouterModel[] = [];
   let modelsFetchedAt: number | null = null;
   let modelsError = '';
@@ -410,7 +412,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
       const prepared = prepareChat(chatPayload, { rtkEnabled: false });
 
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        const pool = poolSelector.pickPool(config);
+        const pool = modelTestPoolSelector.pickPool(config, attempted);
         const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
         if (!pool && activePoolCount > 0) {
           lastError = 'All configured proxy pools are cooling down. Wait for the upstream rate limit to reset.';
