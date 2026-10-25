@@ -81,6 +81,45 @@ export type TestProxyPoolResult = z.infer<typeof testProxyPoolResultSchema>;
 export const PROXY_STRATEGIES = ['single', 'round-robin', 'random'] as const;
 export type ProxyStrategy = (typeof PROXY_STRATEGIES)[number];
 
+/**
+ * A named model alias whose ordered member list acts as a bounded fallback chain.
+ * OpenCode sees `blackrouter/combo/<id>`; the upstream only receives real model IDs.
+ */
+export const modelComboSchema = z.object({
+  id: z.string().trim().toLowerCase().min(1).max(40).regex(/^[a-z0-9][a-z0-9._-]*$/, 'Use a lowercase model-combo slug.'),
+  name: z.string().trim().min(1).max(80),
+  models: z.array(z.string().trim().min(1).max(200)).min(2).max(6),
+}).superRefine((combo, ctx) => {
+  const seen = new Set<string>();
+  combo.models.forEach((model, index) => {
+    const key = model.trim().toLowerCase();
+    if (seen.has(key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['models', index],
+        message: 'A model can appear only once in a combo.',
+      });
+    }
+    seen.add(key);
+  });
+});
+export type ModelCombo = z.infer<typeof modelComboSchema>;
+
+export const modelCombosSchema = z.array(modelComboSchema).max(20).superRefine((combos, ctx) => {
+  const seen = new Set<string>();
+  combos.forEach((combo, index) => {
+    const key = combo.id.toLowerCase();
+    if (seen.has(key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [index, 'id'],
+        message: 'Model-combo IDs must be unique.',
+      });
+    }
+    seen.add(key);
+  });
+});
+
 export const routerConfigSchema = z.object({
   version: z.literal(1),
   /** Loopback port OpenCode and other clients call. */
@@ -93,6 +132,8 @@ export const routerConfigSchema = z.object({
   selectedModels: z.array(z.string()),
   /** Ordered model ids tried only after the requested model returns a retryable upstream error. */
   fallbackModels: z.array(z.string().min(1)).max(2).default([]),
+  /** Named aliases with ordered model fallback chains. */
+  modelCombos: modelCombosSchema.default([]),
   /** Proxy pools deployed or configured to route upstream calls. */
   proxyPools: z.array(proxyPoolSchema),
   /** Strategy for routing requests across configured proxy pools. */
@@ -112,6 +153,7 @@ export const configPatchSchema = z.object({
   apiKey: z.string().min(1).optional(),
   selectedModels: z.array(z.string()).optional(),
   fallbackModels: z.array(z.string().min(1)).max(2).optional(),
+  modelCombos: modelCombosSchema.optional(),
   proxyPools: z.array(proxyPoolSchema).optional(),
   proxyStrategy: z.enum(PROXY_STRATEGIES).optional(),
   activePoolId: z.string().nullable().optional(),

@@ -24,6 +24,7 @@ const baseConfig = (overrides: Partial<RouterConfig> = {}): RouterConfig => ({
   rtkEnabled: true,
   ...overrides,
   fallbackModels: overrides.fallbackModels ?? [],
+  modelCombos: overrides.modelCombos ?? [],
 });
 
 describe('PoolSelector', () => {

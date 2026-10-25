@@ -41,6 +41,7 @@ import {
   buildProviderEntry,
   PROVIDER_ID,
 } from './opencode-config.ts';
+import { buildComboRouterModels } from './model-fallback.ts';
 import { createPoolSelector } from './pool-selector.ts';
 import { createRequestHistoryStore, REQUEST_HISTORY_LIMIT } from './request-history.ts';
 import { parseRetryAfterMs } from './retry-after.ts';
@@ -119,10 +120,16 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
     return selected.size === 0 ? models : models.filter((model) => selected.has(model.id));
   };
 
+  /** Selected catalog models plus named aliases registered in OpenCode. */
+  const modelsToRegister = (): RouterModel[] => [
+    ...pickedModels(),
+    ...buildComboRouterModels(config.modelCombos ?? [], models),
+  ];
+
   /** The block Register writes, shown by the panel before anything lands. */
   const preview = (): string =>
     JSON.stringify(
-      { providers: { [PROVIDER_ID]: buildProviderEntry(config, pickedModels()) } },
+      { providers: { [PROVIDER_ID]: buildProviderEntry(config, modelsToRegister()) } },
       null,
       2,
     );
@@ -171,7 +178,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
     try {
       router = await startRouterServer({
         getConfig: () => config,
-        getModels: () => models,
+        getModels: () => modelsToRegister(),
         refreshModels: loadModels,
         pickPool: () => poolSelector.pickPool(config),
         getDirectRateLimitedUntil: () => directRateLimitedUntil,
@@ -220,8 +227,6 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
     }
   };
 
-  const modelsToRegister = (): RouterModel[] => pickedModels();
-
   const refreshRegistration = (force = false): void => {
     const current = registration();
     if (!current.installed && !force) return;
@@ -241,6 +246,9 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
       const poolsChanged =
         patch.proxyPools !== undefined &&
         JSON.stringify(patch.proxyPools) !== JSON.stringify(previous.proxyPools);
+      const combosChanged =
+        patch.modelCombos !== undefined &&
+        JSON.stringify(patch.modelCombos) !== JSON.stringify(previous.modelCombos);
 
       if (portChanged && patch.port !== undefined) {
         if (patch.port < 1024 || patch.port > 65535) {
@@ -255,6 +263,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         apiKey: patch.apiKey ?? previous.apiKey,
         selectedModels: patch.selectedModels ?? previous.selectedModels,
         fallbackModels: patch.fallbackModels ?? previous.fallbackModels,
+        modelCombos: patch.modelCombos ?? previous.modelCombos,
         proxyPools: patch.proxyPools ?? previous.proxyPools,
         proxyStrategy: patch.proxyStrategy ?? previous.proxyStrategy,
         activePoolId: patch.activePoolId !== undefined ? patch.activePoolId : previous.activePoolId,
@@ -274,7 +283,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         }
         refreshRegistration(true);
       }
-      if (selectionChanged) {
+      if (selectionChanged || combosChanged) {
         refreshRegistration(true);
       }
       if (poolsChanged) {

@@ -16,6 +16,7 @@ const configFor = (port: number): RouterConfig => ({
   upstream: `http://127.0.0.1:${port}/v1`,
   selectedModels: [],
   fallbackModels: ['fallback-model'],
+  modelCombos: [],
   proxyPools: [],
   proxyStrategy: 'single',
   activePoolId: null,
@@ -55,6 +56,43 @@ describe('model fallback request path', () => {
         proxyChatCompletion(
           configFor(address.port),
           'ses_test',
+          prepared,
+          response,
+          null,
+          () => {},
+        );
+        return;
+      }
+
+      if (request.url === '/combo-test') {
+        requestedModels.length = 0;
+        await readRequestBody(request);
+        const address = server.address();
+        if (!address || typeof address === 'string') {
+          response.writeHead(500);
+          response.end('No listener address');
+          return;
+        }
+        const prepared = {
+          model: 'blackrouter/combo/quick',
+          stream: true,
+          body: JSON.stringify({
+            model: 'blackrouter/combo/quick',
+            stream: true,
+            messages: [{ role: 'user', content: 'Reply with OK.' }],
+          }),
+        };
+        proxyChatCompletion(
+          {
+            ...configFor(address.port),
+            fallbackModels: ['global-fallback'],
+            modelCombos: [{
+              id: 'quick',
+              name: 'Quick',
+              models: ['primary-model', 'fallback-model'],
+            }],
+          },
+          'ses_combo_test',
           prepared,
           response,
           null,
@@ -144,14 +182,14 @@ describe('model fallback request path', () => {
           response.end(JSON.stringify({ error: { message: 'primary model is rate limited' } }));
           return;
         }
-        if (model === 'fallback-model') {
+        if (model === 'fallback-model' || model === 'global-fallback') {
           response.writeHead(200, { 'content-type': 'text/event-stream' });
           response.end([
             'data: ' + JSON.stringify({
               id: 'chatcmpl-fallback',
               object: 'chat.completion.chunk',
               created: 1,
-              model: 'fallback-model',
+              model,
               choices: [{ index: 0, delta: { content: 'OK' }, finish_reason: null }],
             }),
             '',
@@ -159,7 +197,7 @@ describe('model fallback request path', () => {
               id: 'chatcmpl-fallback',
               object: 'chat.completion.chunk',
               created: 1,
-              model: 'fallback-model',
+              model,
               choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
             }),
             '',
@@ -206,6 +244,23 @@ describe('model fallback request path', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('x-blackrouter-requested-model')).toBe('primary-model');
+    expect(response.headers.get('x-blackrouter-resolved-model')).toBe('fallback-model');
+    expect(response.headers.get('x-blackrouter-fallback-used')).toBe('true');
+    expect(body).toContain('OK');
+    expect(requestedModels).toEqual(['primary-model', 'fallback-model']);
+  });
+
+  test('routes a named combo alias through its ordered members instead of the global fallback', async () => {
+    requestedModels.length = 0;
+    const response = await fetch(`${baseUrl}/combo-test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: true }),
+    });
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-blackrouter-requested-model')).toBe('blackrouter/combo/quick');
     expect(response.headers.get('x-blackrouter-resolved-model')).toBe('fallback-model');
     expect(response.headers.get('x-blackrouter-fallback-used')).toBe('true');
     expect(body).toContain('OK');

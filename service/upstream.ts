@@ -395,7 +395,7 @@ const AGGREGATE_LIMIT_BYTES = 8 * 1024 * 1024;
  * not ask for a stream gets the stream folded back into one JSON answer.
  */
 export const proxyChatCompletion = (
-  config: Pick<RouterConfig, 'upstream' | 'proxyPools' | 'fallbackModels'>,
+  config: Pick<RouterConfig, 'upstream' | 'proxyPools' | 'fallbackModels' | 'modelCombos'>,
   session: string,
   prepared: PreparedChat,
   response: ServerResponse,
@@ -403,7 +403,7 @@ export const proxyChatCompletion = (
   onRateLimit?: (pool: ProxyPool | null, retryAfter?: string) => void,
   onUsage?: (usage: TokenUsage) => void,
 ): void => {
-  const modelCandidates = resolveModelCandidates(prepared.model, config.fallbackModels ?? []);
+  const modelCandidates = resolveModelCandidates(prepared.model, config.fallbackModels ?? [], config.modelCombos ?? []);
   const activePools = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
   const now = Date.now();
   const healthyPools = activePools.filter((p) => !p.rateLimitedUntil || p.rateLimitedUntil <= now);

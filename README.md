@@ -29,6 +29,7 @@ https://opencode.ai/inference/v1/chat/completions (OpenCode Free models)
 - **RTK (Repetitive Tool Knowledge) Token Saver**:
   - Automatically compacts `git diff`, `git status`, `grep`, and large command outputs before upstream forwarding.
   - Saves 20% to 40% tokens per coding loop without losing vital context.
+- **Named Model Combos**: Create up to 20 reusable aliases, each with 2–6 free models in priority order. For example, `blackrouter/combo/fast-coding`; each combo owns its own bounded fallback chain.
 - **Automatic Provider Registration**:
   - One-click register into `~/.config/opencode/opencode.json` with dynamic context limits, capability flags (vision, tools), and reasoning effort variants (`low`, `medium`, `high`, `xhigh`, `max`).
 - **OpenChamber Extension**:

@@ -1,7 +1,7 @@
 import type { HostClient } from '@openchamber/sdk';
 import { mountBanner, mountCheckbox, mountEmpty } from '@openchamber/sdk/ui';
 
-import type { RouterState, TestModelResult } from '../../contract.ts';
+import type { ModelCombo, RouterState, TestModelResult } from '../../contract.ts';
 import type { ServiceClient } from '../client.ts';
 import type { Store } from '../store.ts';
 import { btn, card, el, stack } from '../ui/dom.ts';
@@ -38,6 +38,12 @@ export const createModelsView = (
   let searchQuery = '';
   let testingModelId: string | null = null;
   const testResults: Record<string, TestModelResult> = {};
+  let comboEditorOpen = false;
+  let editingComboId: string | null = null;
+  let comboDraftId = '';
+  let comboDraftName = '';
+  let comboDraftModels: string[] = [];
+  let comboMemberToAdd = '';
 
   const selectedIds = (state: RouterState): string[] =>
     state.config.selectedModels.length > 0
@@ -81,6 +87,77 @@ export const createModelsView = (
     }
     await host.toast({ kind: 'success', message: 'Model fallback order saved.' });
     render();
+  };
+
+  const saveModelCombos = async (combos: ModelCombo[]): Promise<void> => {
+    failure = '';
+    await store.run((service) => service.patchConfig({ modelCombos: combos }));
+    if (store.error()) {
+      failure = store.error();
+      render();
+      return;
+    }
+    comboEditorOpen = false;
+    editingComboId = null;
+    comboDraftId = '';
+    comboDraftName = '';
+    comboDraftModels = [];
+    comboMemberToAdd = '';
+    await host.toast({ kind: 'success', message: 'Named model combo saved.' });
+    render();
+  };
+
+  const beginComboEdit = (combo?: ModelCombo): void => {
+    failure = '';
+    comboEditorOpen = true;
+    editingComboId = combo?.id ?? null;
+    comboDraftId = combo?.id ?? '';
+    comboDraftName = combo?.name ?? '';
+    comboDraftModels = combo ? [...combo.models] : [];
+    comboMemberToAdd = '';
+    render();
+  };
+
+  const saveComboDraft = async (combos: ModelCombo[]): Promise<void> => {
+    const id = comboDraftId.trim().toLowerCase();
+    const name = comboDraftName.trim();
+    if (!/^[a-z0-9][a-z0-9._-]{0,39}$/.test(id)) {
+      failure = 'Combo ID must be a lowercase slug (letters, numbers, dot, underscore, hyphen).';
+      render();
+      return;
+    }
+    if (!name || name.length > 80) {
+      failure = 'Enter a combo name of 1–80 characters.';
+      render();
+      return;
+    }
+    if (comboDraftModels.length < 2 || comboDraftModels.length > 6) {
+      failure = 'A named combo needs 2–6 models in priority order.';
+      render();
+      return;
+    }
+    const memberKeys = comboDraftModels.map(canonicalModel);
+    if (new Set(memberKeys).size !== memberKeys.length) {
+      failure = 'A model can appear only once in a combo.';
+      render();
+      return;
+    }
+    if (combos.some((combo) => combo.id.toLowerCase() === id && combo.id !== editingComboId)) {
+      failure = 'That combo ID already exists.';
+      render();
+      return;
+    }
+    const nextCombo: ModelCombo = { id, name, models: [...comboDraftModels] };
+    const next = editingComboId
+      ? combos.map((combo) => combo.id === editingComboId ? nextCombo : combo)
+      : [...combos, nextCombo];
+    await saveModelCombos(next);
+  };
+
+  const removeCombo = async (id: string): Promise<void> => {
+    const state = store.state();
+    if (!state) return;
+    await saveModelCombos((state.config.modelCombos ?? []).filter((combo) => combo.id !== id));
   };
 
   const refresh = async (): Promise<void> => {
@@ -345,6 +422,147 @@ export const createModelsView = (
     addBtn.disabled = picker.disabled;
     fallbackCard.append(addRow);
     fallbackCard.append(el('p', 'br-muted', 'Fallbacks are tried only for HTTP 404, 408, 429, 500, 502, 503, or 504. Up to two fallback models are allowed per request.'));
+
+    // Named fallback combos mirror the useful core of 9Router Combos: each
+    // alias has its own bounded, ordered model chain and is registered in OpenCode.
+    const { card: combosCard } = card(
+      root,
+      'Named Model Combos',
+      'Create a reusable model alias with its own ordered fallback chain. In OpenCode, use blackrouter/combo/<id>.',
+    );
+    const configuredCombos = state.config.modelCombos ?? [];
+    if (configuredCombos.length === 0) {
+      combosCard.append(el('p', 'br-muted', 'No named combos yet. Each combo can contain 2–6 free models and is limited to a maximum of 20 combos.'));
+    }
+
+    for (const combo of configuredCombos) {
+      const comboRow = el('div', 'br-stack');
+      comboRow.style.gap = '6px';
+      comboRow.style.padding = '10px 0';
+      comboRow.style.borderBottom = '1px solid var(--border-subtle, rgba(127,127,127,.22))';
+      const header = el('div', 'br-row between');
+      const identity = el('div', 'br-stack');
+      identity.append(el('span', 'br-model-name', combo.name));
+      identity.append(el('span', 'br-model-id', 'blackrouter/combo/' + combo.id));
+      header.append(identity);
+      const actions = el('div', 'br-row');
+      btn(actions, 'Edit', () => beginComboEdit(combo));
+      btn(actions, 'Remove', () => void removeCombo(combo.id));
+      header.append(actions);
+      comboRow.append(header);
+      combo.models.forEach((modelId, index) => {
+        const model = state.models.find((entry) => canonicalModel(entry.id) === canonicalModel(modelId));
+        comboRow.append(el('span', 'br-muted', (index + 1) + '. ' + (model?.name ?? modelId)));
+      });
+      combosCard.append(comboRow);
+    }
+
+    if (comboEditorOpen) {
+      const editor = el('div', 'br-stack');
+      editor.style.gap = '8px';
+      editor.style.marginTop = '10px';
+      const idInput = el('input', 'br-search-input') as HTMLInputElement;
+      idInput.type = 'text';
+      idInput.maxLength = 40;
+      idInput.placeholder = 'combo-id (e.g. fast-coding)';
+      idInput.value = comboDraftId;
+      idInput.disabled = editingComboId !== null;
+      idInput.oninput = () => { comboDraftId = idInput.value.toLowerCase(); };
+      editor.append(el('label', 'br-muted', 'Combo ID'));
+      editor.append(idInput);
+
+      const nameInput = el('input', 'br-search-input') as HTMLInputElement;
+      nameInput.type = 'text';
+      nameInput.maxLength = 80;
+      nameInput.placeholder = 'Display name';
+      nameInput.value = comboDraftName;
+      nameInput.oninput = () => { comboDraftName = nameInput.value; };
+      editor.append(el('label', 'br-muted', 'Display name'));
+      editor.append(nameInput);
+
+      editor.append(el('label', 'br-muted', 'Priority order · ' + comboDraftModels.length + '/6 models'));
+      const memberList = el('div', 'br-stack');
+      for (let index = 0; index < comboDraftModels.length; index += 1) {
+        const modelId = comboDraftModels[index]!;
+        const model = state.models.find((entry) => canonicalModel(entry.id) === canonicalModel(modelId));
+        const memberRow = el('div', 'br-row between');
+        const memberInfo = el('div', 'br-stack');
+        memberInfo.append(el('span', 'br-model-name', (index + 1) + '. ' + (model?.name ?? modelId)));
+        memberInfo.append(el('span', 'br-model-id', modelId));
+        memberRow.append(memberInfo);
+        const memberActions = el('div', 'br-row');
+        const upMember = btn(memberActions, '↑', () => {
+          if (index === 0) return;
+          [comboDraftModels[index - 1], comboDraftModels[index]] = [comboDraftModels[index]!, comboDraftModels[index - 1]!];
+          render();
+        });
+        upMember.title = 'Move model up';
+        upMember.disabled = index === 0;
+        const downMember = btn(memberActions, '↓', () => {
+          if (index >= comboDraftModels.length - 1) return;
+          [comboDraftModels[index + 1], comboDraftModels[index]] = [comboDraftModels[index]!, comboDraftModels[index + 1]!];
+          render();
+        });
+        downMember.title = 'Move model down';
+        downMember.disabled = index >= comboDraftModels.length - 1;
+        btn(memberActions, 'Remove', () => {
+          comboDraftModels = comboDraftModels.filter((_, memberIndex) => memberIndex !== index);
+          render();
+        });
+        memberRow.append(memberActions);
+        memberList.append(memberRow);
+      }
+      editor.append(memberList);
+
+      const existingMembers = new Set(comboDraftModels.map(canonicalModel));
+      const options = state.models.filter((model) => !existingMembers.has(canonicalModel(model.id)));
+      const memberAddRow = el('div', 'br-row');
+      const memberPicker = el('select', 'br-search-input') as HTMLSelectElement;
+      memberPicker.style.flex = '1';
+      const memberPlaceholder = document.createElement('option');
+      memberPlaceholder.value = '';
+      memberPlaceholder.textContent = options.length > 0 ? 'Choose a free model…' : 'No additional models available';
+      memberPicker.append(memberPlaceholder);
+      for (const model of options) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        option.textContent = model.name;
+        memberPicker.append(option);
+      }
+      memberPicker.value = comboMemberToAdd;
+      memberPicker.disabled = comboDraftModels.length >= 6 || options.length === 0;
+      memberAddRow.append(memberPicker);
+      const addMemberBtn = btn(memberAddRow, 'Add model', () => {
+        if (!comboMemberToAdd || comboDraftModels.length >= 6) return;
+        comboDraftModels = [...comboDraftModels, comboMemberToAdd];
+        comboMemberToAdd = '';
+        render();
+      });
+      memberPicker.onchange = () => {
+        comboMemberToAdd = memberPicker.value;
+        addMemberBtn.disabled = memberPicker.disabled || !comboMemberToAdd;
+      };
+      addMemberBtn.disabled = memberPicker.disabled || !comboMemberToAdd;
+      memberAddRow.append(addMemberBtn);
+      editor.append(memberAddRow);
+
+      const editorActions = el('div', 'br-row');
+      btn(editorActions, 'Save Combo', () => void saveComboDraft(configuredCombos), 'primary');
+      btn(editorActions, 'Cancel', () => {
+        comboEditorOpen = false;
+        editingComboId = null;
+        comboDraftId = '';
+        comboDraftName = '';
+        comboDraftModels = [];
+        comboMemberToAdd = '';
+        render();
+      });
+      editor.append(editorActions);
+      combosCard.append(editor);
+    } else {
+      const addComboBtn = btn(combosCard, 'Create Model Combo', () => beginComboEdit(), 'primary');
+      addComboBtn.disabled = configuredCombos.length >= 20;
+    }
 
   };
 

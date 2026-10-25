@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 
+import { modelCombosSchema } from '../contract.ts';
+
 import {
+  buildComboRouterModels,
   canonicalModelId,
   isRetryableFallbackStatus,
+  modelComboModelId,
   resolveModelCandidates,
 } from './model-fallback.ts';
 
@@ -32,6 +36,53 @@ describe('model fallback', () => {
       'vendor-a/model',
       'vendor-b/model',
     ]);
+  });
+
+  test('resolves a named combo alias to its ordered member models', () => {
+    const combos = [{
+      id: 'fast-coding',
+      name: 'Fast Coding',
+      models: ['glm-5.3-flash-free', 'deepseek-v4.1-flash-free', 'mimo-v2.6-flash-free'],
+    }];
+    expect(modelComboModelId('Fast-Coding')).toBe('combo/fast-coding');
+    expect(resolveModelCandidates('blackrouter/combo/fast-coding', ['global-fallback'], combos)).toEqual([
+      'glm-5.3-flash-free',
+      'deepseek-v4.1-flash-free',
+      'mimo-v2.6-flash-free',
+    ]);
+  });
+
+  test('deduplicates combo members and keeps alias metadata from the primary model', () => {
+    const combos = [{
+      id: 'quick',
+      name: 'Quick',
+      models: ['glm-5.3-flash-free', 'GLM-5.3-FLASH-FREE', 'deepseek-v4.1-flash-free'],
+    }];
+    expect(resolveModelCandidates('combo/quick', [], combos)).toEqual([
+      'glm-5.3-flash-free',
+      'deepseek-v4.1-flash-free',
+    ]);
+    const primary = {
+      id: 'glm-5.3-flash-free',
+      name: 'GLM 5.3 Flash',
+      limit: { context: 1000000, output: 128000 },
+      capabilities: { tools: true, input: ['text', 'image'], output: ['text'] },
+    };
+    expect(buildComboRouterModels(combos, [primary])).toEqual([{
+      id: 'combo/quick',
+      name: 'Quick',
+      limit: primary.limit,
+      capabilities: primary.capabilities,
+    }]);
+  });
+
+  test('validates combo size, unique model IDs, and unique combo slugs', () => {
+    const valid = { id: 'fast-coding', name: 'Fast Coding', models: ['model-a', 'model-b'] };
+    expect(modelCombosSchema.safeParse([valid]).success).toBe(true);
+    expect(modelCombosSchema.safeParse([{ ...valid, models: ['model-a'] }]).success).toBe(false);
+    expect(modelCombosSchema.safeParse([{ ...valid, models: ['model-a', 'MODEL-A'] }]).success).toBe(false);
+    expect(modelCombosSchema.safeParse([valid, { ...valid, name: 'Duplicate ID' }]).success).toBe(false);
+    expect(modelCombosSchema.safeParse([{ ...valid, id: 'Not A Slug' }]).success).toBe(false);
   });
 
   test('only retries eligible upstream errors', () => {

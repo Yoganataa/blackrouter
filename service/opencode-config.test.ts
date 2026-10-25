@@ -21,6 +21,7 @@ const config: RouterConfig = {
   upstream: 'https://opencode.ai/zen/v1',
   selectedModels: [],
   fallbackModels: [],
+  modelCombos: [],
   proxyPools: [],
   proxyStrategy: 'single',
   activePoolId: null,

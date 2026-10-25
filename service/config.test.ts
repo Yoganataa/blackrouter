@@ -19,6 +19,7 @@ describe('the router settings', () => {
     const config = defaultConfig();
     expect(config.port).toBe(DEFAULT_PORT);
     expect(config.proxyPools).toEqual([]);
+    expect(config.modelCombos).toEqual([]);
     expect(config.proxyStrategy).toBe('single');
     expect(config.stickyLimit).toBe(1);
     expect(config.apiKey.startsWith('sk-')).toBe(true);
@@ -55,6 +56,7 @@ describe('the router settings', () => {
         }),
       );
       const loaded = createConfigStore(file).load();
+      expect(loaded.modelCombos).toEqual([]);
       expect(loaded.proxyPools.length).toBe(1);
       expect(loaded.proxyPools[0]?.type).toBe('cloudflare');
       expect(loaded.proxyPools[0]?.proxyUrl).toBe('https://migrated.workers.dev');
