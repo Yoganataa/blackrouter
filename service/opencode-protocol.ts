@@ -7,10 +7,10 @@ type AnyObject = Record<string, any>;
 
 const cleanModelId = (modelId: string): string => {
   let clean = modelId.replace(/\([^()]+\)\s*$/, '').trim();
-  for (const prefix of ['opencode-zen/', 'opencode/', 'opencode/', 'ocz/', 'oc/']) {
-    clean = clean.startsWith(prefix) ? clean.slice(prefix.length) : clean;
-  }
-  return clean;
+  // OpenCode sends provider-qualified ids (for example blackrouter/model-id),
+  // while the Zen inference endpoints only accept the upstream model id.
+  if (clean.includes('/')) clean = clean.split('/').pop() ?? clean;
+  return clean.trim();
 };
 
 export const resolveOpenCodeLane = (upstream: string, modelId: string): OpenCodeLane => {
@@ -260,7 +260,7 @@ const chatToMessages = (body: AnyObject): AnyObject => {
   const systemParts: string[] = typeof body.system === 'string' ? [body.system] : [];
   if (typeof body.instructions === 'string') systemParts.push(body.instructions);
   const rawMessages = Array.isArray(body.messages) ? body.messages : [];
-  let pendingToolId = '';
+  const pendingToolIds: string[] = [];
 
   for (const rawMessage of rawMessages) {
     if (!rawMessage || typeof rawMessage !== 'object') continue;
@@ -272,18 +272,24 @@ const chatToMessages = (body: AnyObject): AnyObject => {
       continue;
     }
     if (role === 'tool' || role === 'function') {
-      const callId = typeof message.tool_call_id === 'string' && message.tool_call_id
-        ? message.tool_call_id
-        : pendingToolId;
+      const suppliedId = typeof message.tool_call_id === 'string' ? message.tool_call_id : '';
+      let callId = suppliedId;
+      if (callId) {
+        const index = pendingToolIds.indexOf(callId);
+        if (index >= 0) pendingToolIds.splice(index, 1);
+      } else if (pendingToolIds.length > 0) {
+        callId = pendingToolIds.shift()!;
+      } else {
+        callId = `call_tool_${messages.length}`;
+      }
       messages.push({
         role: 'user',
         content: [{
           type: 'tool_result',
-          tool_use_id: callId || `call_tool_${messages.length}`,
+          tool_use_id: callId,
           content: textOf(message.content),
         }],
       });
-      pendingToolId = '';
       continue;
     }
 
@@ -295,7 +301,7 @@ const chatToMessages = (body: AnyObject): AnyObject => {
         const fn = call.function && typeof call.function === 'object' ? call.function as AnyObject : {};
         if (typeof fn.name !== 'string' || !fn.name.trim()) continue;
         const id = typeof call.id === 'string' && call.id ? call.id : `call_${messages.length}_${content.length}`;
-        pendingToolId = id;
+        pendingToolIds.push(id);
         content.push({ type: 'tool_use', id, name: fn.name, input: parseArgs(fn.arguments) });
       }
     }
