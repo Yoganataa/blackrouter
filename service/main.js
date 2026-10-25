@@ -5253,8 +5253,8 @@ var createPoolSelector = () => {
     consecutiveCount = 0;
     lastIndex = -1;
   };
-  const pickPool = (config) => {
-    const active = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim());
+  const pickPool = (config, excludedPoolIds) => {
+    const active = (config.proxyPools || []).filter((p) => p.isActive && p.proxyUrl.trim() && !excludedPoolIds?.has(p.id));
     if (active.length === 0) {
       reset();
       return null;
@@ -7877,6 +7877,7 @@ var createRuntime = (store = createConfigStore()) => {
   let config = store.load();
   const runtimeSession = sessionId();
   const poolSelector = createPoolSelector();
+  const modelTestPoolSelector = createPoolSelector();
   let models = [];
   let modelsFetchedAt = null;
   let modelsError = "";
@@ -8151,7 +8152,7 @@ var createRuntime = (store = createConfigStore()) => {
       });
       const prepared = prepareChat(chatPayload, { rtkEnabled: false });
       for (let attempt = 0;attempt < maxAttempts; attempt += 1) {
-        const pool = poolSelector.pickPool(config);
+        const pool = modelTestPoolSelector.pickPool(config, attempted);
         const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
         if (!pool && activePoolCount > 0) {
           lastError = "All configured proxy pools are cooling down. Wait for the upstream rate limit to reset.";
