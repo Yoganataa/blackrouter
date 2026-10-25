@@ -6477,6 +6477,10 @@ var createRuntime = (store = createConfigStore()) => {
           }
           lastError = `HTTP ${status}: ${resultText.slice(0, 300)}`;
           if (status !== 429) break;
+          if (!pool && config.proxyPools.some((p) => p.isActive && p.proxyUrl.trim())) {
+            lastError = "All configured proxy pools are cooling down. Wait for the upstream rate limit to reset.";
+            break;
+          }
           if (pool) {
             const retrySeconds = retryAfter ? Number(retryAfter) : NaN;
             const cooldownMs = Number.isFinite(retrySeconds) && retrySeconds >= 0 ? Math.min(retrySeconds * 1000, 60 * 60_000) : 5 * 60_000;
