@@ -25,6 +25,7 @@ export const defaultConfig = (): RouterConfig => ({
   port: DEFAULT_PORT,
   apiKey: createApiKey(),
   upstream: OPENCODE_ZEN,
+  upstreamApiKey: '',
   selectedModels: [],
   fallbackModels: [],
   modelCombos: [],

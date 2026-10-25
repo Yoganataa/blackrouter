@@ -47,7 +47,7 @@ import { createRequestHistoryStore, REQUEST_HISTORY_LIMIT } from './request-hist
 import { parseRetryAfterMs } from './retry-after.ts';
 import { startRouterServer, type RouterServer } from './router-server.ts';
 import { aggregateStream } from './sse.ts';
-import { buildTarget, fetchModelIds, toModels } from './upstream.ts';
+import { buildTarget, fetchModelIds, isOpenCodeUpstream, toModels } from './upstream.ts';
 import { freeTierHeaders, prepareChat, sessionId } from './zen.ts';
 
 /**
@@ -154,7 +154,8 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
       running: router !== null,
       routerError,
       endpoint: endpointFor(config),
-      config,
+      config: { ...config, upstreamApiKey: '' },
+      upstreamApiKeyConfigured: Boolean(config.upstreamApiKey?.trim()),
       models,
       modelsFetchedAt,
       modelsError,
@@ -251,6 +252,9 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
       const combosChanged =
         patch.modelCombos !== undefined &&
         JSON.stringify(patch.modelCombos) !== JSON.stringify(previous.modelCombos);
+      const upstreamChanged = patch.upstream !== undefined && patch.upstream !== previous.upstream;
+      const upstreamApiKeyChanged = patch.upstreamApiKey !== undefined &&
+        patch.upstreamApiKey !== (previous.upstreamApiKey ?? '');
 
       if (portChanged && patch.port !== undefined) {
         if (patch.port < 1024 || patch.port > 65535) {
@@ -263,7 +267,13 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         ...previous,
         port: patch.port ?? previous.port,
         apiKey: patch.apiKey ?? previous.apiKey,
-        selectedModels: patch.selectedModels ?? previous.selectedModels,
+        upstream: patch.upstream ?? previous.upstream,
+        upstreamApiKey: patch.upstreamApiKey !== undefined
+          ? patch.upstreamApiKey
+          : previous.upstreamApiKey ?? '',
+        selectedModels: (upstreamChanged || upstreamApiKeyChanged) && patch.selectedModels === undefined
+          ? []
+          : patch.selectedModels ?? previous.selectedModels,
         fallbackModels: patch.fallbackModels ?? previous.fallbackModels,
         modelCombos: patch.modelCombos ?? previous.modelCombos,
         proxyPools: patch.proxyPools ?? previous.proxyPools,
@@ -287,11 +297,15 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         }
         refreshRegistration(true);
       }
+      if (upstreamChanged || upstreamApiKeyChanged) {
+        directRateLimitedUntil = 0;
+        await loadModels();
+        refreshRegistration(true);
+      } else if (poolsChanged) {
+        await loadModels();
+      }
       if (selectionChanged || combosChanged) {
         refreshRegistration(true);
-      }
-      if (poolsChanged) {
-        await loadModels();
       }
       return state();
     },
@@ -409,7 +423,10 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         max_tokens: 8,
         stream: false,
       });
-      const prepared = prepareChat(chatPayload, { rtkEnabled: false });
+      const prepared = prepareChat(chatPayload, {
+        rtkEnabled: false,
+        openCodeFreeTier: isOpenCodeUpstream(config.upstream),
+      });
 
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const pool = modelTestPoolSelector.pickPool(config, attempted);
@@ -419,14 +436,14 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
           break;
         }
         if (!pool && activePoolCount === 0 && directRateLimitedUntil > Date.now()) {
-          lastError = `The direct OpenCode upstream is rate-limited. Retry in approximately ${Math.ceil((directRateLimitedUntil - Date.now()) / 1000)} seconds.`;
+          lastError = `The configured upstream is rate-limited. Retry in approximately ${Math.ceil((directRateLimitedUntil - Date.now()) / 1000)} seconds.`;
           break;
         }
         if (pool && attempted.has(pool.id)) break;
         if (pool) attempted.add(pool.id);
         const target = buildTarget(config, 'chat', pool, modelId);
         const testHeaders: Record<string, string> = {
-          ...freeTierHeaders(runtimeSession),
+          ...(isOpenCodeUpstream(config.upstream) ? freeTierHeaders(runtimeSession) : {}),
           ...target.headers,
           'Content-Type': 'application/json',
           Accept: 'text/event-stream',

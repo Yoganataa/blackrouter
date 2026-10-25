@@ -15,7 +15,8 @@ const cleanModelId = (modelId: string): string => {
 export const resolveOpenCodeLane = (upstream: string, modelId: string): OpenCodeLane => {
   let isOpenCode = false;
   try {
-    isOpenCode = new URL(upstream).hostname.toLowerCase().includes('opencode.ai');
+    const hostname = new URL(upstream).hostname.toLowerCase();
+    isOpenCode = hostname === 'opencode.ai' || hostname.endsWith('.opencode.ai');
   } catch {
     return 'chat';
   }

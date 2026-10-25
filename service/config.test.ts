@@ -18,6 +18,7 @@ describe('the router settings', () => {
   test('start from the shared defaults', () => {
     const config = defaultConfig();
     expect(config.port).toBe(DEFAULT_PORT);
+    expect(config.upstreamApiKey).toBe('');
     expect(config.proxyPools).toEqual([]);
     expect(config.modelCombos).toEqual([]);
     expect(config.proxyStrategy).toBe('single');

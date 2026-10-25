@@ -21,12 +21,16 @@ export const createRouterView = (
 ) => {
   const root = stack(document.createElement('div'));
   let port = '';
+  let upstream = '';
+  let upstreamApiKeyDraft = '';
   let seeded = false;
   let showKey = false;
   let localFailure = '';
 
   const syncDrafts = (state: RouterState): void => {
     port = String(state.config.port);
+    upstream = state.config.upstream;
+    upstreamApiKeyDraft = '';
   };
 
   const copy = async (text: string, label: string): Promise<void> => {
@@ -57,6 +61,51 @@ export const createRouterView = (
     localFailure = '';
     await store.run((service) => service.rotateKey());
     await host.toast({ kind: 'success', message: 'New API key generated and saved.' });
+    render();
+  };
+
+  const saveUpstream = async (): Promise<void> => {
+    localFailure = '';
+    const baseUrl = upstream.trim();
+    try {
+      const parsed = new URL(baseUrl);
+      if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+          parsed.username || parsed.password || parsed.hash) {
+        throw new Error('Use an HTTP(S) base URL without embedded credentials or a fragment.');
+      }
+    } catch (error) {
+      localFailure = error instanceof Error && error.message.startsWith('Use an HTTP(S)')
+        ? error.message
+        : 'Enter a valid upstream base URL, such as https://api.openai.com/v1.';
+      render();
+      return;
+    }
+
+    const key = upstreamApiKeyDraft;
+    await store.run((service) => service.patchConfig({
+      upstream: baseUrl,
+      ...(key ? { upstreamApiKey: key } : {}),
+    }));
+    if (store.error()) {
+      render();
+      return;
+    }
+    const state = store.state();
+    if (state) syncDrafts(state);
+    await host.toast({ kind: 'success', message: 'Upstream settings saved and model catalog refreshed.' });
+    render();
+  };
+
+  const clearUpstreamApiKey = async (): Promise<void> => {
+    localFailure = '';
+    await store.run((service) => service.patchConfig({ upstreamApiKey: '' }));
+    if (store.error()) {
+      render();
+      return;
+    }
+    const state = store.state();
+    if (state) syncDrafts(state);
+    await host.toast({ kind: 'info', message: 'Upstream API key cleared.' });
     render();
   };
 
@@ -226,11 +275,52 @@ export const createRouterView = (
     ponytailBox.append(el('span', 'br-card-desc', 'Encourages minimal code without skipping validation, security, or requested behavior.'));
     kvGrid.append(ponytailBox);
 
+// Configurable upstream. The service returns only a configured/not-configured flag, never the stored secret.
+    const { card: upstreamCard } = card(
+      root,
+      'Upstream Provider',
+      'Use OpenCode Zen Free by default, or connect an OpenAI-compatible chat-completions API.',
+    );
+    const upstreamGrid = el('div', 'br-kv-grid');
+
+    const upstreamUrlBox = el('div', 'br-kv-box');
+    upstreamUrlBox.append(el('span', 'br-kv-label', 'API Base URL'));
+    const upstreamUrlInput = el('input', 'br-search-input br-mono') as HTMLInputElement;
+    upstreamUrlInput.type = 'url';
+    upstreamUrlInput.value = upstream;
+    upstreamUrlInput.placeholder = 'https://api.openai.com/v1';
+    upstreamUrlInput.autocomplete = 'url';
+    upstreamUrlInput.oninput = () => { upstream = upstreamUrlInput.value; };
+    upstreamUrlBox.append(upstreamUrlInput);
+    upstreamUrlBox.append(el('span', 'br-card-desc', 'Enter the API base, not the /chat/completions path. OpenCode Zen remains the default.'));
+    upstreamGrid.append(upstreamUrlBox);
+
+    const upstreamKeyBox = el('div', 'br-kv-box');
+    upstreamKeyBox.append(el('span', 'br-kv-label', 'Upstream API Key'));
+    const upstreamKeyInput = el('input', 'br-search-input br-mono') as HTMLInputElement;
+    upstreamKeyInput.type = 'password';
+    upstreamKeyInput.autocomplete = 'new-password';
+    upstreamKeyInput.value = upstreamApiKeyDraft;
+    upstreamKeyInput.placeholder = state.upstreamApiKeyConfigured
+      ? 'Key is saved; leave blank to keep it'
+      : 'Optional for local or keyless APIs';
+    upstreamKeyInput.oninput = () => { upstreamApiKeyDraft = upstreamKeyInput.value; };
+    upstreamKeyBox.append(upstreamKeyInput);
+    upstreamKeyBox.append(el('span', 'br-card-desc', 'Stored locally with owner-only file permissions. The saved key is not returned to panel state.'));
+    const upstreamActions = el('div', 'br-row');
+    btn(upstreamActions, 'Save Upstream', () => void saveUpstream(), 'primary');
+    if (state.upstreamApiKeyConfigured) {
+      btn(upstreamActions, 'Clear API Key', () => void clearUpstreamApiKey());
+    }
+    upstreamKeyBox.append(upstreamActions);
+    upstreamGrid.append(upstreamKeyBox);
+    upstreamCard.append(upstreamGrid);
+
 // 2. Upstream Routing Card
     const { card: routeCard } = card(
       root,
       'Upstream Routing',
-      'Traffic to OpenCode Zen can route directly or through a serverless proxy pool.',
+      'Traffic to the configured upstream can route directly or through a serverless proxy pool.',
     );
     const strategy = state.config.proxyStrategy || 'single';
     const activePools = state.config.proxyPools.filter((p) => p.isActive);
@@ -273,7 +363,7 @@ export const createRouterView = (
       routeTitleRow.append(typeBadge);
       routeInfo.append(routeTitleRow);
       routeInfo.append(
-        el('span', 'br-pool-url', 'Direct requests from this machine to https://opencode.ai/zen/v1'),
+        el('span', 'br-pool-url', `Direct requests from this machine to ${state.config.upstream}`),
       );
     }
     routeLeft.append(routeInfo);

@@ -1,13 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 
 import type { RouterConfig } from '../contract.ts';
-import { buildTarget, freeModelIds, humanizeModelId, isFreeModel, toModels } from './upstream.ts';
+import { buildTarget, fetchModelIds, freeModelIds, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels } from './upstream.ts';
 
 const config = (overrides: Partial<RouterConfig> = {}): RouterConfig => ({
   version: 1,
   port: 20128,
   apiKey: 'sk-test',
   upstream: 'https://opencode.ai/zen/v1',
+  upstreamApiKey: '',
   selectedModels: [],
   proxyPools: [],
   proxyStrategy: 'single',
@@ -80,6 +81,23 @@ describe('where a call goes', () => {
     expect(custom.url.toString()).toBe('https://custom-gateway.local/v1/chat/completions');
   });
 
+  test('detects the official OpenCode host without accepting lookalike hostnames', () => {
+    expect(isOpenCodeUpstream('https://opencode.ai/zen/v1')).toBe(true);
+    expect(isOpenCodeUpstream('https://api.opencode.ai/v1')).toBe(true);
+    expect(isOpenCodeUpstream('https://notopencode.ai/v1')).toBe(false);
+    expect(isOpenCodeUpstream('https://example.com/opencode.ai/v1')).toBe(false);
+  });
+
+  test('uses a configured Bearer key for a generic OpenAI-compatible upstream', () => {
+    const custom = buildTarget(config({
+      upstream: 'https://api.example.com/v1',
+      upstreamApiKey: 'sk-provider-secret',
+    }), 'chat');
+    expect(custom.url.toString()).toBe('https://api.example.com/v1/chat/completions');
+    expect(custom.headers.authorization).toBe('Bearer sk-provider-secret');
+    expect(isOpenCodeUpstream('https://api.example.com/v1')).toBe(false);
+  });
+
   test('a proxy pool takes x-relay-target and x-relay-path matching 9router spec', () => {
     const poolConfig = config({
       proxyPools: [
@@ -144,6 +162,24 @@ describe('where a call goes', () => {
     });
     expect(buildTarget(poolConfig, 'models').url.toString()).toBe('https://opencode.ai/zen/v1/models');
     expect(buildTarget(poolConfig, 'models').headers).toEqual({});
+  });
+
+  test('loads a complete catalog from a custom OpenAI-compatible upstream', async () => {
+    let capturedHeaders: Headers | null = null;
+    const fakeFetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      capturedHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify({
+        data: [{ id: 'gpt-5.6' }, { id: 'vendor/custom-model' }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const result = await fetchModelIds(config({
+      upstream: 'https://api.example.com/v1',
+      upstreamApiKey: 'sk-provider-secret',
+    }), fakeFetch as typeof fetch);
+    expect(result.ids).toEqual(['gpt-5.6', 'vendor/custom-model']);
+    expect(result.free).toEqual(['gpt-5.6', 'vendor/custom-model']);
+    expect(capturedHeaders?.get('authorization')).toBe('Bearer sk-provider-secret');
+    expect(capturedHeaders?.get('user-agent')).toBe('BlackRouter/1.0');
   });
 
   test('respects explicit poolOverride passed from pool selector', () => {

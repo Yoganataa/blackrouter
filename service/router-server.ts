@@ -3,7 +3,7 @@ import http from 'node:http';
 import type { ServerResponse } from 'node:http';
 
 import type { ProxyPool, RequestEntry, RouterConfig, RouterModel } from '../contract.ts';
-import { proxyChatCompletion, writeJson, writeOpenAiError } from './upstream.ts';
+import { isOpenCodeUpstream, proxyChatCompletion, writeJson, writeOpenAiError } from './upstream.ts';
 import { prepareChat, sessionId } from './zen.ts';
 import type { TokenUsage } from './usage-observer.ts';
 
@@ -150,6 +150,7 @@ export const startRouterServer = (deps: RouterServerDeps): Promise<RouterServer>
               rtkEnabled: config.rtkEnabled,
               cavemanLevel: config.cavemanLevel,
               ponytailLevel: config.ponytailLevel,
+              openCodeFreeTier: isOpenCodeUpstream(config.upstream),
             });
             const pool = deps.pickPool ? deps.pickPool() : null;
             const tokenUsage: TokenUsage = {};

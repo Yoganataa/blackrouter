@@ -1,6 +1,6 @@
 # BlackRouter
 
-Local, OpenAI-compatible proxy gateway for OpenCode Free models with proxy pools, dynamic routing, RTK token savings, and automatic OpenCode provider registration.
+Local OpenAI-compatible proxy gateway for OpenCode Free models or a configurable OpenAI-compatible upstream, with proxy pools, dynamic routing, RTK token savings, and automatic OpenCode provider registration.
 
 ```
 OpenCode / OpenChamber / any OpenAI client
@@ -15,7 +15,8 @@ https://opencode.ai/inference/v1/chat/completions (OpenCode Free models)
 ## Features
 
 - **OpenAI Compatible Endpoint**: Binds `http://127.0.0.1:20128/v1` with standard `/v1/models` and `/v1/chat/completions` (streaming SSE & folded JSON).
-- **Official OpenCode Free Integration**: Accurately cloaks requests with OpenCode CLI v2 client headers, fingerprint tools (`read` and `shell`), and conversation session affinity.
+- **Upstream Provider**: OpenCode Zen Free remains the default. A configurable OpenAI-compatible API base URL and optional Bearer API key can be used for other chat-completions providers; the key is stored locally and redacted from panel state.
+- **Official OpenCode Free Integration**: Accurately cloaks OpenCode Zen requests with OpenCode CLI v2 client headers, fingerprint tools (`read` and `shell`), and conversation session affinity.
 - **Dynamic v2 Endpoint Routing**:
   - Chat completions route to `/inference/v1/chat/completions`
   - Muse Spark models route to `/inference/v1/responses`
@@ -67,6 +68,7 @@ bun run build
 - **Authentication**: `Authorization: Bearer <key>` or `x-api-key: <key>`
 - **Catalog**: `GET /v1/models`
 - **Completions**: `POST /v1/chat/completions`
+- **Upstream setting**: in the BlackRouter panel, set an HTTP(S) OpenAI-compatible API base URL (for example, `https://api.openai.com/v1`) and optional provider API key.
 - **Healthcheck**: `GET /healthz`
 
 Settings and keys are stored locally at `~/.openchamber/blackrouter/config.json`.

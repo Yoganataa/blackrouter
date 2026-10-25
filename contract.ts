@@ -132,8 +132,10 @@ export const routerConfigSchema = z.object({
   port: z.number().int().min(1024).max(65535),
   /** Bearer token for `/v1/*` on that port. */
   apiKey: z.string().min(8),
-  /** API base of the upstream. Only the OpenCode Zen free pool is supported. */
+  /** API base URL. OpenCode Zen is the default; other OpenAI-compatible chat APIs are supported. */
   upstream: z.string(),
+  /** Optional Bearer key for a non-OpenCode OpenAI-compatible upstream; redacted from panel state. */
+  upstreamApiKey: z.string().max(4096).optional(),
   /** Free model ids the user wants OpenCode to see. Empty means "every free model". */
   selectedModels: z.array(z.string()),
   /** Ordered model ids tried only after the requested model returns a retryable upstream error. */
@@ -158,9 +160,21 @@ export const routerConfigSchema = z.object({
 export type RouterConfig = z.infer<typeof routerConfigSchema>;
 
 /** A settings change the panel may send. Omitted fields keep their value. */
+const upstreamUrlSchema = z.string().url().refine((value) => {
+  try {
+    const parsed = new URL(value);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      !parsed.username && !parsed.password && !parsed.hash;
+  } catch {
+    return false;
+  }
+}, 'Use an HTTP(S) base URL without embedded credentials or a fragment.');
+
 export const configPatchSchema = z.object({
   port: z.number().int().min(1024).max(65535).optional(),
   apiKey: z.string().min(1).optional(),
+  upstream: upstreamUrlSchema.optional(),
+  upstreamApiKey: z.string().max(4096).optional(),
   selectedModels: z.array(z.string()).optional(),
   fallbackModels: z.array(z.string().min(1)).max(2).optional(),
   modelCombos: modelCombosSchema.optional(),
@@ -254,7 +268,9 @@ export const routerStateSchema = z.object({
   routerError: z.string(),
   endpoint: z.string(),
   config: routerConfigSchema,
-  /** Free models the upstream currently offers, in upstream order. */
+  /** True if an upstream key is stored; the secret itself is never returned. */
+  upstreamApiKeyConfigured: z.boolean(),
+  /** Models offered by the upstream, in upstream order. OpenCode Zen is filtered to free models. */
   models: z.array(modelSchema),
   modelsFetchedAt: z.number().nullable(),
   modelsError: z.string(),

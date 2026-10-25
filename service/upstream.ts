@@ -108,6 +108,15 @@ class TunnelAgent extends https.Agent {
  */
 export const createTunnelAgent = (proxyUrlString: string): https.Agent => new TunnelAgent(proxyUrlString);
 
+export const isOpenCodeUpstream = (upstream: string): boolean => {
+  try {
+    const hostname = new URL(upstream).hostname.toLowerCase();
+    return hostname === 'opencode.ai' || hostname.endsWith('.opencode.ai');
+  } catch {
+    return false;
+  }
+};
+
 export const isMuseSparkModel = (id: string): boolean => /^muse[-_]?spark(?:$|[-_:.\s])/i.test(id);
 export const isUnionAlphaModel = (id: string): boolean => /^union[-_]?alpha(?:$|[-_:.\s])/i.test(id);
 
@@ -128,7 +137,7 @@ export const resolveOpencodePath = (call: 'models' | 'chat', modelId?: string): 
  * Relay proxy pool (cloudflare, vercel, deno, netlify): forwards to relay URL with x-relay-target/path.
  */
 export const buildTarget = (
-  config: Pick<RouterConfig, 'upstream' | 'proxyPools'>,
+  config: Pick<RouterConfig, 'upstream' | 'upstreamApiKey' | 'proxyPools'>,
   call: 'models' | 'chat',
   poolOverride?: ProxyPool | null,
   modelId?: string,
@@ -139,7 +148,11 @@ export const buildTarget = (
       : (config.proxyPools || []).find((p) => p.isActive && p.proxyUrl.trim()) ?? null;
 
   const parsed = new URL(config.upstream);
-  const isOpenCode = parsed.hostname.toLowerCase().includes('opencode.ai');
+  const isOpenCode = isOpenCodeUpstream(config.upstream);
+  const upstreamAuthHeaders: Record<string, string> =
+    !isOpenCode && config.upstreamApiKey?.trim()
+      ? { authorization: `Bearer ${config.upstreamApiKey.trim()}` }
+      : {};
 
   let targetOrigin: string;
   let targetPath: string;
@@ -160,19 +173,20 @@ export const buildTarget = (
     if (activePool.type === 'http') {
       return {
         url: upstreamUrl,
-        headers: {},
+        headers: upstreamAuthHeaders,
         agent: createTunnelAgent(activePool.proxyUrl),
       };
     }
     return {
       url: new URL(activePool.proxyUrl),
       headers: {
+        ...upstreamAuthHeaders,
         'x-relay-target': targetOrigin,
         'x-relay-path': targetPath,
       },
     };
   }
-  return { url: upstreamUrl, headers: {} };
+  return { url: upstreamUrl, headers: upstreamAuthHeaders };
 };
 
 export const KNOWN_FREE_MODELS = new Set([
@@ -244,10 +258,12 @@ type ModelsAnswer = { data?: Array<Record<string, unknown>> };
  * error the panel can show; it never turns into an empty successful list.
  */
 export const fetchModelIds = async (
-  config: Pick<RouterConfig, 'upstream' | 'proxyPools'>,
+  config: Pick<RouterConfig, 'upstream' | 'upstreamApiKey' | 'proxyPools'>,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ ids: string[]; free: string[]; rawEntries: Array<Record<string, unknown>> }> => {
   const target = buildTarget(config, 'models');
+  const isOpenCode = isOpenCodeUpstream(config.upstream);
+  const upstreamUserAgent = isOpenCode ? 'opencode/latest/2.0.26/cli' : 'BlackRouter/1.0';
   let payload: ModelsAnswer;
 
   if (target.agent && fetchImpl === fetch) {
@@ -262,7 +278,7 @@ export const fetchModelIds = async (
             headers: {
               accept: 'application/json',
               ...target.headers,
-              'user-agent': 'opencode/latest/2.0.26/cli',
+              'user-agent': upstreamUserAgent,
             },
           },
           (res) => {
@@ -307,7 +323,7 @@ export const fetchModelIds = async (
         headers: {
           accept: 'application/json',
           ...target.headers,
-          'user-agent': 'opencode/latest/2.0.26/cli',
+          'user-agent': upstreamUserAgent,
         },
         signal: AbortSignal.timeout(12_000),
       });
@@ -337,7 +353,9 @@ export const fetchModelIds = async (
   if (ids.length === 0) {
     throw upstreamError('The model list was empty. Check the proxy pool URL and status.');
   }
-  return { ids, free: freeModelIds(ids), rawEntries };
+  // OpenCode Zen exposes a mixed catalog; other compatible APIs expose the
+  // models they are configured to serve, without OpenCode-specific free suffixes.
+  return { ids, free: isOpenCode ? freeModelIds(ids) : ids, rawEntries };
 };
 
 const FORWARDED_RESPONSE_HEADERS = [
@@ -396,7 +414,7 @@ const AGGREGATE_LIMIT_BYTES = 8 * 1024 * 1024;
  * not ask for a stream gets the stream folded back into one JSON answer.
  */
 export const proxyChatCompletion = (
-  config: Pick<RouterConfig, 'upstream' | 'proxyPools' | 'fallbackModels' | 'modelCombos'>,
+  config: Pick<RouterConfig, 'upstream' | 'upstreamApiKey' | 'proxyPools' | 'fallbackModels' | 'modelCombos'>,
   session: string,
   prepared: PreparedChat,
   response: ServerResponse,
@@ -479,10 +497,7 @@ export const proxyChatCompletion = (
       // prepareChat already validated the request body; keep the original body
       // so the request still surfaces a useful conversion error below.
     }
-    const isOpenCode = (() => {
-      try { return new URL(config.upstream).hostname.toLowerCase().includes('opencode.ai'); }
-      catch { return false; }
-    })();
+    const isOpenCode = isOpenCodeUpstream(config.upstream);
     return {
       lane,
       body: prepareOpenCodeRequestBody(raw, lane, isOpenCode),
@@ -528,8 +543,8 @@ export const proxyChatCompletion = (
         method: 'POST',
         agent: target.agent,
         headers: {
+          ...(isOpenCodeUpstream(config.upstream) ? freeTierHeaders(session) : {}),
           ...target.headers,
-          ...freeTierHeaders(session),
           ...(lane === 'messages' ? { 'anthropic-version': '2023-06-01' } : {}),
           'content-type': 'application/json',
           accept: 'text/event-stream',

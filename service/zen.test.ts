@@ -134,6 +134,23 @@ describe('making a client body acceptable', () => {
     expect(parsed.messages[0].content).toBe(diff);
   });
 
+  test('does not inject OpenCode fingerprint tools or reasoning fields for a generic API', () => {
+    const prepared = prepareChat(
+      JSON.stringify({
+        model: 'gpt-5.6',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'hi' },
+        ],
+      }),
+      { rtkEnabled: false, openCodeFreeTier: false },
+    );
+    const parsed = JSON.parse(prepared.body);
+    expect(parsed.tools).toBeUndefined();
+    expect(parsed.messages[1].reasoning_content).toBeUndefined();
+    expect(parsed.stream).toBe(true);
+  });
+
   test('injects placeholder reasoning_content for assistant messages missing it', () => {
     const prepared = prepareChat(
       JSON.stringify({

@@ -159,6 +159,8 @@ export type PrepareChatOptions = {
   rtkEnabled?: boolean;
   cavemanLevel?: CavemanLevel;
   ponytailLevel?: PonytailLevel;
+  /** Whether the destination is OpenCode Zen and requires its free-tier client shape. */
+  openCodeFreeTier?: boolean;
 };
 
 /**
@@ -192,16 +194,19 @@ export const prepareChat = (raw: string, options?: boolean | PrepareChatOptions)
     effectiveOptions.ponytailLevel ?? 'off',
   );
 
-  ensureFreeTierTools(parsed);
+  const openCodeFreeTier = effectiveOptions.openCodeFreeTier ?? true;
+  if (openCodeFreeTier) {
+    ensureFreeTierTools(parsed);
 
-  // Zen reasoning models reject multi-turn history whose assistant messages
-  // carry no reasoning_content with 400 missing_required_parameter. Inject
-  // placeholder if missing.
-  if (Array.isArray(parsed.messages)) {
-    for (const msg of parsed.messages) {
-      if (isJsonObject(msg) && msg.role === 'assistant') {
-        if (typeof msg.reasoning_content !== 'string' || msg.reasoning_content.length === 0) {
-          msg.reasoning_content = ' ';
+    // Zen reasoning models reject multi-turn history whose assistant messages
+    // carry no reasoning_content with 400 missing_required_parameter. Inject
+    // placeholder if missing.
+    if (Array.isArray(parsed.messages)) {
+      for (const msg of parsed.messages) {
+        if (isJsonObject(msg) && msg.role === 'assistant') {
+          if (typeof msg.reasoning_content !== 'string' || msg.reasoning_content.length === 0) {
+            msg.reasoning_content = ' ';
+          }
         }
       }
     }
