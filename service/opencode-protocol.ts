@@ -383,7 +383,12 @@ const parseFrame = (frame: string): SseFrame | null => {
 };
 
 const responseErrorMessage = (payload: AnyObject): string => {
-  const error = payload.error && typeof payload.error === 'object' ? payload.error as AnyObject : payload;
+  const response = payload.response && typeof payload.response === 'object' ? payload.response as AnyObject : {};
+  const error = payload.error && typeof payload.error === 'object'
+    ? payload.error as AnyObject
+    : response.error && typeof response.error === 'object'
+      ? response.error as AnyObject
+      : payload;
   return typeof error.message === 'string' ? error.message : JSON.stringify(error);
 };
 
@@ -488,11 +493,7 @@ export const createOpenCodeResponseTransform = (lane: OpenCodeLane, requestedMod
       const name = typeof item.name === 'string' ? item.name : '';
       if (name) emitToolStart(index, callId, name);
       const args = typeof item.arguments === 'string' ? item.arguments : '';
-      if (args) {
-        responseToolArgs.set(index, args);
-        responseToolArgsDeltaSeen.add(index);
-        emitChunk({ tool_calls: [{ index, id: callId, type: 'function', function: { arguments: args } }] });
-      }
+      if (args) responseToolArgs.set(index, args);
       return;
     }
     if (type === 'response.function_call_arguments.delta' || type === 'response.custom_tool_call_input.delta') {
@@ -525,7 +526,7 @@ export const createOpenCodeResponseTransform = (lane: OpenCodeLane, requestedMod
         const itemId = typeof payload.item_id === 'string' ? payload.item_id : (typeof item.id === 'string' ? item.id : '');
         const callId = typeof item.call_id === 'string' ? item.call_id : itemId;
         const index = responseToolIndices.get(itemId) ?? responseToolIndices.get(callId);
-        const args = typeof item.arguments === 'string' ? item.arguments : '';
+        const args = typeof item.arguments === 'string' ? item.arguments : (index === undefined ? '' : responseToolArgs.get(index) ?? '');
         if (index !== undefined && args && !responseToolArgsDeltaSeen.has(index)) {
           responseToolArgsDeltaSeen.add(index);
           responseToolArgs.set(index, args);
