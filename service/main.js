@@ -5328,10 +5328,8 @@ var aggregateStream = (text) => {
 import { Transform } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 var cleanModelId = (modelId) => {
-  let clean = modelId.replace(/\([^()]+\)\s*$/, "").trim();
-  if (clean.includes("/"))
-    clean = clean.split("/").pop() ?? clean;
-  return clean.trim();
+  const clean = modelId.replace(/\([^()]+\)\s*$/, "").trim();
+  return clean.startsWith("blackrouter/") ? clean.slice("blackrouter/".length) : clean;
 };
 var resolveOpenCodeLane = (upstream, modelId) => {
   let isOpenCode = false;
@@ -6464,8 +6462,8 @@ var MAX_FALLBACK_MODELS = 2;
 var MAX_MODELS_PER_REQUEST = MAX_FALLBACK_MODELS + 1;
 var canonicalModelId = (modelId) => {
   const trimmed = modelId.trim().replace(/\([^()]+\)\s*$/, "").trim();
-  const bare = trimmed.includes("/") ? trimmed.split("/").pop() ?? trimmed : trimmed;
-  return bare.toLowerCase();
+  const upstreamId = trimmed.startsWith("blackrouter/") ? trimmed.slice("blackrouter/".length) : trimmed;
+  return upstreamId.toLowerCase();
 };
 var resolveModelCandidates = (requestedModel, configuredFallbacks = []) => {
   const result = [];
