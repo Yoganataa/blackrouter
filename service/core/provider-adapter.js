@@ -23,6 +23,43 @@ const normalizeHeaders = (headers) => Object.fromEntries(
 );
 
 /**
+ * The native executor currently appends fingerprint placeholders in OpenAI
+ * Chat shape for every non-Responses body. After the native OpenAI -> Claude
+ * translator, normalize only those appended placeholders to Messages shape.
+ */
+const normalizeMessagesFingerprintTools = (body) => {
+  if (!body || typeof body !== "object" || !Array.isArray(body.tools)) return body;
+
+  const injectedNames = [];
+  body.tools = body.tools.map((tool) => {
+    const fn = tool?.function;
+    if (!fn || !["read", "shell"].includes(fn.name)) return tool;
+    injectedNames.push(fn.name);
+    return {
+      name: fn.name,
+      description: fn.description,
+      input_schema: fn.parameters || { type: "object", properties: {} },
+    };
+  });
+
+  if (injectedNames.length > 0) {
+    const names = [...new Set(injectedNames)];
+    const list = names.length > 1 ? "read and shell" : names[0];
+    const note = "Do not call the " + list + " tool" + (names.length > 1 ? "s" : "") +
+      "; they are placeholders that do nothing. Use the other tools you have been given instead.";
+    if (typeof body.system === "string" && body.system.trim()) {
+      body.system += "\n\n" + note;
+    } else if (Array.isArray(body.system)) {
+      body.system.push({ type: "text", text: note });
+    } else {
+      body.system = note;
+    }
+  }
+  return body;
+};
+
+
+/**
  * Prepare a request using the native OpenCode provider executor and native
  * request translators. BlackRouter only supplies a dispatch adapter so its
  * direct/HTTP/relay pool transport remains intact.
@@ -48,13 +85,18 @@ export const prepareProviderRequest = async ({ model, body, session, rawHeaders 
     credentials,
     providerSessionId: session,
     clientTool: "generic",
-    dispatch: async ({ url, headers, body: outboundBody, responseFormat }) => ({
+    dispatch: async ({ url, headers, body: outboundBody, responseFormat }) => {
+      const transportBody = responseFormat === "claude"
+        ? normalizeMessagesFingerprintTools(outboundBody)
+        : outboundBody;
+      return {
       url: new URL(url),
       headers: normalizeHeaders(headers),
-      body: JSON.stringify(outboundBody),
+      body: JSON.stringify(transportBody),
       responseFormat,
       lane: responseFormat === "openai-responses" ? "responses" : responseFormat === "claude" ? "messages" : "chat",
-    }),
+      };
+    },
   });
   return prepared;
 };
