@@ -537,7 +537,6 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
 
           lastError = `HTTP ${status}: ${resultText.slice(0, 300)}`;
           if (status !== 429) break;
-          const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
           if (!pool && activePoolCount === 0) {
             directRateLimitedUntil = Date.now() + parseRetryAfterMs(retryAfter);
             lastError = `HTTP 429: upstream rate-limited; retry after approximately ${Math.ceil((directRateLimitedUntil - Date.now()) / 1000)} seconds.`;
