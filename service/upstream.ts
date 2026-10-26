@@ -173,7 +173,7 @@ export const buildTarget = (
     targetPath = call === 'models'
       ? '/zen/v1/models'
       : nativeUrl
-        ? \`\${nativeUrl.pathname}\${nativeUrl.search}\`
+        ? nativeUrl.pathname + nativeUrl.search
         : resolveOpencodePath(call, modelId);
   } else {
     targetOrigin = `${parsed.protocol}//${parsed.host}`;
