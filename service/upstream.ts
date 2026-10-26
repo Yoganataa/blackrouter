@@ -788,7 +788,7 @@ export const proxyChatCompletion = (
       directAbort = new AbortController();
       void nativeDirectFetch(target.url, { method: 'POST', headers: requestHeaders, body: upstreamBody, signal: AbortSignal.any([directAbort.signal, AbortSignal.timeout(120_000)]) })
         .then((fetched) => {
-          const body = fetched.body ? Readable.fromWeb(fetched.body as ReadableStream<Uint8Array>) : Readable.from([]);
+          const body = fetched.body ? Readable.fromWeb(fetched.body as unknown as import('node:stream/web').ReadableStream<Uint8Array>) : Readable.from([]);
           const wrapped = body as unknown as http.IncomingMessage;
           Object.defineProperty(wrapped, 'statusCode', { value: fetched.status });
           Object.defineProperty(wrapped, 'headers', { value: Object.fromEntries(fetched.headers.entries()) });
