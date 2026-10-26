@@ -36,7 +36,7 @@ describe('native provider core', () => {
 
     expect(prepared.url.toString()).toBe('https://opencode.ai/inference/v1/chat/completions');
     expect(prepared.headers.authorization).toBe('Bearer public');
-    expect(prepared.headers['user-agent']).toBe('opencode/latest/2.0.26/cli');
+    expect(prepared.headers['user-agent']).toBe('opencode/latest/2.1.4/cli');
     expect(prepared.headers['x-opencode-session']).toBe(session);
     expect(prepared.headers['x-opencode-session-id']).toBe(session);
 
@@ -45,6 +45,45 @@ describe('native provider core', () => {
     const names = body.tools.map((tool: any) => tool?.function?.name ?? tool?.name);
     expect(names).toContain('read');
     expect(names).toContain('shell');
+  });
+
+
+  test('translates foreign conversation sessions to a current timestamp and reuses them', async () => {
+    const before = Date.now();
+    const first = await prepareProviderRequest({
+      model: 'big-pickle',
+      body: { model: 'big-pickle', messages: [{ role: 'user', content: 'hello' }], stream: true },
+      session: 'claude:timestamp-regression',
+    });
+    const after = Date.now();
+    const session = first.headers['x-opencode-session'];
+    const prefix = BigInt('0x' + session.slice(4, 16));
+    const decoded = Number((~prefix & ((1n << 48n) - 1n)) >> 12n);
+    const mod = 2 ** 36;
+    const distance = Math.min((decoded - (before % mod) + mod) % mod, ((before % mod) - decoded + mod) % mod);
+    expect(distance).toBeLessThanOrEqual(after - before + 1000);
+
+    const second = await prepareProviderRequest({
+      model: 'big-pickle',
+      body: { model: 'big-pickle', messages: [{ role: 'user', content: 'continue' }], stream: true },
+      session: 'claude:timestamp-regression',
+    });
+    expect(second.headers['x-opencode-session']).toBe(session);
+  });
+
+  test('adds an OpenCode environment marker without replacing caller instructions', async () => {
+    const prepared = await prepareProviderRequest({
+      model: 'muse-spark-1.3-contributor-free',
+      body: { model: 'muse-spark-1.3-contributor-free', messages: [
+        { role: 'system', content: 'Preserve my system instructions.' },
+        { role: 'user', content: 'hello' },
+      ], stream: true },
+      session: sessionId(),
+    });
+    const body = JSON.parse(prepared.body);
+    expect(body.instructions).toContain('Preserve my system instructions.');
+    expect(body.instructions).toContain('<env>');
+    expect(body.instructions).toContain('Workspace root folder:');
   });
 
   test('preserves a map for caller tools renamed by the native executor', async () => {
