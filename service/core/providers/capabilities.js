@@ -13,5 +13,5 @@ const CAPABILITIES = {
 export function getCapabilitiesForModel(_provider, model) {
   const clean = String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
   const id = clean.includes("/") ? clean.split("/").pop() : clean;
-  return CAPABILITIES[id] || { reasoning: false, maxOutput: 64000 };
+  return CAPABILITIES[id] || { reasoning: false, contextWindow: 200000, maxOutput: 64000 };
 }
