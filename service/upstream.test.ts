@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test';
 
 import type { RouterConfig } from '../contract.ts';
 import { buildTarget, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels } from './upstream.ts';
+// @ts-ignore - the native provider executor is copied from upstream JavaScript.
+import { prepareProviderRequest } from './core/provider-adapter.js';
 
 const config = (overrides: Partial<RouterConfig> = {}): RouterConfig => ({
   version: 1,
@@ -62,20 +64,31 @@ describe('the free pool', () => {
   });
 });
 
+const nativeRequest = (model: string) => prepareProviderRequest({
+  model,
+  body: { model, messages: [{ role: 'user', content: 'hello' }], stream: true },
+  session: 'ses_0123456789abcdefghijklmn',
+});
+
 describe('where a call goes', () => {
-  test('direct calls route to opencode v2 endpoints', () => {
+  test('native provider executor resolves OpenCode v2 endpoints', async () => {
     const models = buildTarget(config(), 'models');
     expect(models.url.toString()).toBe('https://opencode.ai/zen/v1/models');
     expect(models.headers).toEqual({});
 
-    const chat = buildTarget(config({ upstream: 'https://opencode.ai/zen/v1/' }), 'chat');
+    const chatNative = await nativeRequest('blackrouter/big-pickle');
+    const chat = buildTarget(config({ upstream: 'https://opencode.ai/zen/v1/' }), 'chat', null, chatNative.url);
     expect(chat.url.toString()).toBe('https://opencode.ai/inference/v1/chat/completions');
+    expect(JSON.parse(chatNative.body).model).toBe('big-pickle');
 
-    const museChat = buildTarget(config(), 'chat', null, 'muse-spark-1.3-contributor-free');
+    const museNative = await nativeRequest('blackrouter/muse-spark-1.3-contributor-free');
+    const museChat = buildTarget(config(), 'chat', null, museNative.url);
     expect(museChat.url.toString()).toBe('https://opencode.ai/inference/v1/responses');
 
-    const unionChat = buildTarget(config(), 'chat', null, 'union-alpha');
+    const unionNative = await nativeRequest('blackrouter/union-alpha');
+    const unionChat = buildTarget(config(), 'chat', null, unionNative.url);
     expect(unionChat.url.toString()).toBe('https://opencode.ai/inference/v1/messages');
+    expect(JSON.parse(unionNative.body).model).toBe('union-alpha');
 
     const custom = buildTarget(config({ upstream: 'https://custom-gateway.local/v1' }), 'chat');
     expect(custom.url.toString()).toBe('https://custom-gateway.local/v1/chat/completions');
@@ -104,7 +117,7 @@ describe('where a call goes', () => {
     expect(isOpenCodeUpstream('https://api.example.com/v1')).toBe(false);
   });
 
-  test('a proxy pool takes x-relay-target and x-relay-path matching 9router spec', () => {
+  test('a proxy pool preserves the native provider endpoint in relay headers', async () => {
     const poolConfig = config({
       proxyPools: [
         {
@@ -116,7 +129,8 @@ describe('where a call goes', () => {
         },
       ],
     });
-    const chat = buildTarget(poolConfig, 'chat');
+    const native = await nativeRequest('blackrouter/big-pickle');
+    const chat = buildTarget(poolConfig, 'chat', undefined, native.url);
     expect(chat.url.toString()).toBe('https://relay.example.dev/');
     expect(chat.headers).toEqual({
       'x-relay-target': 'https://opencode.ai',
@@ -131,7 +145,7 @@ describe('where a call goes', () => {
     });
   });
 
-  test('a standard forward proxy (http) connects to upstream with tunnel agent', () => {
+  test('a standard forward proxy (http) connects to native endpoint with tunnel agent', async () => {
     const poolConfig = config({
       proxyPools: [
         {
@@ -143,7 +157,8 @@ describe('where a call goes', () => {
         },
       ],
     });
-    const chat = buildTarget(poolConfig, 'chat');
+    const native = await nativeRequest('blackrouter/big-pickle');
+    const chat = buildTarget(poolConfig, 'chat', undefined, native.url);
     expect(chat.url.toString()).toBe('https://opencode.ai/inference/v1/chat/completions');
     expect(chat.headers).toEqual({});
     expect(chat.agent).toBeDefined();
@@ -188,7 +203,7 @@ describe('where a call goes', () => {
     expect(capturedHeaders).toEqual(['Bearer sk-provider-secret', 'BlackRouter/1.0']);
   });
 
-  test('respects explicit poolOverride passed from pool selector', () => {
+  test('respects explicit poolOverride while preserving the native endpoint', async () => {
     const poolConfig = config();
     const specificPool = {
       id: 'custom-deno',
@@ -197,7 +212,8 @@ describe('where a call goes', () => {
       proxyUrl: 'https://custom-deno.deno.dev',
       isActive: true,
     };
-    const chat = buildTarget(poolConfig, 'chat', specificPool);
+    const native = await nativeRequest('blackrouter/big-pickle');
+    const chat = buildTarget(poolConfig, 'chat', specificPool, native.url);
     expect(chat.url.toString()).toBe('https://custom-deno.deno.dev/');
     expect(chat.headers['x-relay-target']).toBe('https://opencode.ai');
   });
