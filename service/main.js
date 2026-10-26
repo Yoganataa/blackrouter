@@ -6643,6 +6643,20 @@ var RELAY_FILES = {
   netlify: path4.join("relays", "netlify", "functions", "relay.mjs"),
   deno: path4.join("relays", "deno", "main.ts")
 };
+var normalizeTestSse = (raw, lane, model, toolNameMap) => {
+  if (!lane) return Promise.resolve(raw);
+  const transform = lane === "chat"
+    ? createToolNameRestoreTransform(toolNameMap)
+    : createOpenCodeResponseTransform(lane, model, toolNameMap);
+  if (!transform) return Promise.resolve(raw);
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    transform.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    transform.on("error", reject);
+    transform.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    transform.end(raw);
+  });
+};
 var createRuntime = (store = createConfigStore()) => {
   let config = store.load();
   const runtimeSession = sessionId();
@@ -6998,6 +7012,9 @@ var createRuntime = (store = createConfigStore()) => {
             retryAfter = answer.headers.get("retry-after") ?? undefined;
           }
           if (status >= 200 && status < 300) {
+            if (nativeRequest) {
+              resultText = await normalizeTestSse(resultText, nativeRequest.lane, modelId, nativeRequest.toolNameMap);
+            }
             const aggregated = aggregateStream(resultText);
             const choices = Array.isArray(aggregated.choices) ? aggregated.choices : [];
             const firstChoice = choices[0];
