@@ -24,7 +24,7 @@ import {
   type TestProxyPoolResult,
   type UpdateProxyPoolInput,
 } from '../contract.ts';
-import { createApiKey, createConfigStore, type ConfigStore } from './config.ts';
+import { createApiKey, createConfigStore, preserveProxyPoolCredentials, redactProxyUrlCredentials, type ConfigStore } from './config.ts';
 import {
   deployCloudflare as executeDeployCloudflare,
   deployDeno as executeDeployDeno,
@@ -182,7 +182,14 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
       running: router !== null,
       routerError,
       endpoint: endpointFor(config),
-      config: { ...config, upstreamApiKey: '' },
+      config: {
+        ...config,
+        upstreamApiKey: '',
+        proxyPools: config.proxyPools.map((pool) => ({
+          ...pool,
+          proxyUrl: redactProxyUrlCredentials(pool.proxyUrl),
+        })),
+      },
       upstreamApiKeyConfigured: Boolean(config.upstreamApiKey?.trim()),
       models,
       modelsFetchedAt,
@@ -307,7 +314,9 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
           : patch.selectedModels ?? previous.selectedModels,
         fallbackModels: patch.fallbackModels ?? previous.fallbackModels,
         modelCombos: patch.modelCombos ?? previous.modelCombos,
-        proxyPools: patch.proxyPools ?? previous.proxyPools,
+        proxyPools: patch.proxyPools !== undefined
+          ? preserveProxyPoolCredentials(previous.proxyPools, patch.proxyPools)
+          : previous.proxyPools,
         proxyStrategy: patch.proxyStrategy ?? previous.proxyStrategy,
         activePoolId: patch.activePoolId !== undefined ? patch.activePoolId : previous.activePoolId,
         stickyLimit: patch.stickyLimit ?? previous.stickyLimit,
