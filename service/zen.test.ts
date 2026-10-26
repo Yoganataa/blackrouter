@@ -290,7 +290,6 @@ describe('native provider core', () => {
 describe('upstream OpenCode fingerprint collision normalization', () => {
   test('normalizes host-specific shell wording in place when the schema is compatible', async () => {
     // @ts-ignore - upstream helper is JavaScript and intentionally retains source parity.
-    // @ts-ignore - upstream helper is JavaScript and intentionally retains source parity.
     const { concealFingerprintToolNames } = await import('./core/utils/opencodeFingerprint.js');
     const shell = {
       type: 'function',
