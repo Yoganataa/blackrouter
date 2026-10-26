@@ -1,14 +1,14 @@
 import { OpenCodeExecutor, generateSessionId } from "./executors/opencode.js";
 import { FORMATS } from "./translator/formats.js";
 import { translateRequest } from "./translator/index.js";
+import { PROVIDERS } from "./config/providers.js";
 
 const cleanModelId = (model) => String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
 const targetFormatForModel = (model) => {
   const clean = cleanModelId(model);
   const base = clean.includes("/") ? clean.split("/").pop() : clean;
-  if (/^muse[-_]?spark(?:$|[-_:.\s])/i.test(base)) return FORMATS.OPENAI_RESPONSES;
-  if (/^union[-_]?alpha(?:$|[-_:.\s])/i.test(base)) return FORMATS.CLAUDE;
-  return FORMATS.OPENAI;
+  const registryEntry = (PROVIDERS.opencode.models || []).find((entry) => entry.id === base);
+  return registryEntry?.targetFormat || FORMATS.OPENAI;
 };
 
 const normalizeHeaders = (headers) => Object.fromEntries(
