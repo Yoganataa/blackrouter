@@ -8085,6 +8085,7 @@ var isOpenCodeUpstream = (upstream) => {
     return false;
   }
 };
+var isOpenCodeFreeTierGateResponse = (status, body, isOpenCode, usedProxyPool) => status === 403 && isOpenCode && usedProxyPool && body.includes("FreeTierError");
 var hasSameUpstreamOrigin = (left, right) => {
   try {
     return new URL(left).origin === new URL(right).origin;
@@ -8344,11 +8345,12 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
   let lastRequestedModel = prepared.model;
   const fallbackReasons = [];
   const rateLimitedPoolIds = new Set;
+  const failedPoolIds = new Set;
   const advanceToNextAttempt = () => {
     let nextIndex = attemptIndex + 1;
     while (nextIndex < attempts.length) {
       const nextAttempt = attempts[nextIndex];
-      if (nextAttempt?.pool && rateLimitedPoolIds.has(nextAttempt.pool.id)) {
+      if (nextAttempt?.pool && (rateLimitedPoolIds.has(nextAttempt.pool.id) || failedPoolIds.has(nextAttempt.pool.id))) {
         nextIndex += 1;
         continue;
       }
@@ -8433,6 +8435,56 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       const retryAfterHeader = answer.headers["retry-after"];
       const retryAfter = typeof retryAfterHeader === "string" ? retryAfterHeader : undefined;
       const isShortDirect429 = status === 429 && candidate === null && retryAfter !== undefined && parseRetryAfterMs(retryAfter) <= 2000;
+
+      if (status === 403 && candidate && isOpenCodeUpstream(config.upstream)) {
+        const maxInspectableErrorBytes = 256 * 1024;
+        const chunks = [];
+        let inspectedBytes = 0;
+        let inspecting = true;
+        answer.on("data", (raw) => {
+          const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+          if (!inspecting) {
+            if (!response.destroyed && !response.writableEnded) response.write(chunk);
+            return;
+          }
+          chunks.push(chunk);
+          inspectedBytes += chunk.length;
+          if (inspectedBytes > maxInspectableErrorBytes) {
+            inspecting = false;
+            const routeHeaders = routingHeaders(attempt);
+            response.writeHead(status, { ...responseHeaders(answer.headers), ...routeHeaders });
+            for (const buffered of chunks) response.write(buffered);
+            chunks.length = 0;
+          }
+        });
+        answer.on("end", () => {
+          if (!inspecting) {
+            if (!response.destroyed && !response.writableEnded) response.end();
+            return;
+          }
+          const bodyBuffer = Buffer.concat(chunks);
+          const bodyText = bodyBuffer.toString("utf8");
+          if (isOpenCodeFreeTierGateResponse(status, bodyText, true, true)) {
+            failedPoolIds.add(candidate.id);
+            if (advanceToNextAttempt()) {
+              fallbackReasons.push(`HTTP 403 FreeTierError on proxy pool ${candidate.name}`);
+              sendAttempt();
+              return;
+            }
+          }
+          const routeHeaders = routingHeaders(attempt);
+          response.writeHead(status, { ...responseHeaders(answer.headers), ...routeHeaders });
+          response.end(bodyBuffer);
+        });
+        answer.on("error", (error) => {
+          if (!response.headersSent) {
+            writeOpenAiError(response, 502, `Could not read the upstream error response: ${error.message}`, "upstream_unreachable");
+          } else {
+            response.destroy(error);
+          }
+        });
+        return;
+      }
       if (status === 429) {
         if (candidate)
           rateLimitedPoolIds.add(candidate.id);
