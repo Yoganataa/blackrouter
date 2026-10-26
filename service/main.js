@@ -5483,6 +5483,7 @@ var aggregateStream = (text) => {
 // service/opencode-protocol.ts
 import { Transform as Transform3 } from "node:stream";
 import { StringDecoder as StringDecoder3 } from "node:string_decoder";
+import { restoreToolNames } from "./core/utils/opencodeFingerprint.js";
 var cleanModelId = (modelId) => {
   const clean = modelId.replace(/\([^()]+\)\s*$/, "").trim();
   return clean.startsWith("blackrouter/") ? clean.slice("blackrouter/".length) : clean;
@@ -5504,12 +5505,66 @@ var parseFrame = (frame) => {
   return { event, data: data.join(`
 `) };
 };
+var createToolNameRestoreTransform = (toolNameMap) => {
+  if (!toolNameMap || !toolNameMap.size) return null;
+  const decoder = new StringDecoder3("utf8");
+  let buffer = "";
+  let stream;
+  const processFrame = (rawFrame) => {
+    const frame = parseFrame(rawFrame);
+    if (!frame || frame.data === "[DONE]") {
+      stream.push(Buffer.from(rawFrame + "\n\n"));
+      return;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(frame.data);
+    } catch {
+      stream.push(Buffer.from(rawFrame + "\n\n"));
+      return;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      stream.push(Buffer.from(rawFrame + "\n\n"));
+      return;
+    }
+    const restored = restoreToolNames(parsed, toolNameMap);
+    const eventLine = frame.event ? "event: " + frame.event + "\n" : "";
+    stream.push(Buffer.from(eventLine + "data: " + JSON.stringify(restored) + "\n\n"));
+  };
+  stream = new Transform3({
+    transform(chunk, _encoding, callback) {
+      try {
+        buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
+        let separator = /\r?\n\r?\n/.exec(buffer);
+        while (separator && separator.index !== undefined) {
+          const frame = buffer.slice(0, separator.index);
+          buffer = buffer.slice(separator.index + separator[0].length);
+          processFrame(frame);
+          separator = /\r?\n\r?\n/.exec(buffer);
+        }
+        callback();
+      } catch (error) {
+        callback(error instanceof Error ? error : new Error(String(error)));
+      }
+    },
+    flush(callback) {
+      try {
+        buffer += decoder.end();
+        if (buffer.trim()) processFrame(buffer);
+        callback();
+      } catch (error) {
+        callback(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+  });
+  return stream;
+};
 var responseErrorMessage = (payload) => {
   const response = payload.response && typeof payload.response === "object" ? payload.response : {};
   const error = payload.error && typeof payload.error === "object" ? payload.error : response.error && typeof response.error === "object" ? response.error : payload;
   return typeof error.message === "string" ? error.message : JSON.stringify(error);
 };
-var createOpenCodeResponseTransform = (lane, requestedModel) => {
+var createOpenCodeResponseTransform = (lane, requestedModel, toolNameMap) => {
   if (lane === "chat")
     return null;
   const decoder = new StringDecoder("utf8");
@@ -5534,9 +5589,8 @@ var createOpenCodeResponseTransform = (lane, requestedModel) => {
   let messageToolCount = 0;
   let messageStopReason = "end_turn";
   const emitData = (payload) => {
-    stream.push(Buffer.from(`data: ${JSON.stringify(payload)}
-
-`));
+    const restored = toolNameMap && toolNameMap.size ? restoreToolNames(payload, toolNameMap) : payload;
+    stream.push(Buffer.from("data: " + JSON.stringify(restored) + "\n\n"));
   };
   const emitChunk = (delta, finish = null, usage) => {
     const chunk = {
@@ -6263,7 +6317,8 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       lane: native.lane,
       body: native.body,
       headers: native.headers,
-      url: native.url
+      url: native.url,
+      toolNameMap: native.toolNameMap
     };
   };
   const sendAttempt = async () => {
@@ -6281,12 +6336,14 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
     let upstreamBody;
     let nativeHeaders = {};
     let nativeUrl;
+    let nativeToolNameMap = null;
     try {
       const preparedForModel = await modelAwareBody(attempt.model);
       lane = preparedForModel.lane;
       upstreamBody = preparedForModel.body;
       nativeHeaders = preparedForModel.headers ?? {};
       nativeUrl = preparedForModel.url;
+      nativeToolNameMap = preparedForModel.toolNameMap ?? null;
     } catch (error) {
       writeOpenAiError(response, 400, error instanceof Error ? error.message : "Could not prepare the native provider request.", "invalid_request");
       return;
@@ -6342,7 +6399,7 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
         return;
       }
       const contentType = typeof answer.headers["content-type"] === "string" ? answer.headers["content-type"].toLowerCase() : "";
-      const protocolTransform = lane !== "chat" && contentType.includes("text/event-stream") ? createOpenCodeResponseTransform(lane, attempt.model) : null;
+      const protocolTransform = contentType.includes("text/event-stream") ? lane === "chat" ? createToolNameRestoreTransform(nativeToolNameMap) : createOpenCodeResponseTransform(lane, attempt.model, nativeToolNameMap) : null;
       const successHeaders = {
         ...responseHeaders(answer.headers),
         ...routeHeaders
