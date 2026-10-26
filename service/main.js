@@ -6335,7 +6335,6 @@ var prepareChat = (raw, options) => {
     throw new Error("The request body has no messages.");
   }
   const effectiveOptions = typeof options === "boolean" ? { rtkEnabled: options } : options ?? {};
-  applyTokenSaverStyles(parsed, effectiveOptions.cavemanLevel ?? "off", effectiveOptions.ponytailLevel ?? "off");
   const openCodeFreeTier = effectiveOptions.openCodeFreeTier ?? true;
   if (openCodeFreeTier) {
     ensureFreeTierTools(parsed);
@@ -6353,6 +6352,7 @@ var prepareChat = (raw, options) => {
   if (rtkEnabled) {
     compressMessages(parsed, true);
   }
+  applyTokenSaverStyles(parsed, effectiveOptions.cavemanLevel ?? "off", effectiveOptions.ponytailLevel ?? "off");
   if (parsed.max_completion_tokens !== undefined && parsed.max_tokens === undefined) {
     parsed.max_tokens = parsed.max_completion_tokens;
   }
