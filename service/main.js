@@ -9398,7 +9398,8 @@ function autoDetectFilter(text) {
     return ls;
   if (SEARCH_LIST_HEADER_RE.test(head))
     return searchList;
-  if (lines.length >= SMART_TRUNCATE_MIN_LINES && isLineNumbered(lines)) {
+  const totalLines = 1 + (text.match(/\n/g)?.length ?? 0);
+  if (totalLines >= SMART_TRUNCATE_MIN_LINES && isLineNumbered(text.split("\n", 100))) {
     return readNumbered;
   }
   if (nonEmpty.length >= 5)
@@ -9594,7 +9595,7 @@ function compressText(text, stats, shape) {
 }
 
 // service/rtk.ts
-var compressMessages2 = (body, enabled) => {
+var compressMessages2 = (body, enabled = true) => {
   const stats = compressMessages(body, enabled);
   return Boolean(stats?.hits?.length);
 };
