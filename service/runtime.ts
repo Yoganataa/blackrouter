@@ -47,10 +47,36 @@ import { createRequestHistoryStore, REQUEST_HISTORY_LIMIT } from './request-hist
 import { parseRetryAfterMs } from './retry-after.ts';
 import { startRouterServer, type RouterServer } from './router-server.ts';
 import { aggregateStream } from './sse.ts';
+import { createOpenCodeResponseTransform, createToolNameRestoreTransform, type OpenCodeLane } from './opencode-protocol.ts';
 import { buildTarget, fetchModelIds, hasSameUpstreamOrigin, isOpenCodeUpstream, toModels } from './upstream.ts';
 import { prepareChat, sessionId } from './zen.ts';
 // @ts-ignore - the selected provider core is copied from upstream JavaScript.
 import { prepareProviderRequest } from './core/provider-adapter.js';
+
+
+const normalizeTestSse = (
+  raw: string,
+  lane: OpenCodeLane | undefined,
+  model: string,
+  toolNameMap?: Map<string, string> | null,
+): Promise<string> => {
+  if (!lane) return Promise.resolve(raw);
+  const transform = lane === 'chat'
+    ? createToolNameRestoreTransform(toolNameMap)
+    : createOpenCodeResponseTransform(lane, model, toolNameMap);
+  if (!transform) return Promise.resolve(raw);
+
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    transform.on('data', (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    transform.on('error', reject);
+    transform.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    transform.end(raw);
+  });
+};
+
 
 /**
  * The state the service keeps while it runs, and the operations every route
@@ -444,7 +470,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         if (pool && attempted.has(pool.id)) break;
         if (pool) attempted.add(pool.id);
         try {
-          let nativeRequest: { url?: URL; headers?: Record<string, string>; body?: string; lane?: string } | null = null;
+          let nativeRequest: { url?: URL; headers?: Record<string, string>; body?: string; lane?: OpenCodeLane; toolNameMap?: Map<string, string> | null } | null = null;
           if (isOpenCodeUpstream(config.upstream)) {
             const parsedBody = JSON.parse(prepared.body) as Record<string, unknown>;
             nativeRequest = await prepareProviderRequest({ model: modelId, body: parsedBody, session: runtimeSession });
@@ -497,6 +523,14 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
           }
 
           if (status >= 200 && status < 300) {
+            if (nativeRequest) {
+              resultText = await normalizeTestSse(
+                resultText,
+                nativeRequest.lane,
+                modelId,
+                nativeRequest.toolNameMap,
+              );
+            }
             const aggregated = aggregateStream(resultText);
             const choices = Array.isArray(aggregated.choices) ? aggregated.choices : [];
             const firstChoice = choices[0] as { message?: { content?: string } } | undefined;
