@@ -9,7 +9,7 @@ import type { ProxyPool, RouterConfig, RouterModel } from '../contract.ts';
 import { upstreamError } from './errors.ts';
 import { resolveModelMetadata } from './model-metadata.ts';
 import { aggregateStream } from './sse.ts';
-import { createOpenCodeResponseTransform, resolveOpenCodeLane } from './opencode-protocol.ts';
+import { createOpenCodeResponseTransform, type OpenCodeLane } from './opencode-protocol.ts';
 import type { PreparedChat } from './zen.ts';
 // @ts-ignore - the selected provider core is copied from upstream JavaScript.
 import { prepareProviderRequest } from './core/provider-adapter.js';
@@ -501,7 +501,7 @@ export const proxyChatCompletion = (
   });
 
   const modelAwareBody = async (model: string): Promise<{
-    lane: ReturnType<typeof resolveOpenCodeLane>;
+    lane: OpenCodeLane;
     body: string;
     headers?: Record<string, string>;
     url?: URL;
@@ -526,7 +526,7 @@ export const proxyChatCompletion = (
     // translation, request identity, body normalization, and headers.
     const native = await prepareProviderRequest({ model, body, session });
     return {
-      lane: native.lane as ReturnType<typeof resolveOpenCodeLane>,
+      lane: native.lane as OpenCodeLane,
       body: native.body as string,
       headers: native.headers as Record<string, string>,
       url: native.url as URL,
@@ -548,7 +548,7 @@ export const proxyChatCompletion = (
 
     lastRequestedModel = attempt.model;
     const candidate = attempt.pool;
-    let lane: ReturnType<typeof resolveOpenCodeLane>;
+    let lane: OpenCodeLane;
     let upstreamBody: string;
     let nativeHeaders: Record<string, string> = {};
     let nativeUrl: URL | undefined;
