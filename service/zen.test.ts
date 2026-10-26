@@ -282,7 +282,7 @@ describe('upstream OpenCode fingerprint collision normalization', () => {
     };
     const { tools, map } = concealFingerprintToolNames([shell]);
     expect(map.size).toBe(0);
-    expect(tools.map((tool: any) => tool.function?.name ?? tool.name)).toEqual(['shell', 'read']);
+    expect(tools.map((tool: any) => tool.function?.name ?? tool.name)).toEqual(['shell']);
     expect((tools[0] as any).function.description).toContain('Linux using bash');
     expect(tools.some((tool: any) => tool.function?.name === 'shell_client')).toBe(false);
   });
