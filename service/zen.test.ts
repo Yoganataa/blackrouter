@@ -1,5 +1,49 @@
 import { describe, expect, test } from 'bun:test';
 
+import {
+  applyEnvFingerprint,
+  applyFingerprintTools,
+} from './core/utils/opencodeFingerprint.js';
+import { translateSessionId } from './core/executors/opencode.js';
+
+describe('official OpenCode free-tier regressions adapted from 9Router #5222', () => {
+  test('adds the CLI environment marker without replacing caller instructions', () => {
+    const responses = { instructions: 'Keep answers brief.' };
+    expect(applyEnvFingerprint(responses, true)).toBe(true);
+    expect(responses.instructions).toContain('Keep answers brief.');
+    expect(responses.instructions).toContain('<env>');
+    expect(responses.instructions).toContain('Working directory:');
+  });
+
+  test('does not duplicate an existing CLI environment marker', () => {
+    const body = { instructions: 'Caller prompt\\n<env>\\nexisting\\n</env>' };
+    expect(applyEnvFingerprint(body, true)).toBe(false);
+    expect(body.instructions.match(/<env>/g)).toHaveLength(1);
+  });
+
+  test('fingerprints OpenCode read/shell tools and accepts host shell wording', () => {
+    const body = { tools: [], messages: [{ role: 'user', content: 'hello' }] };
+    applyFingerprintTools(body, false);
+    const shell = body.tools.find((tool) => tool.function?.name === 'shell');
+    expect(shell).toBeDefined();
+    expect(shell.function.description).toContain('Execute a shell command');
+    expect(shell.function.parameters.required).toEqual(['command']);
+  });
+
+  test('uses a current-time, stable translated session for foreign conversation ids', () => {
+    const id = translateSessionId('claude:conversation-5222-regression', 'claude');
+    expect(id).toMatch(SESSION_RE);
+    expect(translateSessionId('claude:conversation-5222-regression', 'claude')).toBe(id);
+    const timestampField = BigInt('0x' + id.slice(4, 16));
+    const counter = Number((~timestampField) & 0xfffn);
+    expect(counter).toBe(1);
+    const decodedTime = Number((~timestampField) >> 12n);
+    expect(Math.abs(Date.now() - decodedTime)).toBeLessThan(10_000);
+  });
+});
+
+
+
 import { prepareChat, sessionId } from './zen.ts';
 // @ts-ignore - the selected provider core is copied from upstream JavaScript.
 import { prepareProviderRequest } from './core/provider-adapter.js';
