@@ -121,7 +121,7 @@ describe('provider response stream adapters', () => {
       'data: [DONE]',
       '',
       '',
-    ].join('\\n');
+    ].join('\n');
     const output = await collectRestored(input, new Map());
     const chunks = parseOpenAiChunks(output);
 
