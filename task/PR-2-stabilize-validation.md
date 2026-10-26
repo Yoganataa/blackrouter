@@ -25,7 +25,7 @@ Use `goals.md` as the project source of truth and follow `BR-SCOPE-1.0`: MUST be
 - [x] Confirm unit tests and build were skipped by CI after type-check failed.
 
 ### Fix and verify
-- [ ] Fix the Web ReadableStream type mismatch in `service/upstream.ts` around line 791.
+- [/] Apply the Node Web ReadableStream type assertion in `service/upstream.ts` around line 791; compile/CI verification is still pending.
 - [ ] Resolve missing TypeScript declarations/import typing for the upstream JavaScript modules imported by `service/zen.test.ts`.
 - [ ] Correct the test fixture types and narrowing errors in `service/zen.test.ts` (`function`, optional `shell`, and top-level `system`).
 - [ ] Run `bun run type-check` and confirm it passes.
@@ -51,8 +51,8 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 
 ## Session handoff
 
-**Current state:** Audit is complete; code fixes and validation are not complete. A prior write attempt was blocked and did not change source files. Do not treat any unchecked item as done.
+**Current state:** Audit is complete. First source fix committed as `b49c87f2ffa9df96ac18cc3377bf008da8c9ce89`; the Web ReadableStream type assertion has not yet been validated by TypeScript/CI. A prior write attempt was blocked and did not change source files. Do not treat any unchecked item as done.
 
-**Next action:** Fetch the current branch versions of `service/upstream.ts` and `service/zen.test.ts`, make the smallest type-safe fixes that preserve runtime behavior, then run/review CI before marking items complete.
+**Next action:** Verify the stream type fix through the latest CI/type-check result. Then address the `service/zen.test.ts` typing failures as the next discrete task.
 
 **Update protocol:** After each work session, update this file with the actual status, changed files/commit SHA, commands or CI evidence, remaining blockers, and the next concrete action. Only check an item after verifying it.
