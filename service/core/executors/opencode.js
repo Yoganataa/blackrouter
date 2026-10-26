@@ -417,7 +417,7 @@ export class OpenCodeExecutor extends BaseExecutor {
             return fetch(url, options);
           }
           throw error;
-        },
+        }
       },
     });
   }
