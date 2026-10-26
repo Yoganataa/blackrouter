@@ -27,10 +27,33 @@ const parseFrame = (frame: string): SseFrame | null => {
   return { event, data: data.join('\n') };
 };
 
+// Matches the OpenCode Free passthrough quirk in the official registry:
+ // some lanes (notably mimo-v2.6-flash-free) emit reasoning under the OpenRouter
+ // aliases `reasoning` and `reasoning_details[]`. Lift only when the canonical
+ // reasoning_content field is absent; preserve aliases for clients that use them.
+const liftReasoningAliases = (delta: AnyObject): AnyObject => {
+  if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) return delta;
+  if (typeof delta.reasoning === 'string' && delta.reasoning) {
+    return { ...delta, reasoning_content: delta.reasoning };
+  }
+  if (Array.isArray(delta.reasoning_details)) {
+    const text = delta.reasoning_details
+      .map((part: unknown) => {
+        if (typeof part === 'string') return part;
+        if (!part || typeof part !== 'object') return '';
+        const value = part as AnyObject;
+        return typeof value.text === 'string' ? value.text
+          : typeof value.content === 'string' ? value.content : '';
+      })
+      .join('');
+    if (text) return { ...delta, reasoning_content: text };
+  }
+  return delta;
+};
+
 export const createToolNameRestoreTransform = (
   toolNameMap?: Map<string, string> | null,
 ): Transform | null => {
-  if (!toolNameMap?.size) return null;
 
   const decoder = new StringDecoder('utf8');
   let buffer = '';
@@ -79,7 +102,16 @@ export const createToolNameRestoreTransform = (
       stream.push(Buffer.from(rawFrame + '\n\n'));
       return;
     }
-    const restored = restoreToolNames(parsed as AnyObject, toolNameMap);
+    const payload = parsed as AnyObject;
+    if (Array.isArray(payload.choices)) {
+      payload.choices = payload.choices.map((choice: unknown) => {
+        if (!choice || typeof choice !== 'object') return choice;
+        const item = choice as AnyObject;
+        if (!item.delta || typeof item.delta !== 'object' || Array.isArray(item.delta)) return item;
+        return { ...item, delta: liftReasoningAliases(item.delta as AnyObject) };
+      });
+    }
+    const restored = restoreToolNames(payload, toolNameMap);
     const eventLine = frame.event ? `event: ${frame.event}\n` : '';
     stream.push(Buffer.from(`${eventLine}data: ${JSON.stringify(restored)}\n\n`));
   };
