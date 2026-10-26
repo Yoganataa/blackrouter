@@ -62,30 +62,28 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 
 ## Latest session checkpoint (2026-10-26)
 
-**Phase:** TypeScript remediation + automated quality gate — validated by GitHub Actions. Full MVP acceptance is still pending host/transport smoke tests.
+**Phase:** CI-backed egress-policy regression coverage — implemented and validated. MVP host-level acceptance remains incomplete.
 
-- [x] Fixed the Node Web ReadableStream type incompatibility and upstream JavaScript import typing.
-- [x] Preserved the shell fingerprint assertion and added explicit structural fixture types.
-- [x] CI type-check passes on commit `fcd631ed9d3d789809ff4333e85c43533e28dfc1`.
-- [x] Fixed a real runtime defect in `service/core/utils/opencodeFingerprint.js`: the normalization path called undefined `canNormalizeInPlace` and `withFingerprintDefinition` helpers. Added helpers that normalize only accepted OpenCode fingerprint descriptions with a compatible subset schema; custom schemas remain aliased.
-- [x] Corrected the Messages regression test to inspect Anthropic `system` content blocks instead of incorrectly treating the field as a string. Its type model now reflects the actual string-or-content-block shape and fails explicitly if content blocks are absent.
-- [x] CI unit tests pass: **146 passed, 0 failed across 15 files** (run `40349762310`).
-- [x] CI build passes; workflow regenerated and committed `service/main.js` in `93398269be734273ceec1f21ed9c510251606906`; verified the generated bundle contains `canNormalizeInPlace`.
-- [x] Confirm the successful source CI run generated the bundle and inspect its committed output; `service/main.js` contains the fingerprint normalization helper.
-- [ ] Inspect the generated bundle diff and ensure source/runtime behavior remains synchronized.
+- [x] Type-check passes on the previous validated source commit.
+- [x] Unit tests pass: **147 passed, 0 failed across 15 files** on commit `32379478efc085b3330176494a740e5f2ed85b87`.
+- [x] Added an integration regression test for OpenCode's `403 FreeTierError` when both configured relay pools are rejected. The test asserts BlackRouter returns the final upstream 403/body and only attempts the two configured relay pools; it must not escape through direct egress.
+- [x] CI build passed and confirmed shipped bundles were already synchronized; no bundle change was required for this test-only commit.
+- [x] Inspected generated `service/main.js`; it includes the previously added fingerprint normalization helper.
 - [ ] Verify OpenChamber host load and the primary OpenCode Zen Free inference path with an actual valid response.
-- [ ] Verify direct, HTTP proxy, and relay paths separately, including no silent direct-egress fallback.
+- [ ] Verify direct, HTTP proxy, and relay paths separately in a running environment.
 - [ ] Verify streaming/non-streaming, cancellation/timeouts, Test Model, loopback default, and credential redaction.
 - [ ] Check all MUST requirements in `goals.md` / `BR-SCOPE-1.0` against implementation and evidence.
 
-**CI evidence:** [Run 40349762310](https://github.com/Yoganataa/blackrouter/actions/runs/40349762310) completed successfully through type-check, unit tests, and build. Test output: 146 pass / 0 fail. The workflow committed regenerated `service/main.js` as `9339826f`. Earlier runs failed because of (1) missing fingerprint normalization helpers and (2) the test assuming Messages `system` was a string; those were fixed in source and tests without weakening behavioral assertions. Do not claim the OpenCode end-to-end path or transport/security requirements are complete until smoke-tested.
+**CI evidence:** [Run 40358099361](https://github.com/Yoganataa/blackrouter/actions/runs/40358099361) completed successfully. Type-check and build passed; unit tests report **147 pass / 0 fail**. The new integration case is in `service/model-fallback.integration.test.ts` and specifically covers a configured OpenCode relay route where both pools return `403 FreeTierError`.
 
-**Latest source fixes:** `ed019186c7b81ce8e79fa676a681b1c5f07213f7` adds the missing fingerprint helpers; `b9d57e57e16e92ee43fce9b610a96058ceda4cdb` corrects Messages system assertions; `fcd631ed9d3d789809ff4333e85c43533e28dfc1` corrects the test fixture type. Bundle generation commit: `93398269be734273ceec1f21ed9c510251606906`.
+**Previous source/build evidence:** [Run 40349762310](https://github.com/Yoganataa/blackrouter/actions/runs/40349762310) passed type-check, 146 tests, and bundle build. Build-generated `service/main.js` commit is `93398269be734273ceec1f21ed9c510251606906`.
+
+**Latest code change:** `32379478efc085b3330176494a740e5f2ed85b87` adds the egress-policy regression test. It does not weaken existing assertions and does not change runtime source.
 
 ## Session handoff
 
-**Current state:** The TypeScript gate, all 146 unit tests, and bundle build have passed in GitHub Actions. The build regenerated `service/main.js` and pushed commit `9339826f`. The current phase is not fully complete: generated-bundle CI confirmation and live OpenChamber/OpenCode plus direct/proxy/relay smoke tests remain.
+**Current state:** Type-check, 147 unit/integration tests, and build passed in CI. The bundle is synchronized. Egress policy now has an integration regression test for the case where OpenCode rejects all configured relay pools; the original failure response is preserved and no direct route is attempted.
 
-**Next action:** Confirm the latest branch head and CI status after the generated-bundle push; inspect the generated service bundle diff. Then perform or obtain evidence for the primary OpenCode Zen Free inference flow and transport/security acceptance checks. Do not mark an unchecked item complete without evidence.
+**Next action:** Continue MUST acceptance validation: inspect/validate the full request lifecycle and configuration/security boundaries, then run OpenChamber host-level and live OpenCode Zen Free smoke tests where an executable environment is available. The repository CI does not by itself prove the upstream provider currently responds or that the extension loads in the host application.
 
 **Update protocol:** After each work session, update this file with actual status, changed files/commit SHA, commands or CI evidence, remaining blockers, and the next concrete action. Only check an item after verifying it.
