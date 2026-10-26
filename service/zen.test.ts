@@ -270,7 +270,7 @@ describe('native provider core', () => {
 
 
 describe('upstream OpenCode fingerprint collision normalization', () => {
-  test('normalizes host-specific shell wording in place when the schema is compatible', () => {
+  test('normalizes host-specific shell wording in place when the schema is compatible', async () => {
     const { concealFingerprintToolNames } = await import('./core/utils/opencodeFingerprint.js');
     const shell = {
       type: 'function',
