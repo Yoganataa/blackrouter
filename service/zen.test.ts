@@ -302,6 +302,14 @@ describe('upstream OpenCode fingerprint collision normalization', () => {
   });
 });
 
+describe('native TLS transport is passed through', () => {
+  test('exposes a callable direct TLS fetch on native OpenCode Free requests', async () => {
+    const prepared = await prepareProviderRequest({ model: 'oc/big-pickle', body: { model: 'oc/big-pickle', messages: [{ role: 'user', content: 'Hello' }] }, session: 'tls-seam-test' });
+    expect(typeof prepared.directFetch).toBe('function');
+    expect(prepared.url.toString()).toContain('/inference/v1/chat/completions');
+  });
+});
+
 describe('preparing a client chat body', () => {
   test('forces upstream streaming while preserving the client output preference', () => {
     const streamed = prepareChat(JSON.stringify({ model: 'x-free', messages: [{ role: 'user', content: 'hi' }], stream: true }));
