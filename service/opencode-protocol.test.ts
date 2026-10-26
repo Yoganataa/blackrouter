@@ -110,4 +110,26 @@ describe('provider response stream adapters', () => {
     expect(output).toContain('data: [DONE]');
   });
 
+  test('lifts OpenCode Free reasoning aliases for OpenAI clients', async () => {
+    const input = [
+      'data: ' + JSON.stringify({ id: 'chatcmpl_reasoning', choices: [{ index: 0, delta: { reasoning: 'think A' } }] }),
+      '',
+      'data: ' + JSON.stringify({ id: 'chatcmpl_reasoning', choices: [{ index: 0, delta: { reasoning_details: [{ text: 'think B' }, { content: ' think C' }] } }] }),
+      '',
+      'data: ' + JSON.stringify({ id: 'chatcmpl_reasoning', choices: [{ index: 0, delta: { reasoning_content: 'canonical' } }] }),
+      '',
+      'data: [DONE]',
+      '',
+      '',
+    ].join('\\n');
+    const output = await collectRestored(input, new Map());
+    const chunks = parseOpenAiChunks(output);
+
+    expect(chunks[0]?.choices?.[0]?.delta?.reasoning_content).toBe('think A');
+    expect(chunks[0]?.choices?.[0]?.delta?.reasoning).toBe('think A');
+    expect(chunks[1]?.choices?.[0]?.delta?.reasoning_content).toBe('think B think C');
+    expect(chunks[2]?.choices?.[0]?.delta?.reasoning_content).toBe('canonical');
+    expect(output).toContain('data: [DONE]');
+  });
+
 });
