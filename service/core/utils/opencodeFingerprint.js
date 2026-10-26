@@ -123,6 +123,38 @@ function withToolName(tool, name) {
 }
 
 /**
+ * A caller may already use OpenCode's fingerprint name and platform-specific
+ * description, but expose a compatible subset of the native schema. In that
+ * case normalize the existing declaration in place instead of aliasing it and
+ * creating a duplicate fingerprint tool. Reject unrelated/custom schemas.
+ */
+function canNormalizeInPlace(tool, key) {
+  const def = chatFunctionOf(tool) || tool;
+  if (!ACCEPTED_FINGERPRINT_DESCRIPTIONS[key].has(def.description)) return false;
+
+  const actual = def.parameters;
+  const expected = FINGERPRINT_TOOL_PARAMETERS[key];
+  if (!actual || actual.type !== "object" || !actual.properties || typeof actual.properties !== "object") return false;
+  if (!Array.isArray(actual.required) || JSON.stringify(actual.required) !== JSON.stringify(expected.required)) return false;
+
+  for (const [name, property] of Object.entries(actual.properties)) {
+    const nativeProperty = expected.properties[name];
+    if (!nativeProperty || property?.type !== nativeProperty.type) return false;
+  }
+  return true;
+}
+
+/** Replace a compatible caller declaration with the canonical OpenCode schema. */
+function withFingerprintDefinition(tool, key) {
+  const definition = FINGERPRINT_TOOL_DEFINITIONS[key];
+  const fn = chatFunctionOf(tool);
+  if (fn) {
+    return { ...tool, function: { ...fn, description: definition.description, parameters: definition.parameters } };
+  }
+  return { ...tool, description: definition.description, parameters: definition.parameters, strict: false };
+}
+
+/**
  * Move caller tools off the fingerprint names when their definition differs
  * from OpenCode's, so the exact definitions can be appended without a
  * duplicate name. Everything else, including case variants such as `Read`, is
