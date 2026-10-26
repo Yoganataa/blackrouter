@@ -134,6 +134,50 @@ describe('model fallback request path', () => {
         return;
       }
 
+      if (request.url === '/pool-gate-test') {
+        await readRequestBody(request);
+        const address = server.address();
+        if (!address || typeof address === 'string') {
+          response.writeHead(500);
+          response.end('No listener address');
+          return;
+        }
+        poolAttempts.length = 0;
+        const pools: ProxyPool[] = [
+          { id: 'gate-a', name: 'Gate A', type: 'cloudflare', proxyUrl: `http://127.0.0.1:${address.port}/gate-a`, isActive: true },
+          { id: 'gate-b', name: 'Gate B', type: 'cloudflare', proxyUrl: `http://127.0.0.1:${address.port}/gate-b`, isActive: true },
+        ];
+        proxyChatCompletion(
+          { ...configFor(address.port), upstream: 'https://opencode.ai/zen/v1', fallbackModels: [], proxyPools: pools },
+          'ses_gate_test',
+          {
+            model: 'big-pickle',
+            stream: true,
+            body: JSON.stringify({
+              model: 'big-pickle',
+              stream: true,
+              messages: [{ role: 'user', content: 'Reply with OK.' }],
+            }),
+          },
+          response,
+          pools[0],
+          () => {},
+        );
+        return;
+      }
+
+      if (request.url === '/gate-a' || request.url === '/gate-b') {
+        const body = JSON.parse(await readRequestBody(request)) as { model?: string };
+        const poolName = request.url.slice(1);
+        poolAttempts.push(`${poolName}:${body.model ?? ''}`);
+        response.writeHead(403, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+          type: 'FreeTierError',
+          error: { message: `OpenCode rejected egress through ${poolName}` },
+        }));
+        return;
+      }
+
       if (request.url === '/pool-a' || request.url === '/pool-b') {
         const body = JSON.parse(await readRequestBody(request)) as { model?: string };
         const model = body.model ?? '';
@@ -267,6 +311,22 @@ describe('model fallback request path', () => {
     expect(response.headers.get('x-blackrouter-fallback-used')).toBe('true');
     expect(body).toContain('OK');
     expect(requestedModels).toEqual(['primary-model', 'fallback-model']);
+  });
+
+  test('does not bypass configured relay pools after OpenCode rejects every pool', async () => {
+    poolAttempts.length = 0;
+    const response = await fetch(`${baseUrl}/pool-gate-test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: true }),
+    });
+    const body = await response.text();
+
+    expect(response.status).toBe(403);
+    expect(body).toContain('FreeTierError');
+    expect(body).toContain('OpenCode rejected egress through gate-b');
+    expect(response.headers.get('x-blackrouter-resolved-pool')).toBe('Gate B');
+    expect(poolAttempts).toEqual(['gate-a:big-pickle', 'gate-b:big-pickle']);
   });
 
   test('does not revisit a pool after 429 while trying model fallbacks', async () => {
