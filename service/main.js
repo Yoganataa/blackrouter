@@ -8799,7 +8799,7 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       for (const [name, value] of Object.entries(routeHeaders))
         response.setHeader(name, value);
       writeOpenAiError(response, 502, `The upstream did not answer for ${lastRequestedModel}: ${error.message}`, "upstream_unreachable", routeHeaders);
-    });
+    };
     let upstream = null;
     let directAbort = null;
     if (usesNativeDirectTransport && nativeDirectFetch) {
