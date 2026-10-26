@@ -5873,7 +5873,7 @@ var liftReasoningAliases = (delta) => {
         return part;
       if (!part || typeof part !== "object")
         return "";
-      return typeof part.text === "string" ? part.text : typeof part.content === "string" ? part.content : "";
+      return typeof part.text === "string" && part.text ? part.text : typeof part.content === "string" ? part.content : "";
     }).join("");
     if (text)
       return { ...delta, reasoning_content: text };
