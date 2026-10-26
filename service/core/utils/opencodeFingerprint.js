@@ -45,38 +45,6 @@ const FINGERPRINT_TOOL_PARAMETERS = {
   },
 };
 
-// OpenCode derives the shell description's OS wording from the tool host
-// (tool/plugin/shell.ts: "Commands run on ${OS} using ${shell}.", with dev builds
-// sending Windows=powershell, macOS=zsh, Linux=bash). Every real wording is
-// accepted: #4971/#5157 — a Windows-worded caller `shell` used to be renamed
-// and leak a placeholder note because only the Linux form matched.
-const SHELL_DESCRIPTION_HEAD = "Execute a shell command and return its output.";
-const SHELL_DESCRIPTION_TAIL = "Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.";
-const SHELL_PLATFORM_WORDINGS = {
-  linux: "Linux using bash",
-  darwin: "macOS using zsh",
-  win32: "Windows using powershell",
-};
-
-function shellDescription(platform) {
-  const wording = SHELL_PLATFORM_WORDINGS[platform] ?? SHELL_PLATFORM_WORDINGS.linux;
-  return `${SHELL_DESCRIPTION_HEAD} Commands run on ${wording}. ${SHELL_DESCRIPTION_TAIL}`;
-}
-
-const ACCEPTED_FINGERPRINT_DESCRIPTIONS = {
-  read: new Set([READ_DESCRIPTION]),
-  shell: new Set(Object.keys(SHELL_PLATFORM_WORDINGS).map((platform) => shellDescription(platform))),
-};
-
-// Runtime values shared by the shell wording and the `<env>` marker below so a
-// request tells one consistent platform story, like a real CLI instance.
-const HOST_PLATFORM = process.platform || "linux";
-
-const FINGERPRINT_TOOL_DEFINITIONS = {
-  read: { description: READ_DESCRIPTION, parameters: FINGERPRINT_TOOL_PARAMETERS.read },
-  shell: { description: shellDescription(HOST_PLATFORM), parameters: FINGERPRINT_TOOL_PARAMETERS.shell },
-};
-
 // Request body -> names renamed for that request. transformRequest() mutates the
 // same body object that chatCore passed into the executor, so a WeakMap keeps the
 // mapping request-local without putting transport metadata on the wire.
