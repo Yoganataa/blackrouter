@@ -30,6 +30,17 @@ describe('official OpenCode free-tier regressions adapted from 9Router #5222', (
     expect(shell.function.parameters.required).toEqual(['command']);
   });
 
+
+  test('fingerprints Messages requests in the top-level system field', () => {
+    const body = { tools: [], messages: [{ role: 'user', content: 'hello' }] };
+    applyFingerprintTools(body, false, { claude: true });
+    expect(body.system).toContain('<env>');
+    expect(body.system).toContain('Working directory:');
+    expect(body.messages.some((message: { role?: string }) => message.role === 'system')).toBe(false);
+    const shell = body.tools.find((tool: { function?: { name?: string } }) => tool.function?.name === 'shell');
+    expect(shell).toBeDefined();
+  });
+
   test('uses a current-time, stable translated session for foreign conversation ids', () => {
     const id = translateSessionId('claude:conversation-5222-regression', 'claude');
     expect(id).toMatch(SESSION_RE);
@@ -37,7 +48,7 @@ describe('official OpenCode free-tier regressions adapted from 9Router #5222', (
     const timestampField = BigInt('0x' + id.slice(4, 16));
     const counter = Number((~timestampField) & 0xfffn);
     expect(counter).toBe(1);
-    const decodedTime = Number((~timestampField) >> 12n);
+    const decodedTime = Number(((~timestampField) & ((1n << 48n) - 1n)) >> 12n);
     expect(Math.abs(Date.now() - decodedTime)).toBeLessThan(10_000);
   });
 });
