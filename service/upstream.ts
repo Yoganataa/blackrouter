@@ -376,7 +376,6 @@ const responseHeaders = (headers: http.IncomingHttpHeaders): Record<string, stri
   return picked;
 };
 
-export 
 /**
  * Keep SSE clients alive while the upstream has sent headers but is still
  * waiting for its first data frame. Mirrors official 9Router PR #5167 using
@@ -416,7 +415,7 @@ export const createSseFirstByteKeepAlive = (keepAliveMs = Number(process.env.SSE
   return stream;
 };
 
-const writeJson = (
+export const writeJson = (
   response: ServerResponse,
   status: number,
   body: unknown,
