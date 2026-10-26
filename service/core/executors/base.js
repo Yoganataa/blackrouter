@@ -40,6 +40,6 @@ export class BaseExecutor {
       responseFormat,
       ...options,
     });
-    return { ...result, url, headers, transformedBody, responseFormat };
+    return { ...result, nativeUrl: url, nativeHeaders: headers, transformedBody, responseFormat: result.responseFormat || responseFormat };
   }
 }
