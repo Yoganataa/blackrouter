@@ -75,6 +75,22 @@ describe('native provider core', () => {
     expect(names).toContain('shell');
   });
 
+  test('uses the native Chat route for unlisted OpenCode Free models', async () => {
+    const prepared = await prepareProviderRequest({
+      model: 'blackrouter/mimo-v2.6-flash-free',
+      body: {
+        model: 'blackrouter/mimo-v2.6-flash-free',
+        messages: [{ role: 'user', content: 'hello' }],
+        stream: true,
+      },
+      session: sessionId(),
+    });
+
+    expect(prepared.url.toString()).toBe('https://opencode.ai/inference/v1/chat/completions');
+    expect(JSON.parse(prepared.body).model).toBe('mimo-v2.6-flash-free');
+    expect(prepared.lane).toBe('chat');
+  });
+
   test('native translator and executor select the Responses endpoint for Muse Spark', async () => {
     const prepared = await prepareProviderRequest({
       model: 'muse-spark-1.3-contributor-free',
