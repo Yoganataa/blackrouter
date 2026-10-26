@@ -6971,9 +6971,9 @@ var createRuntime = (store = createConfigStore()) => {
           const testHeaders = {
             ...isOpenCodeUpstream(config.upstream) ? nativeRequest?.headers ?? {} : {},
             ...target.headers,
-            "Content-Type": "application/json",
-            Accept: "text/event-stream",
-            "Content-Length": String(Buffer.byteLength(outboundBody))
+            "content-type": "application/json",
+            accept: "text/event-stream",
+            "content-length": String(Buffer.byteLength(outboundBody))
           };
           let resultText = "";
           let status = 200;
