@@ -29,8 +29,8 @@ https://opencode.ai/inference/v1/chat/completions (OpenCode Free models)
   - One-click deployment from panel via API tokens.
 - **Caveman & Ponytail**: Optional prompt profiles for concise answers and minimal code changes; both default to Off and preserve technical literals and safety checks.
 - **RTK (Repetitive Tool Knowledge) Token Saver**:
-  - Uses the vendored 9Router RTK implementation to compact `git diff`, `git status`, `git log`, build output, `grep`, `find`, `ls`, `tree`, Cursor search lists, line-numbered reads, duplicate logs, and large unstructured output.
-  - Upstream source revision and per-file blob hashes are recorded in `service/vendor/9router-rtk/UPSTREAM.md`; the implementation remains separate from the OpenChamber adapter.
+  - Uses the upstream RTK implementation to compact `git diff`, `git status`, `git log`, build output, `grep`, `find`, `ls`, `tree`, Cursor search lists, line-numbered reads, duplicate logs, and large unstructured output.
+  - Upstream source revision and per-file blob hashes are recorded in `service/core/rtk/SOURCE.md`; the core implementation stays separate from the OpenChamber transport adapter.
   - Compression follows the pinned upstream thresholds and filter behavior.
 - **Named Model Combos**: Create up to 20 reusable aliases, each with 2–6 free models in priority order. For example, `blackrouter/combo/fast-coding`; each combo owns its own bounded fallback chain.
 - **Automatic Provider Registration**:
