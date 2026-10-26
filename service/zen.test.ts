@@ -47,6 +47,34 @@ describe('native provider core', () => {
     expect(names).toContain('shell');
   });
 
+  test('preserves a map for caller tools renamed by the native executor', async () => {
+    const prepared = await prepareProviderRequest({
+      model: 'blackrouter/big-pickle',
+      body: {
+        model: 'blackrouter/big-pickle',
+        messages: [{ role: 'user', content: 'Use my file-reading tool.' }],
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'read',
+            description: 'Caller-defined read tool.',
+            parameters: { type: 'object', properties: { path: { type: 'string' } } },
+          },
+        }],
+        stream: true,
+      },
+      session: sessionId(),
+    });
+
+    expect(prepared.toolNameMap).toBeInstanceOf(Map);
+    expect(prepared.toolNameMap.get('read_client')).toBe('read');
+    const body = JSON.parse(prepared.body);
+    const names = body.tools.map((tool: any) => tool?.function?.name ?? tool?.name);
+    expect(names).toContain('read_client');
+    expect(names).toContain('read');
+    expect(names).toContain('shell');
+  });
+
   test('native translator and executor select the Responses endpoint for Muse Spark', async () => {
     const prepared = await prepareProviderRequest({
       model: 'muse-spark-1.3-contributor-free',
