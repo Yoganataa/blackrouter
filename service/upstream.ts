@@ -120,6 +120,18 @@ export const isOpenCodeUpstream = (upstream: string): boolean => {
 };
 
 /** Keep credentials scoped to the origin where the user configured them. */
+/**
+ * OpenCode's flagged-egress error is eligible for a retry only when a proxy
+ * pool was used. Never make this condition imply an automatic direct-egress retry.
+ */
+export const isOpenCodeFreeTierGateResponse = (
+  status: number,
+  body: string,
+  isOpenCode: boolean,
+  usedProxyPool: boolean,
+): boolean =>
+  status === 403 && isOpenCode && usedProxyPool && body.includes('FreeTierError');
+
 export const hasSameUpstreamOrigin = (left: string, right: string): boolean => {
   try {
     return new URL(left).origin === new URL(right).origin;
@@ -493,6 +505,7 @@ export const proxyChatCompletion = (
   let lastRequestedModel = prepared.model;
   const fallbackReasons: string[] = [];
   const rateLimitedPoolIds = new Set<string>();
+  const failedPoolIds = new Set<string>();
 
   // An HTTP 429 cools down a whole pool in the runtime. Do not revisit that
   // pool later in this request just because the next model candidate is tried.
@@ -502,7 +515,7 @@ export const proxyChatCompletion = (
     let nextIndex = attemptIndex + 1;
     while (nextIndex < attempts.length) {
       const nextAttempt = attempts[nextIndex];
-      if (nextAttempt?.pool && rateLimitedPoolIds.has(nextAttempt.pool.id)) {
+      if (nextAttempt?.pool && (rateLimitedPoolIds.has(nextAttempt.pool.id) || failedPoolIds.has(nextAttempt.pool.id))) {
         nextIndex += 1;
         continue;
       }
@@ -616,6 +629,65 @@ export const proxyChatCompletion = (
           candidate === null &&
           retryAfter !== undefined &&
           parseRetryAfterMs(retryAfter) <= 2_000;
+
+        // A pool can return HTTP 403 with a successful transport when its
+        // egress is rejected by OpenCode's free-tier gate. Retry only through
+        // another already-configured pool; do not bypass the chosen egress.
+        if (status === 403 && candidate && isOpenCodeUpstream(config.upstream)) {
+          const maxInspectableErrorBytes = 256 * 1024;
+          const chunks: Buffer[] = [];
+          let inspectedBytes = 0;
+          let inspecting = true;
+          answer.on('data', (raw: Buffer | string) => {
+            const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+            if (!inspecting) {
+              if (!response.destroyed && !response.writableEnded) response.write(chunk);
+              return;
+            }
+            chunks.push(chunk);
+            inspectedBytes += chunk.length;
+            if (inspectedBytes > maxInspectableErrorBytes) {
+              inspecting = false;
+              const routeHeaders = routingHeaders(attempt);
+              response.writeHead(status, {
+                ...responseHeaders(answer.headers),
+                ...routeHeaders,
+              });
+              for (const buffered of chunks) response.write(buffered);
+              chunks.length = 0;
+            }
+          });
+          answer.on('end', () => {
+            if (!inspecting) {
+              if (!response.destroyed && !response.writableEnded) response.end();
+              return;
+            }
+            const bodyBuffer = Buffer.concat(chunks);
+            const bodyText = bodyBuffer.toString('utf8');
+            if (isOpenCodeFreeTierGateResponse(status, bodyText, true, true)) {
+              failedPoolIds.add(candidate.id);
+              if (advanceToNextAttempt()) {
+                fallbackReasons.push(`HTTP 403 FreeTierError on proxy pool ${candidate.name}`);
+                sendAttempt();
+                return;
+              }
+            }
+            const routeHeaders = routingHeaders(attempt);
+            response.writeHead(status, {
+              ...responseHeaders(answer.headers),
+              ...routeHeaders,
+            });
+            response.end(bodyBuffer);
+          });
+          answer.on('error', (error: Error) => {
+            if (!response.headersSent) {
+              writeOpenAiError(response, 502, `Could not read the upstream error response: ${error.message}`, 'upstream_unreachable');
+            } else {
+              response.destroy(error);
+            }
+          });
+          return;
+        }
 
         if (status === 429) {
           if (candidate) rateLimitedPoolIds.add(candidate.id);
