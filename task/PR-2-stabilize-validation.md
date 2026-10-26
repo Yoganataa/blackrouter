@@ -36,9 +36,9 @@ Work strictly one task at a time and report the result before moving to the next
 - [x] Confirm unit tests and build were skipped by CI after type-check failed.
 
 ### Fix and verify
-- [/] Apply the Node Web ReadableStream type assertion in `service/upstream.ts` around line 791; compile/CI verification is still pending.
-- [ ] Resolve missing TypeScript declarations/import typing for the upstream JavaScript modules imported by `service/zen.test.ts`.
-- [ ] Correct the test fixture types and narrowing errors in `service/zen.test.ts` (`function`, optional `shell`, and top-level `system`).
+- [/] Apply the Node Web ReadableStream type assertion in `service/upstream.ts` around line 791; source change is present, compile/CI verification is still pending.
+- [/] Add targeted `@ts-ignore` annotations only to imports of upstream JavaScript modules that intentionally have no declarations; TypeScript/CI verification is pending.
+- [/] Add explicit structural types for the fingerprint fixture and an explicit runtime failure if the required shell fingerprint is absent; verify with TypeScript/CI.
 - [ ] Run `bun run type-check` and confirm it passes.
 - [ ] Run `bun test` and review all failures.
 - [ ] Run `bun run build` and confirm the generated bundles are valid.
@@ -60,10 +60,28 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - [ ] `service/zen.test.ts(41,17)` and `(42,17)`: property `system` does not exist on the inferred fixture type.
 - [ ] `service/zen.test.ts(274,58)` and `(291,58)`: no declaration for `opencodeFingerprint.js`.
 
+## Latest session checkpoint (2026-10-26)
+
+**Phase:** TypeScript source-error remediation — edits applied, validation not yet proven.
+
+- [x] Inspected the current branch versions of `service/upstream.ts` and `service/zen.test.ts`.
+- [x] Applied the Node Web ReadableStream type assertion in `service/upstream.ts` (commit `b49c87f2ffa9df96ac18cc3377bf008da8c9ce89`).
+- [x] Added explicit fixture interfaces to prevent empty-array inference to `never[]` in `service/zen.test.ts`.
+- [x] Kept the shell fingerprint assertion meaningful: the test throws if the required shell fingerprint is missing; no assertion was removed or weakened.
+- [x] Added targeted TypeScript suppressions for imports of upstream JavaScript modules without declarations; runtime imports and test assertions remain intact.
+- [x] Committed the test typing edits through `bc767ad5d0819119f9afc98d584892b1a1000a57`.
+- [ ] Run `bun run type-check` and confirm all listed TypeScript diagnostics are gone.
+- [ ] Run `bun test` and investigate every failure without weakening tests.
+- [ ] Run `bun run build` and inspect generated `service/main.js`.
+
+**Evidence/blocker:** GitHub PR head is `bc767ad5d0819119f9afc98d584892b1a1000a57`. The GitHub commit-status query returned no status checks, and the workflow-run query returned no PR-triggered runs for the preceding commit. No local Bun execution has been performed in this session. Therefore, code edits are confirmed in the branch, but type-check/test/build are **not verified**.
+
+**Next action:** Obtain a real `bun run type-check` result (via a runnable environment or a new CI run); fix any remaining diagnostics based on that output. Do not mark the phase as validated until the command/CI confirms it.
+
 ## Session handoff
 
-**Current state:** Audit is complete. First source fix committed as `b49c87f2ffa9df96ac18cc3377bf008da8c9ce89`; the Web ReadableStream type assertion has not yet been validated by TypeScript/CI. A prior write attempt was blocked and did not change source files. Do not treat any unchecked item as done.
+**Current state:** Audit is complete. The stream type assertion and focused test-typing edits are committed, but no TypeScript/test/build result is available yet. A prior write attempt was blocked and did not change source files. Do not treat any unchecked item as done.
 
-**Next action:** First verify the stream type fix through CI/type-check. Do not proceed by weakening tests. Then fix the `service/zen.test.ts` type errors while preserving every assertion's behavioral intent; afterward validate the end-to-end native OpenCode MVP path.
+**Next action:** Verify the stream and `service/zen.test.ts` typing edits using `bun run type-check`. Preserve all test assertions; then run tests/build and validate the end-to-end native OpenCode MVP path.
 
 **Update protocol:** After each work session, update this file with the actual status, changed files/commit SHA, commands or CI evidence, remaining blockers, and the next concrete action. Only check an item after verifying it.
