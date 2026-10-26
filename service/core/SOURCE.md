@@ -42,9 +42,9 @@ native files remain baseline copies unless called out in their own notes.
 ## Selected upstream follow-up fixes
 
 The following official PR work was reviewed and selectively adapted for
-BlackRouter's free OpenCode lane and Node-stream transport. At the time of this
-update these upstream PRs were open; the PR URLs and source-head identifiers are
-kept here for auditability.
+BlackRouter's free OpenCode lane and Node-stream transport. Source heads and
+original PR URLs are kept for auditability; upstream PR state may change after
+this snapshot.
 
 - [decolua/9router#5222](https://github.com/decolua/9router/pull/5222),
   source head `e1add8a0a350e25b58380e8486e5acc491bb61f1`:
@@ -125,3 +125,11 @@ The actual request path is:
 
 The RTK source and its separate provenance table are recorded in
 [`rtk/SOURCE.md`](./rtk/SOURCE.md).
+
+
+## Validation additions from #5222
+
+- Added focused Bun tests in `service/zen.test.ts` for the native environment marker, non-duplication, canonical tool fingerprint, and current-time stable session translation.
+- The native executor and fingerprint helper were copied from official PR head `25878ce373e7e4f2b2143aaa72af7e4f20cd6c7a`, which includes the session-freshness follow-up commit `e1add8a0a350e25b58380e8486e5acc491bb61f1`.
+- The upstream fingerprint helper remains byte-for-byte identical to that selected source snapshot. The OpenChamber adapter remains local and is intentionally not replaced by the upstream dashboard/server stack.
+- The checked-in bundle still needs to be regenerated from the source build; this environment does not have Bun available, so bundle parity and live OpenChamber UI/runtime checks are not claimed.
