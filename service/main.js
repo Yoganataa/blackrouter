@@ -6384,7 +6384,34 @@ var CAPABILITIES = {
     contextWindow: 1048576,
     maxOutput: 131072
   },
-  "union-alpha": { vision: true, contextWindow: 262144, maxOutput: 131072 }
+  "union-alpha": { vision: true, contextWindow: 262144, maxOutput: 131072 },
+  "glm-5.3-flash-free": {
+    vision: true,
+    videoInput: true,
+    pdf: true,
+    reasoning: true,
+    thinkingFormat: "openai",
+    thinkingCanDisable: false,
+    contextWindow: 1000000,
+    maxOutput: 128000
+  },
+  "mimo-v2.6-flash-free": {
+    vision: true,
+    audioInput: true,
+    videoInput: true,
+    reasoning: true,
+    thinkingFormat: "openai",
+    thinkingCanDisable: true,
+    contextWindow: 1048576,
+    maxOutput: 131072
+  },
+  "deepseek-v4.1-flash-free": {
+    vision: true,
+    reasoning: true,
+    thinkingFormat: "deepseek",
+    contextWindow: 330000,
+    maxOutput: 128000
+  }
 };
 function getCapabilitiesForModel(_provider, model) {
   const clean = String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
@@ -6394,6 +6421,12 @@ function getCapabilitiesForModel(_provider, model) {
 
 // service/core/providers/thinkingLevels.js
 var OPENAI_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"];
+var OPENAI_LEVELS_WITH_MAX = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+var DEEPSEEK_FREE_LEVELS = ["low", "high", "max"];
+var MODEL_LEVELS = {
+  "mimo-v2.6-flash-free": OPENAI_LEVELS_WITH_MAX,
+  "deepseek-v4.1-flash-free": DEEPSEEK_FREE_LEVELS
+};
 function getThinkingLevels(provider, model) {
   if (provider !== "opencode")
     return null;
@@ -6402,7 +6435,10 @@ function getThinkingLevels(provider, model) {
   const capabilities = getCapabilitiesForModel(provider, id);
   if (!capabilities.reasoning)
     return null;
-  return capabilities.thinkingFormat === "openai" ? OPENAI_LEVELS : null;
+  const levels = MODEL_LEVELS[id] || (capabilities.thinkingFormat === "openai" ? OPENAI_LEVELS : capabilities.thinkingFormat === "deepseek" ? DEEPSEEK_FREE_LEVELS : null);
+  if (!levels)
+    return null;
+  return capabilities.thinkingCanDisable === false ? levels.filter((level) => level !== "none") : levels;
 }
 
 // service/core/utils/reasoningContentInjector.js
