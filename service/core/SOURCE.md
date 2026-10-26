@@ -152,3 +152,12 @@ The RTK source and its separate provenance table are recorded in
 - The OpenCode chat SSE adapter now lifts `reasoning` / `reasoning_details[]` into `reasoning_content` while preserving the original aliases, matching the official reasoning helper behavior.
 - The 330k context cap for `deepseek-v4.1-flash-free` was taken from official PR [#5179](https://github.com/decolua/9router/pull/5179). That PR is closed and unmerged, so this is a conservative local adaptation of its reported backend ceiling, not a claim that upstream accepted the patch.
 - These updates are regression-tested in `service/zen.test.ts` and `service/opencode-protocol.test.ts`, but those tests have not been run in this environment.
+
+
+## October 26 upstream TLS transport update
+
+- [decolua/9router#5235](https://github.com/decolua/9router/pull/5235) proposed a Bun sidecar but was closed by the maintainer. BlackRouter does not port that child-process design.
+- Adapted the official in-process transport from upstream commit [`ce060c79b9133b08c90ae7f7aaea49aa79afbfb3`](https://github.com/decolua/9router/commit/ce060c79b9133b08c90ae7f7aaea49aa79afbfb3): `services/opencodeTlsClient.js` and `services/lazyRuntime.js`, plus a writable-directory adapter scoped to `~/.openchamber/blackrouter`.
+- The TLS transport is passed through the native executor to inference and Test Model, and is used only for direct OpenCode Free requests. Configured proxy and relay pools keep their normal egress; BlackRouter will not silently bypass them.
+- The optional `wreq-js` runtime is lazy-loaded; if unavailable, the adapter falls back to native fetch. Bun tests, type-check, a clean generated build and live provider checks have not been run.
+- Adapted the newer fingerprint-tool collision normalizer from upstream commit [`483c10f597120d22295b091dea79fc38febe2b12`](https://github.com/decolua/9router/commit/483c10f597120d22295b091dea79fc38febe2b12); regression tests cover platform-specific shell wording and collision-safe alias fallback.
