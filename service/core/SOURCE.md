@@ -47,7 +47,7 @@ original PR URLs are kept for auditability; upstream PR state may change after
 this snapshot.
 
 - [decolua/9router#5222](https://github.com/decolua/9router/pull/5222),
-  source head `e1add8a0a350e25b58380e8486e5acc491bb61f1`:
+  source head `25878ce373e7e4f2b2143aaa72af7e4f20cd6c7a` (includes session follow-up `e1add8a0a350e25b58380e8486e5acc491bb61f1`):
   - align the synthetic OpenCode CLI User-Agent to `opencode/latest/2.1.4/cli`;
   - translate foreign conversation IDs to a valid current-time OpenCode session
     prefix and reuse that session for the same conversation/tool during its TTL;
@@ -67,6 +67,9 @@ this snapshot.
   adaptive-thinking normalization remain in the selected executor/adapter path.
   Unrelated 9Router dashboard, auth, paid-provider, database, and provider-account
   features are intentionally not copied into this OpenChamber extension.
+
+
+- [decolua/9router#5193](https://github.com/decolua/9router/pull/5193) (follow-up to #5149) was reviewed. BlackRouter's **Test Model** is deliberately a real, short inference request through the native executor—not the old synthetic `/zen/v1/models` connection probe. It keeps meaningful upstream error reporting; the catalog refresh remains separate and is tested with the current CLI-form User-Agent. This avoids copying the upstream dashboard's UI-specific “return green without a network call” trade-off into a model-test feature.
 
 ## Narrow integration adapters
 
