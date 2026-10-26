@@ -2,7 +2,7 @@ import http from 'node:http';
 import type { ServerResponse } from 'node:http';
 import https from 'node:https';
 import type { Socket } from 'node:net';
-import { pipeline } from 'node:stream';
+import { pipeline, Transform } from 'node:stream';
 import tls from 'node:tls';
 
 import type { ProxyPool, RouterConfig, RouterModel } from '../contract.ts';
@@ -376,7 +376,47 @@ const responseHeaders = (headers: http.IncomingHttpHeaders): Record<string, stri
   return picked;
 };
 
-export const writeJson = (
+export 
+/**
+ * Keep SSE clients alive while the upstream has sent headers but is still
+ * waiting for its first data frame. Mirrors official 9Router PR #5167 using
+ * BlackRouter's Node stream pipeline. The timer stops at the first data byte.
+ */
+const createSseFirstByteKeepAlive = (keepAliveMs = Number(process.env.SSE_KEEPALIVE_MS ?? 15_000)) => {
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let seenData = false;
+  const stream = new Transform({
+    transform(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null, data?: Buffer | string) => void) {
+      seenData = true;
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      callback(null, chunk);
+    },
+    flush(callback: (error?: Error | null) => void) {
+      if (timer) clearInterval(timer);
+      timer = null;
+      callback();
+    },
+  });
+  stream.once('pipe', () => {
+    if (!Number.isFinite(keepAliveMs) || keepAliveMs <= 0 || seenData) return;
+    timer = setInterval(() => {
+      if (!seenData && !stream.destroyed && !stream.writableEnded) {
+        stream.push(Buffer.from(': ping\\n\\n'));
+      }
+    }, keepAliveMs);
+    timer.unref?.();
+  });
+  stream.once('close', () => {
+    if (timer) clearInterval(timer);
+    timer = null;
+  });
+  return stream;
+};
+
+const writeJson = (
   response: ServerResponse,
   status: number,
   body: unknown,
@@ -632,8 +672,17 @@ export const proxyChatCompletion = (
         if (prepared.stream) {
           response.writeHead(status, successHeaders);
           const observer = createUsageObserver((usage) => onUsage?.(usage));
-          if (protocolTransform) {
+          const keepAliveMs = Number(process.env.SSE_KEEPALIVE_MS ?? 15_000);
+          const keepAlive = contentType.includes('text/event-stream') &&
+            Number.isFinite(keepAliveMs) && keepAliveMs > 0
+            ? createSseFirstByteKeepAlive(keepAliveMs)
+            : null;
+          if (protocolTransform && keepAlive) {
+            pipeline(answer, protocolTransform, observer, keepAlive, response, () => {});
+          } else if (protocolTransform) {
             pipeline(answer, protocolTransform, observer, response, () => {});
+          } else if (keepAlive) {
+            pipeline(answer, observer, keepAlive, response, () => {});
           } else {
             pipeline(answer, observer, response, () => {});
           }
