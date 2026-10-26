@@ -8,6 +8,13 @@ import http4 from "node:http";
 import https3 from "node:https";
 import path5 from "node:path";
 import { fileURLToPath } from "node:url";
+import fsBR from "node:fs";
+import osBR from "node:os";
+import pathBR from "node:path";
+import { spawn as spawnBR } from "node:child_process";
+import { createRequire as createRequireBR } from "node:module";
+import { pathToFileURL as pathToFileURLBR } from "node:url";
+import { Readable as ReadableBR } from "node:stream";
 
 // node_modules/zod/v3/helpers/util.js
 var util;
@@ -6263,6 +6270,142 @@ var createOpenCodeResponseTransform = (lane, requestedModel, toolNameMap) => {
 // service/core/executors/opencode.js
 import crypto2 from "crypto";
 
+
+// Adapted from the current official OpenCode TLS client and lazy-runtime loader.
+// Keep the cipher sequence verbatim: OpenCode's free-tier gate fingerprints TLS.
+const OPENCODE_CIPHER_LIST_BR = [
+  "TLS_AES_128_GCM_SHA256",
+  "TLS_AES_256_GCM_SHA384",
+  "TLS_CHACHA20_POLY1305_SHA256",
+  "ECDHE-ECDSA-AES128-GCM-SHA256",
+  "ECDHE-RSA-AES128-GCM-SHA256",
+  "ECDHE-ECDSA-AES256-GCM-SHA384",
+  "ECDHE-RSA-AES256-GCM-SHA384",
+  "ECDHE-ECDSA-CHACHA20-POLY1305",
+  "ECDHE-RSA-CHACHA20-POLY1305",
+  "ECDHE-ECDSA-AES128-SHA",
+  "ECDHE-RSA-AES128-SHA",
+  "ECDHE-ECDSA-AES256-SHA",
+  "ECDHE-RSA-AES256-SHA",
+  "AES128-GCM-SHA256",
+  "AES256-GCM-SHA384",
+  "AES128-SHA",
+  "AES256-SHA"
+].join(":");
+const OPENCODE_TLS_TIMEOUT_BR = 120000;
+const LAZY_DEP_VERSIONS_BR = { "wreq-js": "^3.2.0" };
+const LAZY_DEP_INFLIGHT_BR = new Map();
+let opencodeTlsSessionPromiseBR = null;
+let writableDataDirCacheBR = null;
+
+function writableDataDirBR() {
+  if (writableDataDirCacheBR) return writableDataDirCacheBR;
+  const configRoot = pathBR.join(osBR.homedir(), ".openchamber", "blackrouter");
+  const candidates = [
+    process.env.BLACKROUTER_DATA_DIR,
+    process.env.OPENCHAMBER_DATA_DIR ? pathBR.join(process.env.OPENCHAMBER_DATA_DIR, "blackrouter") : null,
+    configRoot,
+    pathBR.join(osBR.tmpdir(), "blackrouter-runtime")
+  ].filter((value) => typeof value === "string" && value.length > 0);
+  for (const candidate of candidates) {
+    try {
+      fsBR.mkdirSync(candidate, { recursive: true });
+      fsBR.accessSync(candidate, fsBR.constants.W_OK);
+      writableDataDirCacheBR = candidate;
+      return candidate;
+    } catch {}
+  }
+  writableDataDirCacheBR = process.cwd();
+  return writableDataDirCacheBR;
+}
+
+function isMissingModuleBR(error) {
+  const code = String(error?.code || "");
+  return code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND";
+}
+
+function installRuntimeDepBR(pkg, version, dir) {
+  fsBR.mkdirSync(dir, { recursive: true });
+  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+  return new Promise((resolve) => {
+    const child = spawnBR(npm, ["install", "--no-audit", "--no-fund", "--prefer-online", pkg + "@" + version], {
+      cwd: dir,
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: process.platform === "win32"
+    });
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+    child.on("error", (error) => resolve({ ok: false, stderr: String(error.message || error) }));
+    child.on("close", (status) => resolve({ ok: status === 0, stderr }));
+  });
+}
+
+async function loadRuntimeDepBR(pkg) {
+  if (!LAZY_DEP_INFLIGHT_BR.has(pkg)) {
+    LAZY_DEP_INFLIGHT_BR.set(pkg, (async () => {
+      try {
+        return await import(pkg);
+      } catch (error) {
+        if (!isMissingModuleBR(error)) throw error;
+      }
+      const dir = pathBR.join(writableDataDirBR(), "runtime");
+      const runtimeRequire = createRequireBR(pathBR.join(dir, "package.json"));
+      try {
+        return await import(pathToFileURLBR(runtimeRequire.resolve(pkg)).href);
+      } catch (error) {
+        if (!isMissingModuleBR(error)) throw error;
+      }
+      const version = LAZY_DEP_VERSIONS_BR[pkg] || "latest";
+      const installed = await installRuntimeDepBR(pkg, version, dir);
+      if (!installed.ok) {
+        const detail = installed.stderr.split("\n").filter(Boolean).pop() || "unknown npm error";
+        throw new Error(pkg + " could not be installed on demand (" + detail.slice(0, 160) + ")");
+      }
+      return import(pathToFileURLBR(createRequireBR(pathBR.join(dir, "package.json")).resolve(pkg)).href);
+    })().finally(() => LAZY_DEP_INFLIGHT_BR.delete(pkg)));
+  }
+  return LAZY_DEP_INFLIGHT_BR.get(pkg);
+}
+
+class OpencodeTlsUnavailableErrorBR extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "OpencodeTlsUnavailableError";
+  }
+}
+
+async function opencodeTlsFetchBR(url, init = {}, { signal, timeoutMs = OPENCODE_TLS_TIMEOUT_BR } = {}) {
+  let session;
+  if (!opencodeTlsSessionPromiseBR) {
+    opencodeTlsSessionPromiseBR = loadRuntimeDepBR("wreq-js").then((wreq) => {
+      if (typeof wreq.createSession !== "function") throw new Error("wreq-js runtime is missing createSession");
+      return wreq.createSession({ emulation: { tlsOptions: { cipherList: OPENCODE_CIPHER_LIST_BR } } });
+    }).catch((error) => {
+      opencodeTlsSessionPromiseBR = null;
+      throw error;
+    });
+  }
+  try {
+    session = await opencodeTlsSessionPromiseBR;
+  } catch (error) {
+    throw new OpencodeTlsUnavailableErrorBR(
+      "wreq-js unavailable (" + (error instanceof Error ? error.message : "unknown") + "); using the built-in fetch fallback"
+    );
+  }
+  const options = {
+    method: init.method || "GET",
+    headers: init.headers,
+    redirect: "follow",
+    timeout: timeoutMs
+  };
+  if (init.body !== undefined) options.body = init.body;
+  if (signal) options.signal = signal;
+  const result = await session.fetch(url, options);
+  const headers = {};
+  result.headers?.forEach?.((value, key) => { headers[key] = value; });
+  return new Response(result.body, { status: result.status, statusText: result.statusText, headers });
+}
+
 // service/core/executors/base.js
 class BaseExecutor {
   constructor(provider, config) {
@@ -7176,7 +7319,22 @@ class OpenCodeExecutor extends BaseExecutor {
     return injectReasoningContent({ provider: this.provider, model, body });
   }
   async execute(args) {
-    return super.execute({ ...args, credentials: this.prepareRequestCredentials(args) });
+    return super.execute({
+      ...args,
+      credentials: this.prepareRequestCredentials(args),
+      directFetch: async (url, options) => {
+        try {
+          return await opencodeTlsFetchBR(url, {
+            method: options.method,
+            headers: options.headers,
+            body: options.body
+          }, { signal: options.signal });
+        } catch (error) {
+          if (error instanceof OpencodeTlsUnavailableErrorBR) return fetch(url, options);
+          throw error;
+        }
+      }
+    });
   }
   buildUrl(model) {
     const base = this.config.baseUrl;
@@ -7978,7 +8136,7 @@ var prepareProviderRequest = async ({ model, body, session, rawHeaders = {} }) =
     credentials,
     providerSessionId: session,
     clientTool: "generic",
-    dispatch: async ({ url, headers, body: outboundBody, responseFormat }) => {
+    dispatch: async ({ url, headers, body: outboundBody, responseFormat, directFetch }) => {
       const transportBody = responseFormat === "claude" ? normalizeMessagesFingerprintTools(outboundBody) : outboundBody;
       const toolNameMap = takeRenamedToolNames(outboundBody) || inferToolNameMap(originalToolNames, outboundBody);
       return {
@@ -7987,7 +8145,8 @@ var prepareProviderRequest = async ({ model, body, session, rawHeaders = {} }) =
         body: JSON.stringify(transportBody),
         responseFormat,
         lane: responseFormat === "openai-responses" ? "responses" : responseFormat === "claude" ? "messages" : "chat",
-        toolNameMap
+        toolNameMap,
+        directFetch
       };
     }
   });
@@ -8451,7 +8610,8 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       body: native.body,
       headers: native.headers,
       url: native.url,
-      toolNameMap: native.toolNameMap
+      toolNameMap: native.toolNameMap,
+      directFetch: native.directFetch
     };
   };
   const sendAttempt = async () => {
@@ -8469,6 +8629,7 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
     let nativeHeaders = {};
     let nativeUrl;
     let nativeToolNameMap = null;
+    let nativeDirectFetch;
     try {
       const preparedForModel = await modelAwareBody(attempt.model);
       lane = preparedForModel.lane;
@@ -8476,23 +8637,22 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       nativeHeaders = preparedForModel.headers ?? {};
       nativeUrl = preparedForModel.url;
       nativeToolNameMap = preparedForModel.toolNameMap ?? null;
+      nativeDirectFetch = preparedForModel.directFetch;
     } catch (error) {
       writeOpenAiError(response, 400, error instanceof Error ? error.message : "Could not prepare the native provider request.", "invalid_request");
       return;
     }
     const target = buildTarget(config, "chat", candidate, nativeUrl);
+    const requestHeaders = {
+      ...isOpenCodeUpstream(config.upstream) ? nativeHeaders : {},
+      ...target.headers,
+      "content-type": "application/json",
+      accept: "text/event-stream",
+      "content-length": String(Buffer.byteLength(upstreamBody))
+    };
     const transport = target.url.protocol === "http:" ? http2 : https2;
-    const upstream = transport.request(target.url, {
-      method: "POST",
-      agent: target.agent,
-      headers: {
-        ...isOpenCodeUpstream(config.upstream) ? nativeHeaders : {},
-        ...target.headers,
-        "content-type": "application/json",
-        accept: "text/event-stream",
-        "content-length": String(Buffer.byteLength(upstreamBody))
-      }
-    }, (answer) => {
+    const usesNativeDirectTransport = candidate === null && isOpenCodeUpstream(config.upstream) && typeof nativeDirectFetch === "function";
+    const handleAnswer = (answer) => {
       const status = answer.statusCode ?? 502;
       const retryAfterHeader = answer.headers["retry-after"];
       const retryAfter = typeof retryAfterHeader === "string" ? retryAfterHeader : undefined;
@@ -8627,8 +8787,8 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       });
       if (protocolTransform)
         answer.pipe(protocolTransform);
-    });
-    upstream.on("error", (error) => {
+    };
+    const handleTransportError = (error) => {
       if (!response.headersSent && !response.destroyed && advanceToNextAttempt()) {
         fallbackReasons.push(`network error on ${lastRequestedModel}`);
         sendAttempt();
@@ -8640,11 +8800,32 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
         response.setHeader(name, value);
       writeOpenAiError(response, 502, `The upstream did not answer for ${lastRequestedModel}: ${error.message}`, "upstream_unreachable", routeHeaders);
     });
+    let upstream = null;
+    let directAbort = null;
+    if (usesNativeDirectTransport && nativeDirectFetch) {
+      directAbort = new AbortController();
+      void nativeDirectFetch(target.url, {
+        method: "POST",
+        headers: requestHeaders,
+        body: upstreamBody,
+        signal: AbortSignal.any([directAbort.signal, AbortSignal.timeout(120000)])
+      }).then((fetched) => {
+        const body = fetched.body ? ReadableBR.fromWeb(fetched.body) : ReadableBR.from([]);
+        const wrapped = body;
+        Object.defineProperty(wrapped, "statusCode", { value: fetched.status });
+        Object.defineProperty(wrapped, "headers", { value: Object.fromEntries(fetched.headers.entries()) });
+        handleAnswer(wrapped);
+      }).catch((error) => handleTransportError(error instanceof Error ? error : new Error(String(error))));
+    } else {
+      upstream = transport.request(target.url, { method: "POST", agent: target.agent, headers: requestHeaders }, handleAnswer);
+      upstream.on("error", handleTransportError);
+      upstream.end(upstreamBody);
+    }
     response.on("close", () => {
-      if (!response.writableEnded)
-        upstream.destroy();
+      if (response.writableEnded) return;
+      upstream?.destroy();
+      directAbort?.abort(new Error("Downstream client disconnected."));
     });
-    upstream.end(upstreamBody);
   };
   sendAttempt();
 };
@@ -10298,7 +10479,9 @@ var createRuntime = (store = createConfigStore()) => {
             status = answer.status;
             retryAfter = answer.retryAfter;
           } else {
-            const answer = await fetch(target.url, {
+            const useNativeTls = isOpenCodeUpstream(config.upstream) && !pool && activePoolCount === 0 && typeof nativeRequest?.directFetch === "function";
+            const fetcher = useNativeTls ? nativeRequest.directFetch : fetch;
+            const answer = await fetcher(target.url, {
               method: "POST",
               headers: testHeaders,
               body: outboundBody,
