@@ -449,7 +449,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
             const parsedBody = JSON.parse(prepared.body) as Record<string, unknown>;
             nativeRequest = await prepareProviderRequest({ model: modelId, body: parsedBody, session: runtimeSession });
           }
-          const target = buildTarget(config, 'chat', pool, modelId, nativeRequest?.url);
+          const target = buildTarget(config, 'chat', pool, nativeRequest?.url);
           const outboundBody = nativeRequest?.body ?? prepared.body;
           const testHeaders: Record<string, string> = {
             ...(isOpenCodeUpstream(config.upstream) ? nativeRequest?.headers ?? {} : {}),
