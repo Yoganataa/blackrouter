@@ -3,10 +3,12 @@ import { FORMATS } from "./translator/formats.js";
 import { translateRequest } from "./translator/index.js";
 import { PROVIDERS } from "./config/providers.js";
 
-const cleanModelId = (model) => String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
+const cleanModelId = (model) => {
+  const clean = String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
+  return clean.startsWith("blackrouter/") ? clean.slice("blackrouter/".length) : clean;
+};
 const targetFormatForModel = (model) => {
-  const clean = cleanModelId(model);
-  const base = clean.includes("/") ? clean.split("/").pop() : clean;
+  const base = cleanModelId(model);
   const registryEntry = (PROVIDERS.opencode.models || []).find((entry) => entry.id === base);
   return registryEntry?.targetFormat || FORMATS.OPENAI;
 };
@@ -21,20 +23,21 @@ const normalizeHeaders = (headers) => Object.fromEntries(
  * direct/HTTP/relay pool transport remains intact.
  */
 export const prepareProviderRequest = async ({ model, body, session, rawHeaders = {} }) => {
-  const targetFormat = targetFormatForModel(model);
+  const upstreamModel = cleanModelId(model);
+  const targetFormat = targetFormatForModel(upstreamModel);
   const credentials = {
     connectionId: session,
     rawHeaders: { ...rawHeaders, "x-opencode-session": session },
     providerSpecificData: {},
   };
-  const sourceBody = { ...body, model };
+  const sourceBody = { ...body, model: upstreamModel };
   const translatedBody = targetFormat === FORMATS.OPENAI
     ? sourceBody
-    : translateRequest(FORMATS.OPENAI, targetFormat, model, sourceBody, true, credentials);
+    : translateRequest(FORMATS.OPENAI, targetFormat, upstreamModel, sourceBody, true, credentials);
 
   const executor = new OpenCodeExecutor();
   const prepared = await executor.execute({
-    model,
+    model: upstreamModel,
     body: translatedBody,
     stream: true,
     credentials,
