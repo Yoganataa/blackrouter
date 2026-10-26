@@ -10,6 +10,8 @@ import {
   compactGitStatus,
   compactLs,
   compactReadNumbered,
+  compactSmartTruncate,
+  compressText,
   compactSearchList,
   compactTree,
   compactGrep,
@@ -206,7 +208,7 @@ describe('RTK token compression', () => {
   it('special-cases line-numbered file reads with an explicit truncation marker', () => {
     const lines = Array.from({ length: 400 }, (_, index) => '  ' + (index + 1) + '|const value' + index + ' = true;');
     const raw = lines.join('\n');
-    expect(autoDetectFilter(raw)).toBe(compactDedupLog);
+    expect(autoDetectFilter(raw)).toBe(compactReadNumbered);
     const compacted = compactReadNumbered(raw);
     expect(compacted).toContain('file continues');
     expect(compacted).toContain('const value0');
@@ -293,7 +295,7 @@ describe('RTK token compression', () => {
     };
 
     const initialLength = (payload.messages[2] as { content: string }).content.length;
-    const modified = compressMessages(payload, true);
+    const modified = compressMessages(payload);
     expect(modified).toBe(true);
     const newLength = (payload.messages[2] as { content: string }).content.length;
     expect(newLength).toBeLessThan(initialLength);
@@ -327,6 +329,13 @@ describe('RTK token compression', () => {
     expect(modified).toBe(true);
     const newLength = block?.content.length ?? 0;
     expect(newLength).toBeLessThan(initialLength);
+  });
+
+  it('preserves legacy RTK compatibility exports', () => {
+    expect(compactSmartTruncate).toBe(smartTruncate);
+    const stats = { bytesBefore: 0, bytesAfter: 0, hits: [] as unknown[] };
+    expect(compressText('short text', stats, 'compat')).toBe('short text');
+    expect(stats.bytesBefore).toBe('short text'.length);
   });
 
   it('does nothing when disabled', () => {
