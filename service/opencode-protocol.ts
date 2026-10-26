@@ -7,8 +7,10 @@ type SseFrame = { event: string; data: string };
 
 // This adapter only translates provider response streams back to OpenAI chat SSE.
 // Request body translation is handled by the native provider executor/translator.
-const cleanModelId = (modelId: string): string =>
-  modelId.replace(/\([^()]+\)\s*$/, '').trim();
+const cleanModelId = (modelId: string): string => {
+  const clean = modelId.replace(/\([^()]+\)\s*$/, '').trim();
+  return clean.startsWith('blackrouter/') ? clean.slice('blackrouter/'.length) : clean;
+};
 
 const parseFrame = (frame: string): SseFrame | null => {
   const lines = frame.split(/\r?\n/);
