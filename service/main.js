@@ -8182,7 +8182,7 @@ var toModels = (ids, rawEntries) => ids.map((id) => {
 var fetchModelIds = async (config, fetchImpl = fetch) => {
   const target = buildTarget(config, "models");
   const isOpenCode = isOpenCodeUpstream(config.upstream);
-  const upstreamUserAgent = isOpenCode ? "opencode/latest/2.0.26/cli" : "BlackRouter/1.0";
+  const upstreamUserAgent = isOpenCode ? "opencode/latest/2.1.4/cli" : "BlackRouter/1.0";
   let payload;
   if (target.agent && fetchImpl === fetch) {
     try {
