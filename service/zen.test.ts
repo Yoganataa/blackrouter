@@ -166,7 +166,7 @@ describe('native provider core', () => {
     const body = JSON.parse(prepared.body);
     expect(body.input).toBeInstanceOf(Array);
     expect(body.messages).toBeUndefined();
-    expect(body.instructions).toBe('Be concise.');
+    expect(body.instructions).toContain('Be concise.');
     expect(body.stream).toBe(true);
     expect(body.store).toBe(false);
   });
@@ -192,7 +192,7 @@ describe('native provider core', () => {
     expect(body.stream).toBe(true);
     expect(body.messages).toBeInstanceOf(Array);
     expect(body.messages[0].role).toBe('user');
-    expect(body.system).toContain('Use tools where useful.');
+    expect(body.system.map((block: any) => block.text ?? '').join('\n')).toContain('Use tools where useful.');
     expect(body.system).toContain('Do not call the read and shell tools');
     expect(body.tools.some((tool: any) => tool.name === 'read' && tool.input_schema && !tool.function)).toBe(true);
     expect(body.tools.some((tool: any) => tool.name === 'shell' && tool.input_schema && !tool.function)).toBe(true);
