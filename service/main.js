@@ -5862,9 +5862,25 @@ var parseFrame = (frame) => {
   return { event, data: data.join(`
 `) };
 };
+var liftReasoningAliases = (delta) => {
+  if (typeof delta.reasoning_content === "string" && delta.reasoning_content)
+    return delta;
+  if (typeof delta.reasoning === "string" && delta.reasoning)
+    return { ...delta, reasoning_content: delta.reasoning };
+  if (Array.isArray(delta.reasoning_details)) {
+    const text = delta.reasoning_details.map((part) => {
+      if (typeof part === "string")
+        return part;
+      if (!part || typeof part !== "object")
+        return "";
+      return typeof part.text === "string" ? part.text : typeof part.content === "string" ? part.content : "";
+    }).join("");
+    if (text)
+      return { ...delta, reasoning_content: text };
+  }
+  return delta;
+};
 var createToolNameRestoreTransform = (toolNameMap) => {
-  if (!toolNameMap?.size)
-    return null;
   const decoder = new StringDecoder("utf8");
   let buffer = "";
   const stream = new Transform({
@@ -5917,7 +5933,17 @@ var createToolNameRestoreTransform = (toolNameMap) => {
 `));
       return;
     }
-    const restored = restoreToolNames(parsed, toolNameMap);
+    const payload = parsed;
+    if (Array.isArray(payload.choices)) {
+      payload.choices = payload.choices.map((choice) => {
+        if (!choice || typeof choice !== "object")
+          return choice;
+        if (!choice.delta || typeof choice.delta !== "object" || Array.isArray(choice.delta))
+          return choice;
+        return { ...choice, delta: liftReasoningAliases(choice.delta) };
+      });
+    }
+    const restored = restoreToolNames(payload, toolNameMap);
     const eventLine = frame.event ? `event: ${frame.event}
 ` : "";
     stream.push(Buffer.from(`${eventLine}data: ${JSON.stringify(restored)}
