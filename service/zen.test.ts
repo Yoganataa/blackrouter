@@ -1,85 +1,114 @@
 import { describe, expect, test } from 'bun:test';
 
-import { ensureFreeTierTools, freeTierHeaders, prepareChat, requestId, sessionId } from './zen.ts';
+import { prepareChat, sessionId } from './zen.ts';
+// @ts-ignore - the selected provider core is copied from upstream JavaScript.
+import { prepareProviderRequest } from './core/provider-adapter.js';
 
 const SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
-const REQUEST_RE = /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 
-describe('the free-tier identity', () => {
-  test('mints ids in the shape the upstream checks', () => {
+describe('native provider core', () => {
+  test('uses the provider executor session-id generator', () => {
     expect(sessionId()).toMatch(SESSION_RE);
-    expect(requestId()).toMatch(REQUEST_RE);
     expect(sessionId()).not.toBe(sessionId());
-    expect(requestId()).not.toBe(requestId());
   });
 
-  test('carries the headers every call needs', () => {
-    const headers = freeTierHeaders('ses_0123456789abcdefghijklmn');
-    expect(headers.authorization).toBe('Bearer public');
-    expect(headers['user-agent']).toMatch(/^opencode\/(latest|\d+)/);
-    expect(headers['x-opencode-client']).toBe('cli');
-    expect(headers['x-opencode-session']).toBe('ses_0123456789abcdefghijklmn');
-    expect(headers['x-opencode-session-id']).toBe('ses_0123456789abcdefghijklmn');
+  test('prepares chat input without duplicating provider fingerprint logic', () => {
+    const prepared = prepareChat(JSON.stringify({
+      model: 'big-pickle',
+      messages: [{ role: 'user', content: 'hello' }],
+      stream: false,
+    }), { rtkEnabled: false });
+
+    const body = JSON.parse(prepared.body);
+    expect(prepared.stream).toBe(false);
+    expect(body.stream).toBe(true);
+    expect(body.tools).toBeUndefined();
+    expect(body.messages[0].content).toBe('hello');
+  });
+
+  test('native OpenCode executor owns chat URL, headers, and fingerprint tools', async () => {
+    const session = sessionId();
+    const prepared = await prepareProviderRequest({
+      model: 'big-pickle',
+      body: { model: 'big-pickle', messages: [{ role: 'user', content: 'hello' }], stream: false },
+      session,
+    });
+
+    expect(prepared.url.toString()).toBe('https://opencode.ai/inference/v1/chat/completions');
+    expect(prepared.headers.authorization).toBe('Bearer public');
+    expect(prepared.headers['user-agent']).toBe('opencode/latest/2.0.26/cli');
+    expect(prepared.headers['x-opencode-session']).toBe(session);
+    expect(prepared.headers['x-opencode-session-id']).toBe(session);
+
+    const body = JSON.parse(prepared.body);
+    expect(body.stream).toBe(true);
+    const names = body.tools.map((tool: any) => tool?.function?.name ?? tool?.name);
+    expect(names).toContain('read');
+    expect(names).toContain('shell');
+  });
+
+  test('native translator and executor select the Responses endpoint for Muse Spark', async () => {
+    const prepared = await prepareProviderRequest({
+      model: 'muse-spark-1.3-contributor-free',
+      body: {
+        model: 'muse-spark-1.3-contributor-free',
+        messages: [
+          { role: 'system', content: 'Be concise.' },
+          { role: 'user', content: 'Summarize this.' },
+        ],
+        max_tokens: 8,
+        stream: false,
+      },
+      session: sessionId(),
+    });
+
+    expect(prepared.url.toString()).toBe('https://opencode.ai/inference/v1/responses');
+    const body = JSON.parse(prepared.body);
+    expect(body.input).toBeInstanceOf(Array);
+    expect(body.messages).toBeUndefined();
+    expect(body.instructions).toBe('Be concise.');
+    expect(body.stream).toBe(true);
+    expect(body.store).toBe(false);
+  });
+
+  test('native translator and executor select the Messages endpoint for Union Alpha', async () => {
+    const prepared = await prepareProviderRequest({
+      model: 'union-alpha',
+      body: {
+        model: 'union-alpha',
+        messages: [
+          { role: 'system', content: 'Use tools where useful.' },
+          { role: 'user', content: 'List files.' },
+        ],
+        max_tokens: 128,
+        stream: false,
+      },
+      session: sessionId(),
+    });
+
+    expect(prepared.url.toString()).toBe('https://opencode.ai/inference/v1/messages');
+    expect(prepared.headers['anthropic-version']).toBe('2023-06-01');
+    const body = JSON.parse(prepared.body);
+    expect(body.stream).toBe(true);
+    expect(body.messages).toBeInstanceOf(Array);
+    expect(body.messages[0].role).toBe('user');
+    expect(body.system).toContain('Use tools where useful.');
   });
 });
 
-describe('making a client body acceptable', () => {
-  test('adds the gate tools without touching the caller ones', () => {
-    const body = {
-      tools: [{ type: 'function', function: { name: 'write', parameters: { type: 'object' } } }],
-    };
-    ensureFreeTierTools(body);
-    const names = (body.tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name);
-    expect(names).toEqual(['write', 'read', 'shell']);
-  });
-
-  test('keeps a caller tool that already has a gate name', () => {
-    const body = {
-      tools: [{ type: 'function', function: { name: 'read', description: 'mine', parameters: { type: 'object' } } }],
-    };
-    ensureFreeTierTools(body);
-    expect((body.tools as Array<{ function: { description: string } }>)[0]?.function.description).toBe('mine');
-    expect(body.tools).toHaveLength(2);
-  });
-
-  test('forces the stream the upstream insists on, and remembers the client choice', () => {
-    const streamed = prepareChat(JSON.stringify({ model: 'x-free', messages: [], stream: true }));
+describe('preparing a client chat body', () => {
+  test('forces upstream streaming while preserving the client output preference', () => {
+    const streamed = prepareChat(JSON.stringify({ model: 'x-free', messages: [{ role: 'user', content: 'hi' }], stream: true }));
     expect(streamed.stream).toBe(true);
     expect(JSON.parse(streamed.body).stream).toBe(true);
     expect(streamed.model).toBe('x-free');
 
-    const plain = prepareChat(JSON.stringify({ model: 'x-free', messages: [] }));
+    const plain = prepareChat(JSON.stringify({ model: 'x-free', messages: [{ role: 'user', content: 'hi' }] }));
     expect(plain.stream).toBe(false);
     expect(JSON.parse(plain.body).stream).toBe(true);
   });
 
-  test('leaves the default model behavior unchanged when response style profiles are off', () => {
-    const prepared = prepareChat(JSON.stringify({
-      model: 'x-free',
-      messages: [{ role: 'user', content: 'Write a small function.' }],
-    }), { rtkEnabled: false, cavemanLevel: 'off', ponytailLevel: 'off' });
-    const parsed = JSON.parse(prepared.body);
-    expect(parsed.messages[0].role).toBe('user');
-    expect(parsed.messages[0].content).toBe('Write a small function.');
-  });
-
-  test('combines Caveman and Ponytail prompts with an existing system message', () => {
-    const prepared = prepareChat(JSON.stringify({
-      model: 'x-free',
-      messages: [
-        { role: 'system', content: 'Follow the repository conventions.' },
-        { role: 'user', content: 'Implement the requested fix.' },
-      ],
-    }), { rtkEnabled: false, cavemanLevel: 'lite', ponytailLevel: 'full' });
-    const parsed = JSON.parse(prepared.body);
-    expect(parsed.messages[0].role).toBe('system');
-    expect(parsed.messages[0].content).toContain('Follow the repository conventions.');
-    expect(parsed.messages[0].content).toContain('Remove pleasantries');
-    expect(parsed.messages[0].content).toContain('smallest correct diff');
-    expect(parsed.messages[1].content).toBe('Implement the requested fix.');
-  });
-
-  test('injects opt-in style prompts when the request has no system message', () => {
+  test('keeps response-style profiles independent from provider transformation', () => {
     const prepared = prepareChat(JSON.stringify({
       model: 'x-free',
       messages: [{ role: 'user', content: 'Explain this error.' }],
@@ -96,73 +125,34 @@ describe('making a client body acceptable', () => {
     expect(() => prepareChat('{"model":"x-free"}')).toThrow(/no messages/);
   });
 
-  test('maps max_completion_tokens to max_tokens for chat completions compatibility', () => {
-    const prepared = prepareChat(
-      JSON.stringify({ model: 'x-free', messages: [], max_completion_tokens: 4096 }),
-    );
-    const parsed = JSON.parse(prepared.body);
-    expect(parsed.max_tokens).toBe(4096);
+  test('maps max_completion_tokens to max_tokens for chat compatibility', () => {
+    const prepared = prepareChat(JSON.stringify({
+      model: 'x-free',
+      messages: [{ role: 'user', content: 'hi' }],
+      max_completion_tokens: 4096,
+    }), { rtkEnabled: false });
+    expect(JSON.parse(prepared.body).max_tokens).toBe(4096);
   });
 
   test('applies RTK message compression when enabled', () => {
     let diff = 'diff --git a/test.ts b/test.ts\n@@ -1,1 +1,200 @@\n';
-    for (let i = 0; i < 200; i++) diff += `+line ${i}\n`;
+    for (let i = 0; i < 200; i++) diff += '+line ' + i + '\n';
 
-    const prepared = prepareChat(
-      JSON.stringify({
-        model: 'x-free',
-        messages: [{ role: 'tool', content: diff }],
-      }),
-      true,
-    );
-    const parsed = JSON.parse(prepared.body);
-    expect(parsed.messages[0].content).toContain('lines truncated');
+    const prepared = prepareChat(JSON.stringify({
+      model: 'x-free',
+      messages: [{ role: 'tool', content: diff }],
+    }), true);
+    expect(JSON.parse(prepared.body).messages[0].content).toContain('lines truncated');
   });
 
-  test('bypasses RTK message compression when rtkEnabled is false', () => {
+  test('bypasses RTK message compression when disabled', () => {
     let diff = 'diff --git a/test.ts b/test.ts\n@@ -1,1 +1,200 @@\n';
-    for (let i = 0; i < 200; i++) diff += `+line ${i}\n`;
+    for (let i = 0; i < 200; i++) diff += '+line ' + i + '\n';
 
-    const prepared = prepareChat(
-      JSON.stringify({
-        model: 'x-free',
-        messages: [{ role: 'tool', content: diff }],
-      }),
-      false,
-    );
-    const parsed = JSON.parse(prepared.body);
-    expect(parsed.messages[0].content).toBe(diff);
-  });
-
-  test('does not inject OpenCode fingerprint tools or reasoning fields for a generic API', () => {
-    const prepared = prepareChat(
-      JSON.stringify({
-        model: 'gpt-5.6',
-        messages: [
-          { role: 'user', content: 'hello' },
-          { role: 'assistant', content: 'hi' },
-        ],
-      }),
-      { rtkEnabled: false, openCodeFreeTier: false },
-    );
-    const parsed = JSON.parse(prepared.body);
-    expect(parsed.tools).toBeUndefined();
-    expect(parsed.messages[1].reasoning_content).toBeUndefined();
-    expect(parsed.stream).toBe(true);
-  });
-
-  test('injects placeholder reasoning_content for assistant messages missing it', () => {
-    const prepared = prepareChat(
-      JSON.stringify({
-        model: 'deepseek-v4.1-flash-free',
-        messages: [
-          { role: 'user', content: 'hello' },
-          { role: 'assistant', content: 'hi' },
-          { role: 'user', content: 'how are you?' },
-        ],
-      }),
-    );
-    const parsed = JSON.parse(prepared.body);
-    expect(parsed.messages[1].reasoning_content).toBe(' ');
+    const prepared = prepareChat(JSON.stringify({
+      model: 'x-free',
+      messages: [{ role: 'tool', content: diff }],
+    }), false);
+    expect(JSON.parse(prepared.body).messages[0].content).toBe(diff);
   });
 });
