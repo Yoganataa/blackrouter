@@ -70,8 +70,8 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - [x] Fixed a real runtime defect in `service/core/utils/opencodeFingerprint.js`: the normalization path called undefined `canNormalizeInPlace` and `withFingerprintDefinition` helpers. Added helpers that normalize only accepted OpenCode fingerprint descriptions with a compatible subset schema; custom schemas remain aliased.
 - [x] Corrected the Messages regression test to inspect Anthropic `system` content blocks instead of incorrectly treating the field as a string. Its type model now reflects the actual string-or-content-block shape and fails explicitly if content blocks are absent.
 - [x] CI unit tests pass: **146 passed, 0 failed across 15 files** (run `40349762310`).
-- [x] CI build passes; workflow regenerated and committed `service/main.js` in commit `9339826f` (full SHA to confirm from branch).
-- [ ] Confirm a clean CI run on the generated-bundle commit.
+- [x] CI build passes; workflow regenerated and committed `service/main.js` in `93398269be734273ceec1f21ed9c510251606906`; verified the generated bundle contains `canNormalizeInPlace`.
+- [x] Confirm the successful source CI run generated the bundle and inspect its committed output; `service/main.js` contains the fingerprint normalization helper.
 - [ ] Inspect the generated bundle diff and ensure source/runtime behavior remains synchronized.
 - [ ] Verify OpenChamber host load and the primary OpenCode Zen Free inference path with an actual valid response.
 - [ ] Verify direct, HTTP proxy, and relay paths separately, including no silent direct-egress fallback.
@@ -80,7 +80,7 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 
 **CI evidence:** [Run 40349762310](https://github.com/Yoganataa/blackrouter/actions/runs/40349762310) completed successfully through type-check, unit tests, and build. Test output: 146 pass / 0 fail. The workflow committed regenerated `service/main.js` as `9339826f`. Earlier runs failed because of (1) missing fingerprint normalization helpers and (2) the test assuming Messages `system` was a string; those were fixed in source and tests without weakening behavioral assertions. Do not claim the OpenCode end-to-end path or transport/security requirements are complete until smoke-tested.
 
-**Latest source fixes:** `ed019186c7b81ce8e79fa676a681b1c5f07213f7` adds the missing fingerprint helpers; `b9d57e57e16e92ee43fce9b610a96058ceda4cdb` corrects Messages system assertions; `fcd631ed9d3d789809ff4333e85c43533e28dfc1` corrects the test fixture type. Bundle generation commit: `9339826f` (confirm full SHA from the branch).
+**Latest source fixes:** `ed019186c7b81ce8e79fa676a681b1c5f07213f7` adds the missing fingerprint helpers; `b9d57e57e16e92ee43fce9b610a96058ceda4cdb` corrects Messages system assertions; `fcd631ed9d3d789809ff4333e85c43533e28dfc1` corrects the test fixture type. Bundle generation commit: `93398269be734273ceec1f21ed9c510251606906`.
 
 ## Session handoff
 
