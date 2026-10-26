@@ -9,7 +9,7 @@ import type { ProxyPool, RouterConfig, RouterModel } from '../contract.ts';
 import { upstreamError } from './errors.ts';
 import { resolveModelMetadata } from './model-metadata.ts';
 import { aggregateStream } from './sse.ts';
-import { createOpenCodeResponseTransform, type OpenCodeLane } from './opencode-protocol.ts';
+import { createOpenCodeResponseTransform, createToolNameRestoreTransform, type OpenCodeLane } from './opencode-protocol.ts';
 import type { PreparedChat } from './zen.ts';
 // @ts-ignore - the selected provider core is copied from upstream JavaScript.
 import { prepareProviderRequest } from './core/provider-adapter.js';
@@ -487,6 +487,7 @@ export const proxyChatCompletion = (
     body: string;
     headers?: Record<string, string>;
     url?: URL;
+    toolNameMap?: Map<string, string> | null;
   }> => {
     let parsed: unknown;
     try {
@@ -512,6 +513,7 @@ export const proxyChatCompletion = (
       body: native.body as string,
       headers: native.headers as Record<string, string>,
       url: native.url as URL,
+      toolNameMap: native.toolNameMap as Map<string, string> | null,
     };
   };
 
@@ -534,12 +536,14 @@ export const proxyChatCompletion = (
     let upstreamBody: string;
     let nativeHeaders: Record<string, string> = {};
     let nativeUrl: URL | undefined;
+    let nativeToolNameMap: Map<string, string> | null = null;
     try {
       const preparedForModel = await modelAwareBody(attempt.model);
       lane = preparedForModel.lane;
       upstreamBody = preparedForModel.body;
       nativeHeaders = preparedForModel.headers ?? {};
       nativeUrl = preparedForModel.url;
+      nativeToolNameMap = preparedForModel.toolNameMap ?? null;
     } catch (error) {
       writeOpenAiError(
         response,
@@ -615,8 +619,10 @@ export const proxyChatCompletion = (
         const contentType = typeof answer.headers['content-type'] === 'string'
           ? answer.headers['content-type'].toLowerCase()
           : '';
-        const protocolTransform = lane !== 'chat' && contentType.includes('text/event-stream')
-          ? createOpenCodeResponseTransform(lane, attempt.model)
+        const protocolTransform = contentType.includes('text/event-stream')
+          ? lane === 'chat'
+            ? createToolNameRestoreTransform(nativeToolNameMap)
+            : createOpenCodeResponseTransform(lane, attempt.model, nativeToolNameMap)
           : null;
         const successHeaders = {
           ...responseHeaders(answer.headers),
