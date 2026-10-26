@@ -1,5 +1,3 @@
-import { compressMessages as upstreamCompressMessages } from "./core/rtk/index.js";
-import { prepareProviderRequest, generateSessionId } from "./core/provider-adapter.js";
 // service/main.ts
 import http5 from "node:http";
 
@@ -8,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import http4 from "node:http";
 import https3 from "node:https";
-import path4 from "node:path";
+import path5 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // node_modules/zod/v3/helpers/util.js
@@ -5385,7 +5383,7 @@ import http3 from "node:http";
 // service/upstream.ts
 import http2 from "node:http";
 import https2 from "node:https";
-import { pipeline } from "node:stream";
+import { pipeline, Transform as Transform3 } from "node:stream";
 import tls from "node:tls";
 
 // service/sse.ts
@@ -5481,9 +5479,368 @@ var aggregateStream = (text) => {
 };
 
 // service/opencode-protocol.ts
-import { Transform as Transform3 } from "node:stream";
-import { StringDecoder as StringDecoder3 } from "node:string_decoder";
-import { restoreToolNames } from "./core/utils/opencodeFingerprint.js";
+import { Transform } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
+
+// service/core/utils/opencodeFingerprint.js
+import os from "node:os";
+import path4 from "node:path";
+var OPENCODE_FINGERPRINT_TOOLS = ["read", "shell"];
+var READ_DESCRIPTION = "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.";
+var FINGERPRINT_TOOL_PARAMETERS = {
+  read: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "File or directory to read" },
+      offset: { type: "integer", minimum: 0, description: "The line or directory entry to start reading from (1-based)" },
+      limit: { type: "integer", minimum: 0, description: "The maximum number of lines or directory entries to read (defaults to and capped at 2000)" }
+    },
+    required: ["path"],
+    additionalProperties: false
+  },
+  shell: {
+    type: "object",
+    properties: {
+      command: { type: "string", description: "Shell command string to execute" },
+      workdir: { type: "string", description: "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead." },
+      timeout: { type: "integer", minimum: 0, description: "Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default." },
+      background: { type: "boolean", description: "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion." }
+    },
+    required: ["command"],
+    additionalProperties: false
+  }
+};
+var SHELL_DESCRIPTION_HEAD = "Execute a shell command and return its output.";
+var SHELL_DESCRIPTION_TAIL = "Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.";
+var SHELL_PLATFORM_WORDINGS = {
+  linux: "Linux using bash",
+  darwin: "macOS using zsh",
+  win32: "Windows using powershell"
+};
+function shellDescription(platform) {
+  const wording = SHELL_PLATFORM_WORDINGS[platform] ?? SHELL_PLATFORM_WORDINGS.linux;
+  return `${SHELL_DESCRIPTION_HEAD} Commands run on ${wording}. ${SHELL_DESCRIPTION_TAIL}`;
+}
+var ACCEPTED_FINGERPRINT_DESCRIPTIONS = {
+  read: new Set([READ_DESCRIPTION]),
+  shell: new Set(Object.keys(SHELL_PLATFORM_WORDINGS).map((platform) => shellDescription(platform)))
+};
+var HOST_PLATFORM = process.platform || "linux";
+var FINGERPRINT_TOOL_DEFINITIONS = {
+  read: { description: READ_DESCRIPTION, parameters: FINGERPRINT_TOOL_PARAMETERS.read },
+  shell: { description: shellDescription(HOST_PLATFORM), parameters: FINGERPRINT_TOOL_PARAMETERS.shell }
+};
+var renamedToolNames = new WeakMap;
+function fingerprintToolKey(name) {
+  const trimmed = String(name ?? "").trim();
+  return OPENCODE_FINGERPRINT_TOOLS.includes(trimmed) ? trimmed : "";
+}
+function toolNameOf(tool) {
+  if (!tool || typeof tool !== "object" || Array.isArray(tool))
+    return "";
+  if (typeof tool.name === "string" && tool.name.trim())
+    return tool.name.trim();
+  const fn = tool.function;
+  if (fn && typeof fn === "object" && !Array.isArray(fn) && typeof fn.name === "string") {
+    return fn.name.trim();
+  }
+  return "";
+}
+function chatFunctionOf(tool) {
+  const fn = tool?.function;
+  return fn && typeof fn === "object" && !Array.isArray(fn) ? fn : null;
+}
+function isFingerprintDefinition(tool, key) {
+  const def = tool && (chatFunctionOf(tool) || tool);
+  const want = FINGERPRINT_TOOL_DEFINITIONS[key];
+  return !!def && ACCEPTED_FINGERPRINT_DESCRIPTIONS[key].has(def.description) && JSON.stringify(def.parameters) === JSON.stringify(want.parameters);
+}
+function withToolName(tool, name) {
+  const fn = chatFunctionOf(tool);
+  return fn ? { ...tool, function: { ...fn, name } } : { ...tool, name };
+}
+function concealFingerprintToolNames(tools) {
+  const map = new Map;
+  if (!Array.isArray(tools) || tools.length === 0)
+    return { tools, map };
+  const taken = new Set(tools.map(toolNameOf));
+  const seen = new Set;
+  const out = [];
+  for (const tool of tools) {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
+      out.push(tool);
+      continue;
+    }
+    const key = fingerprintToolKey(toolNameOf(tool));
+    if (!key) {
+      out.push(tool);
+      continue;
+    }
+    if (seen.has(key))
+      continue;
+    seen.add(key);
+    if (isFingerprintDefinition(tool, key)) {
+      out.push(tool);
+      continue;
+    }
+    let alias = `${key}_client`;
+    for (let i = 2;taken.has(alias); i++)
+      alias = `${key}_client${i}`;
+    taken.add(alias);
+    map.set(alias, key);
+    out.push(withToolName(tool, alias));
+  }
+  return { tools: out, map };
+}
+function appendMissingFingerprintTools(tools, flat) {
+  const appended = [];
+  if (!Array.isArray(tools))
+    return appended;
+  for (const name of OPENCODE_FINGERPRINT_TOOLS) {
+    if (tools.some((tool) => fingerprintToolKey(toolNameOf(tool)) === name))
+      continue;
+    const { description, parameters } = FINGERPRINT_TOOL_DEFINITIONS[name];
+    tools.push(flat ? { type: "function", name, description, parameters, strict: false } : { type: "function", function: { name, description, parameters } });
+    appended.push(name);
+  }
+  return appended;
+}
+function aliasesByOriginal(map) {
+  return new Map([...map].map(([alias, original]) => [original, alias]));
+}
+function retargetToolChoice(body, map) {
+  if (!body || typeof body !== "object" || !map?.size)
+    return;
+  const choice = body.tool_choice;
+  if (!choice || typeof choice !== "object" || Array.isArray(choice))
+    return;
+  const aliases = aliasesByOriginal(map);
+  if (typeof choice.name === "string") {
+    const alias = aliases.get(choice.name.trim());
+    if (alias)
+      body.tool_choice = { ...choice, name: alias };
+    return;
+  }
+  const fn = choice.function;
+  if (fn && typeof fn === "object" && !Array.isArray(fn) && typeof fn.name === "string") {
+    const alias = aliases.get(fn.name.trim());
+    if (alias)
+      body.tool_choice = { ...choice, function: { ...fn, name: alias } };
+  }
+}
+function aliasHistoryToolCalls(body, map) {
+  if (!body || typeof body !== "object" || !map?.size)
+    return;
+  const aliases = aliasesByOriginal(map);
+  if (Array.isArray(body.input)) {
+    body.input = body.input.map((item) => item?.type === "function_call" && aliases.has(item.name) ? { ...item, name: aliases.get(item.name) } : item);
+  }
+  if (Array.isArray(body.messages)) {
+    body.messages = body.messages.map((msg) => {
+      if (!Array.isArray(msg?.tool_calls))
+        return msg;
+      return {
+        ...msg,
+        tool_calls: msg.tool_calls.map((call) => aliases.has(call?.function?.name) ? { ...call, function: { ...call.function, name: aliases.get(call.function.name) } } : call)
+      };
+    });
+  }
+}
+function noteUnavailableTools(body, flat, names, claude) {
+  const list = names.map((name) => `\`${name}\``).join(" or ");
+  const note = names.length > 1 ? `Do not call the ${list} tools; they are placeholders that do nothing. Use the other tools you have been given instead.` : `Do not call the ${list} tool; it is a placeholder that does nothing. Use the other tools you have been given instead.`;
+  if (flat) {
+    body.instructions = typeof body.instructions === "string" && body.instructions.trim() ? `${body.instructions}
+
+${note}` : note;
+    return;
+  }
+  if (claude) {
+    body.system = appendSystemText(body.system, note);
+    return;
+  }
+  if (body.system !== undefined)
+    return;
+  if (!Array.isArray(body.messages))
+    return;
+  const first = body.messages.find((msg) => msg?.role === "system");
+  if (first?.role === "system" && typeof first.content === "string") {
+    body.messages = body.messages.map((msg) => msg === first ? { ...msg, content: `${msg.content}
+
+${note}` } : msg);
+  } else {
+    body.messages = [{ role: "system", content: note }, ...body.messages];
+  }
+}
+var ENV_TAG = "<env>";
+var ENV_HEADING = "Here is some useful information about the environment you are running in:";
+var ENV_TMP_DIR = path4.join(os.tmpdir(), "opencode");
+var ENV_WORKING_DIR = process.cwd();
+var ENV_FINGERPRINT_PROMPT = [
+  ENV_HEADING,
+  "<env>",
+  `  Working directory: ${ENV_WORKING_DIR}`,
+  `  Workspace root folder: ${ENV_WORKING_DIR}`,
+  "  Is directory a git repo: no",
+  `  Platform: ${HOST_PLATFORM}`,
+  `  Prefer ${ENV_TMP_DIR} over generic system temporary directories such as /tmp; it is pre-created and approved for external access.`,
+  "</env>"
+].join(`
+`);
+function systemCarriesEnv(system) {
+  if (typeof system === "string")
+    return system.includes(ENV_TAG);
+  if (Array.isArray(system)) {
+    return system.some((block) => typeof block?.text === "string" && block.text.includes(ENV_TAG));
+  }
+  return false;
+}
+function appendSystemText(system, text) {
+  if (typeof system === "string") {
+    return system.trim() ? `${system}
+
+${text}` : text;
+  }
+  const blocks = Array.isArray(system) ? [...system] : [];
+  for (let i = blocks.length - 1;i >= 0; i--) {
+    const block = blocks[i];
+    if (typeof block?.text === "string") {
+      const existing = block.text.trim();
+      blocks[i] = { ...block, text: existing ? `${block.text}
+
+${text}` : text };
+      return blocks;
+    }
+  }
+  return [...blocks, { type: "text", text }];
+}
+function appendToSystemField(system) {
+  return appendSystemText(system, ENV_FINGERPRINT_PROMPT);
+}
+function applyEnvFingerprint(body, flat, { claude = false } = {}) {
+  try {
+    if (!body || typeof body !== "object")
+      return false;
+    if (flat) {
+      if (body.instructions !== undefined && typeof body.instructions !== "string")
+        return false;
+      if (systemCarriesEnv(body.instructions))
+        return false;
+      body.instructions = typeof body.instructions === "string" && body.instructions.trim() ? `${body.instructions}
+
+${ENV_FINGERPRINT_PROMPT}` : ENV_FINGERPRINT_PROMPT;
+      return true;
+    }
+    if (claude || body.system !== undefined) {
+      if (systemCarriesEnv(body.system))
+        return false;
+      body.system = appendToSystemField(body.system);
+      return true;
+    }
+    if (Array.isArray(body.messages)) {
+      const idx = body.messages.findIndex((msg) => msg?.role === "system");
+      if (idx >= 0) {
+        const target = body.messages[idx];
+        if (Array.isArray(target.content)) {
+          if (systemCarriesEnv(target.content))
+            return false;
+          body.messages = body.messages.map((msg, i) => i === idx ? { ...msg, content: appendToSystemField(target.content) } : msg);
+          return true;
+        }
+        if (systemCarriesEnv(target.content))
+          return false;
+        const content = appendToSystemField(typeof target.content === "string" ? target.content : "");
+        body.messages = body.messages.map((msg, i) => i === idx ? { ...msg, content } : msg);
+        return true;
+      }
+      body.messages = [{ role: "system", content: ENV_FINGERPRINT_PROMPT }, ...body.messages];
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+function applyFingerprintTools(body, flat, { claude = false } = {}) {
+  if (!body || typeof body !== "object")
+    return new Map;
+  const { tools, map } = concealFingerprintToolNames(body.tools);
+  body.tools = Array.isArray(tools) ? tools : [];
+  const appended = appendMissingFingerprintTools(body.tools, flat);
+  retargetToolChoice(body, map);
+  aliasHistoryToolCalls(body, map);
+  if (appended.length)
+    noteUnavailableTools(body, flat, appended, claude);
+  applyEnvFingerprint(body, flat, { claude });
+  if (!body.tool_choice && flat)
+    body.tool_choice = "auto";
+  recordRenamedToolNames(body, map);
+  return map;
+}
+function recordRenamedToolNames(body, map) {
+  if (!body || typeof body !== "object" || !map?.size)
+    return;
+  renamedToolNames.set(body, map);
+}
+function takeRenamedToolNames(body) {
+  if (!body || typeof body !== "object")
+    return null;
+  return renamedToolNames.get(body) || null;
+}
+function restoreToolNames(payload, map) {
+  if (!map?.size || !payload)
+    return payload;
+  if (Array.isArray(payload))
+    return payload.map((item) => restoreToolNames(item, map));
+  if (typeof payload !== "object")
+    return payload;
+  let out = payload;
+  const put = (key, value) => {
+    if (out === payload)
+      out = { ...payload };
+    out[key] = value;
+  };
+  if (payload.type === "content_block_start") {
+    const block = payload.content_block;
+    if (block?.type === "tool_use" && typeof block.name === "string" && map.has(block.name)) {
+      put("content_block", { ...block, name: map.get(block.name) });
+    }
+  }
+  if (Array.isArray(payload.content)) {
+    put("content", payload.content.map((block) => block?.type === "tool_use" && typeof block.name === "string" && map.has(block.name) ? { ...block, name: map.get(block.name) } : block));
+  }
+  if (Array.isArray(payload.choices)) {
+    put("choices", payload.choices.map((choice) => {
+      let changed = false;
+      const next = { ...choice };
+      for (const holder of ["delta", "message"]) {
+        const value = choice?.[holder];
+        if (!value || !Array.isArray(value.tool_calls) || value.tool_calls.length === 0)
+          continue;
+        const calls = value.tool_calls.map((call) => {
+          const name = call?.function?.name;
+          if (typeof name === "string" && map.has(name)) {
+            changed = true;
+            return { ...call, function: { ...call.function, name: map.get(name) } };
+          }
+          return call;
+        });
+        next[holder] = { ...value, tool_calls: calls };
+      }
+      return changed ? next : choice;
+    }));
+  }
+  if (Array.isArray(payload.output)) {
+    put("output", payload.output.map((item) => item?.type === "function_call" && typeof item.name === "string" && map.has(item.name) ? { ...item, name: map.get(item.name) } : item));
+  }
+  const item = payload.item;
+  if (item?.type === "function_call" && typeof item.name === "string" && map.has(item.name)) {
+    put("item", { ...item, name: map.get(item.name) });
+  }
+  return out;
+}
+
+// service/opencode-protocol.ts
 var cleanModelId = (modelId) => {
   const clean = modelId.replace(/\([^()]+\)\s*$/, "").trim();
   return clean.startsWith("blackrouter/") ? clean.slice("blackrouter/".length) : clean;
@@ -5506,32 +5863,11 @@ var parseFrame = (frame) => {
 `) };
 };
 var createToolNameRestoreTransform = (toolNameMap) => {
-  if (!toolNameMap || !toolNameMap.size) return null;
-  const decoder = new StringDecoder3("utf8");
+  if (!toolNameMap?.size)
+    return null;
+  const decoder = new StringDecoder("utf8");
   let buffer = "";
-  let stream;
-  const processFrame = (rawFrame) => {
-    const frame = parseFrame(rawFrame);
-    if (!frame || frame.data === "[DONE]") {
-      stream.push(Buffer.from(rawFrame + "\n\n"));
-      return;
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(frame.data);
-    } catch {
-      stream.push(Buffer.from(rawFrame + "\n\n"));
-      return;
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      stream.push(Buffer.from(rawFrame + "\n\n"));
-      return;
-    }
-    const restored = restoreToolNames(parsed, toolNameMap);
-    const eventLine = frame.event ? "event: " + frame.event + "\n" : "";
-    stream.push(Buffer.from(eventLine + "data: " + JSON.stringify(restored) + "\n\n"));
-  };
-  stream = new Transform3({
+  const stream = new Transform({
     transform(chunk, _encoding, callback) {
       try {
         buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
@@ -5550,13 +5886,44 @@ var createToolNameRestoreTransform = (toolNameMap) => {
     flush(callback) {
       try {
         buffer += decoder.end();
-        if (buffer.trim()) processFrame(buffer);
+        if (buffer.trim())
+          processFrame(buffer);
         callback();
       } catch (error) {
         callback(error instanceof Error ? error : new Error(String(error)));
       }
     }
   });
+  const processFrame = (rawFrame) => {
+    const frame = parseFrame(rawFrame);
+    if (!frame || frame.data === "[DONE]") {
+      stream.push(Buffer.from(rawFrame + `
+
+`));
+      return;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(frame.data);
+    } catch {
+      stream.push(Buffer.from(rawFrame + `
+
+`));
+      return;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      stream.push(Buffer.from(rawFrame + `
+
+`));
+      return;
+    }
+    const restored = restoreToolNames(parsed, toolNameMap);
+    const eventLine = frame.event ? `event: ${frame.event}
+` : "";
+    stream.push(Buffer.from(`${eventLine}data: ${JSON.stringify(restored)}
+
+`));
+  };
   return stream;
 };
 var responseErrorMessage = (payload) => {
@@ -5589,8 +5956,10 @@ var createOpenCodeResponseTransform = (lane, requestedModel, toolNameMap) => {
   let messageToolCount = 0;
   let messageStopReason = "end_turn";
   const emitData = (payload) => {
-    const restored = toolNameMap && toolNameMap.size ? restoreToolNames(payload, toolNameMap) : payload;
-    stream.push(Buffer.from("data: " + JSON.stringify(restored) + "\n\n"));
+    const restored = toolNameMap?.size ? restoreToolNames(payload, toolNameMap) : payload;
+    stream.push(Buffer.from(`data: ${JSON.stringify(restored)}
+
+`));
   };
   const emitChunk = (delta, finish = null, usage) => {
     const chunk = {
@@ -5865,41 +6234,1702 @@ var createOpenCodeResponseTransform = (lane, requestedModel, toolNameMap) => {
   return stream;
 };
 
-// service/zen.ts
-import { randomBytes as randomBytes2 } from "node:crypto";
+// service/core/executors/opencode.js
+import crypto2 from "crypto";
 
-// service/rtk.ts — compatibility facade for the upstream RTK core.
-var compressMessages = (body, enabled) => {
-  const stats = upstreamCompressMessages(body, enabled);
-  return Boolean(stats && stats.hits && stats.hits.length);
+// service/core/executors/base.js
+class BaseExecutor {
+  constructor(provider, config) {
+    this.provider = provider;
+    this.config = config;
+    this.noAuth = config?.noAuth || false;
+  }
+  transformRequest(_model, body) {
+    return body;
+  }
+  buildUrl() {
+    throw new Error(`No URL builder configured for ${this.provider}`);
+  }
+  buildHeaders() {
+    throw new Error(`No header builder configured for ${this.provider}`);
+  }
+  async execute({ model, body, stream = true, credentials = {}, dispatch, ...options }) {
+    if (typeof dispatch !== "function") {
+      throw new Error("A local transport adapter is required.");
+    }
+    const transformedBody = this.transformRequest(model, body, stream, credentials);
+    const url = this.buildUrl(model, stream, 0, credentials);
+    const headers = this.buildHeaders(credentials, stream, url, model, transformedBody);
+    const path = new URL(url).pathname;
+    const responseFormat = path.endsWith("/responses") ? "openai-responses" : path.endsWith("/messages") ? "claude" : "openai";
+    const result = await dispatch({
+      url,
+      headers,
+      body: transformedBody,
+      responseFormat,
+      ...options
+    });
+    return { ...result, nativeUrl: url, nativeHeaders: headers, transformedBody, responseFormat: result.responseFormat || responseFormat };
+  }
+}
+
+// service/core/providers/registry/opencode.js
+var opencode_default = {
+  id: "opencode",
+  priority: 40,
+  hasFree: true,
+  alias: "oc",
+  uiAlias: "oc",
+  display: {
+    name: "OpenCode Free",
+    icon: "terminal",
+    color: "#E87040",
+    textIcon: "OC"
+  },
+  category: "free",
+  noAuth: true,
+  transport: {
+    baseUrl: "https://opencode.ai",
+    headers: {
+      "x-opencode-client": "desktop"
+    },
+    forceStream: true,
+    noAuth: true,
+    reasoningInject: {
+      scope: "all"
+    },
+    quirks: {
+      forceAutoToolChoiceModels: ["muse-spark-1.3-contributor-free"],
+      reasoningAliasFields: true
+    }
+  },
+  models: [
+    { id: "muse-spark-1.2-contributor-free", name: "Muse Spark 1.2 Contributor Free", targetFormat: "openai-responses" },
+    { id: "muse-spark-1.3-contributor-free", name: "Muse Spark 1.3 Contributor Free", targetFormat: "openai-responses" },
+    { id: "union-alpha", name: "Union Alpha Free", targetFormat: "claude" },
+    { id: "jev-1.13-free", name: "Jev 1.13 Free", kind: "systemone" }
+  ],
+  serviceKinds: ["llm", "systemone"],
+  systemoneConfig: {
+    baseUrl: "https://opencode.ai/zen/v1/systemone",
+    headers: {
+      "x-opencode-client": "desktop",
+      "User-Agent": "opencode/1.18.31"
+    }
+  },
+  modelsFetcher: { url: "https://opencode.ai/zen/v1/models", type: "opencode-free" },
+  passthroughModels: true
 };
 
-// service/zen.ts
-var sessionId = generateSessionId;
-var prepareChat = (raw, options) => {
-  let parsed;
+// service/core/config/providers.js
+var PROVIDERS = {
+  [opencode_default.id]: {
+    ...opencode_default.transport,
+    id: opencode_default.id,
+    alias: opencode_default.alias,
+    models: opencode_default.models,
+    noAuth: opencode_default.noAuth
+  }
+};
+
+// service/core/config/runtimeConfig.js
+var MEMORY_CONFIG = {
+  sessionTtlMs: 2 * 60 * 60 * 1000,
+  sessionCleanupIntervalMs: 30 * 60 * 1000,
+  dnsCacheTtlMs: 5 * 60 * 1000,
+  proxyDispatchersMaxSize: 20
+};
+var DEFAULT_MAX_TOKENS = 64000;
+var DEFAULT_MIN_TOKENS = 32000;
+
+// service/core/providers/capabilities.js
+var CAPABILITIES = {
+  "muse-spark-1.2-contributor-free": {
+    vision: true,
+    reasoning: true,
+    thinkingFormat: "openai",
+    contextWindow: 1048576,
+    maxOutput: 131072
+  },
+  "muse-spark-1.3-contributor-free": {
+    vision: true,
+    reasoning: true,
+    thinkingFormat: "openai",
+    contextWindow: 1048576,
+    maxOutput: 131072
+  },
+  "union-alpha": { vision: true, contextWindow: 262144, maxOutput: 131072 }
+};
+function getCapabilitiesForModel(_provider, model) {
+  const clean = String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
+  const id = clean.includes("/") ? clean.split("/").pop() : clean;
+  return CAPABILITIES[id] || { reasoning: false, contextWindow: 200000, maxOutput: 64000 };
+}
+
+// service/core/providers/thinkingLevels.js
+var OPENAI_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"];
+function getThinkingLevels(provider, model) {
+  if (provider !== "opencode")
+    return null;
+  const clean = String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
+  const id = clean.includes("/") ? clean.split("/").pop() : clean;
+  const capabilities = getCapabilitiesForModel(provider, id);
+  if (!capabilities.reasoning)
+    return null;
+  return capabilities.thinkingFormat === "openai" ? OPENAI_LEVELS : null;
+}
+
+// service/core/utils/reasoningContentInjector.js
+var PLACEHOLDER = " ";
+var providerRuleFor = (provider) => PROVIDERS[provider]?.reasoningInject;
+var MODEL_RULES2 = [
+  { match: (m) => /^kimi-/i.test(m || ""), scope: "toolCalls" },
+  { match: (m) => /deepseek/i.test(m || ""), scope: "all" }
+];
+var DEEPSEEK_V4_PRO = "deepseek-v4-pro";
+var DEEPSEEK_V4_PRO_ALIASES = {
+  [`${DEEPSEEK_V4_PRO}-max`]: {
+    thinkingType: "enabled",
+    reasoningEffort: "max"
+  },
+  [`${DEEPSEEK_V4_PRO}-none`]: {
+    thinkingType: "disabled",
+    reasoningEffort: null
+  }
+};
+function shouldInject(message, scope) {
+  if (message?.role !== "assistant")
+    return false;
+  const rc = message.reasoning_content;
+  if (typeof rc === "string" && rc.length > 0)
+    return false;
+  if (scope === "toolCalls")
+    return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+  return true;
+}
+function applyRule(body, rule) {
+  if (!rule || !body?.messages)
+    return body;
+  const messages = body.messages.map((m) => shouldInject(m, rule.scope) ? { ...m, reasoning_content: PLACEHOLDER } : m);
+  return { ...body, messages };
+}
+function applyDeepSeekV4ProAlias({ provider, model, body }) {
+  const alias = DEEPSEEK_V4_PRO_ALIASES[model];
+  if (provider !== "deepseek" || !alias || !body)
+    return body;
+  const nextBody = {
+    ...body,
+    model: DEEPSEEK_V4_PRO,
+    extra_body: {
+      ...body.extra_body || {},
+      thinking: {
+        ...body.extra_body?.thinking || {},
+        type: alias.thinkingType
+      }
+    }
+  };
+  if (alias.reasoningEffort) {
+    nextBody.reasoning_effort = alias.reasoningEffort;
+  } else {
+    delete nextBody.reasoning_effort;
+  }
+  return nextBody;
+}
+function injectReasoningContent({ provider, model, body }) {
+  const providerRule = providerRuleFor(provider);
+  const modelRule = MODEL_RULES2.find((r) => r.match(model));
+  const rule = providerRule || modelRule;
+  const nextBody = applyDeepSeekV4ProAlias({ provider, model, body });
+  return applyRule(nextBody, rule);
+}
+
+// service/core/utils/sessionManager.js
+import crypto from "crypto";
+var runtimeSessionStore = new Map;
+var continuationStore = new Map;
+var cleanupInterval = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of runtimeSessionStore) {
+    if (now - entry.lastUsed > MEMORY_CONFIG.sessionTtlMs) {
+      runtimeSessionStore.delete(key);
+    }
+  }
+}, MEMORY_CONFIG.sessionCleanupIntervalMs);
+if (cleanupInterval.unref)
+  cleanupInterval.unref();
+function deriveSessionId(connectionId) {
+  if (!connectionId) {
+    return generateBinaryStyleId();
+  }
+  const existing = runtimeSessionStore.get(connectionId);
+  if (existing) {
+    existing.lastUsed = Date.now();
+    return existing.sessionId;
+  }
+  const MAX_SESSIONS = 1000;
+  if (runtimeSessionStore.size >= MAX_SESSIONS) {
+    const oldest = runtimeSessionStore.keys().next().value;
+    runtimeSessionStore.delete(oldest);
+  }
+  const sessionId = generateBinaryStyleId();
+  runtimeSessionStore.set(connectionId, { sessionId, lastUsed: Date.now() });
+  return sessionId;
+}
+function generateBinaryStyleId() {
+  return crypto.randomUUID() + Date.now().toString();
+}
+var assistantSessionStore = new Map;
+var ASSISTANT_MIN_LEN = 50;
+var ASSISTANT_CAP_LEN = 50;
+var MAX_ASSISTANT_SESSIONS = 5000;
+var SESSION_HEADER_KEYS = ["x-session-id", "session-id", "session_id", "x-amp-thread-id"];
+var CLAUDE_CODE_SESSION_RE = /_session_([a-f0-9-]+)$/;
+var CLAUDE_CODE_SESSION_HEADER = "x-claude-code-session-id";
+function sha16(text) {
+  return crypto.createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+function normalizeSessionId(value) {
+  if (typeof value !== "string")
+    return null;
+  const v = value.trim();
+  if (!v || v.length > 256)
+    return null;
+  return v;
+}
+function extractClaudeCodeSession(userId) {
+  if (typeof userId !== "string" || !userId)
+    return null;
+  const m = userId.match(CLAUDE_CODE_SESSION_RE);
+  if (m)
+    return m[1];
+  if (userId[0] === "{") {
+    try {
+      return normalizeSessionId(JSON.parse(userId)?.session_id);
+    } catch {}
+  }
+  return null;
+}
+function headerValue(headers, key) {
+  if (!headers || typeof headers !== "object")
+    return null;
+  return normalizeSessionId(headers[key] ?? headers[key.toLowerCase()]);
+}
+var ANTIGRAVITY_CONV_RE = /^[a-z]+\/([0-9a-f-]{36})\//i;
+function extractAntigravitySession(body) {
+  const sid = body?.request?.sessionId;
+  if (sid != null && sid !== "")
+    return normalizeSessionId(String(sid));
+  const m = typeof body?.requestId === "string" ? body.requestId.match(ANTIGRAVITY_CONV_RE) : null;
+  return m ? normalizeSessionId(m[1]) : null;
+}
+function extractClientSessionId(headers, body, scope = "") {
+  const claude = extractClaudeCodeSession(body?.metadata?.user_id) || headerValue(headers, CLAUDE_CODE_SESSION_HEADER);
+  if (claude)
+    return `claude:${claude}`;
+  const antigravity = extractAntigravitySession(body);
+  if (antigravity)
+    return `antigravity:${antigravity}`;
+  for (const key of SESSION_HEADER_KEYS) {
+    const v = headerValue(headers, key);
+    if (v)
+      return v;
+  }
+  const requestId = scope === "kiro" ? null : headerValue(headers, "x-client-request-id");
+  if (requestId)
+    return requestId;
+  const fromBody = normalizeSessionId(body?.prompt_cache_key) || normalizeSessionId(body?.session_id) || normalizeSessionId(body?.conversation_id) || (scope === "kiro" ? null : normalizeSessionId(body?.metadata?.user_id));
+  return fromBody || null;
+}
+function requestMessages(body) {
+  if (Array.isArray(body?.messages))
+    return body.messages;
+  if (Array.isArray(body?.input))
+    return body.input;
+  return [];
+}
+function accumulateAssistantText(body) {
+  const items = requestMessages(body);
+  if (!items)
+    return "";
+  let text = "";
+  for (const item of items) {
+    if (item?.role !== "assistant")
+      continue;
+    if (typeof item.content === "string")
+      text += item.content;
+    else if (Array.isArray(item.content)) {
+      for (const c of item.content)
+        text += c?.text || c?.output || "";
+    }
+    if (text.length >= ASSISTANT_CAP_LEN)
+      break;
+  }
+  return text;
+}
+function assistantTextSessionId(scope, body) {
+  const text = accumulateAssistantText(body);
+  if (text.length < ASSISTANT_MIN_LEN)
+    return null;
+  const hash = sha16(`${scope}:${text.slice(0, ASSISTANT_CAP_LEN)}`);
+  const existing = assistantSessionStore.get(hash);
+  if (existing) {
+    existing.lastUsed = Date.now();
+    return existing.sessionId;
+  }
+  if (assistantSessionStore.size >= MAX_ASSISTANT_SESSIONS) {
+    assistantSessionStore.delete(assistantSessionStore.keys().next().value);
+  }
+  const sessionId = generateBinaryStyleId();
+  assistantSessionStore.set(hash, { sessionId, lastUsed: Date.now() });
+  return sessionId;
+}
+function resolveSessionIdentity({ headers, body, connectionId, workspaceId, scope = "" } = {}) {
+  const client = extractClientSessionId(headers, body, scope);
+  if (client)
+    return { sessionId: client, ephemeral: false };
+  const fromAssistant = scope === "kiro" ? null : assistantTextSessionId(`${scope}:${connectionId || ""}`, body);
+  if (fromAssistant)
+    return { sessionId: fromAssistant, ephemeral: false };
+  const ws = normalizeSessionId(workspaceId);
+  if (ws)
+    return { sessionId: ws, ephemeral: false };
+  if (scope === "kiro")
+    return { sessionId: generateBinaryStyleId(), ephemeral: true };
+  return { sessionId: deriveSessionId(connectionId), ephemeral: false };
+}
+function resolveSessionId(opts = {}) {
+  return resolveSessionIdentity(opts).sessionId;
+}
+var assistantCleanup = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of assistantSessionStore) {
+    if (now - entry.lastUsed > MEMORY_CONFIG.sessionTtlMs)
+      assistantSessionStore.delete(key);
+  }
+  for (const [key, entry] of continuationStore) {
+    if (now - entry.lastUsed > MEMORY_CONFIG.sessionTtlMs)
+      continuationStore.delete(key);
+  }
+}, MEMORY_CONFIG.sessionCleanupIntervalMs);
+if (assistantCleanup.unref)
+  assistantCleanup.unref();
+
+// service/core/translator/formats.js
+var FORMATS = {
+  OPENAI: "openai",
+  OPENAI_RESPONSES: "openai-responses",
+  OPENAI_RESPONSE: "openai-response",
+  CLAUDE: "claude",
+  GEMINI: "gemini",
+  GEMINI_CLI: "gemini-cli",
+  VERTEX: "vertex",
+  CODEX: "codex",
+  ANTIGRAVITY: "antigravity",
+  KIRO: "kiro",
+  CURSOR: "cursor",
+  OLLAMA: "ollama",
+  COMMANDCODE: "commandcode"
+};
+
+// service/core/providers/models/helpers.js
+function isMuseSparkModel(modelId) {
+  if (!modelId || typeof modelId !== "string")
+    return false;
+  const clean = modelId.replace(/\([^()]+\)\s*$/, "").trim();
+  const base = clean.includes("/") ? clean.split("/").pop() : clean;
+  return /^muse[-_]?spark(?:$|[-_:.\s])/i.test(base);
+}
+var OPENCODE_FAMILIES = [
+  { match: /^(grok|gpt|muse[-_]?spark)/i, supportedFormats: [FORMATS.OPENAI_RESPONSES], targetFormat: FORMATS.OPENAI_RESPONSES },
+  { match: /^deepseek-v4-(pro|flash)/, supportedFormats: [FORMATS.OPENAI, FORMATS.CLAUDE, FORMATS.OPENAI_RESPONSES] },
+  { match: /^(minimax|qwen)/, supportedFormats: [FORMATS.OPENAI, FORMATS.CLAUDE] },
+  { match: /^claude-/i, supportedFormats: [FORMATS.CLAUDE] }
+];
+
+// service/core/providers/shared.js
+var ANTHROPIC_API_VERSION = "2023-06-01";
+
+// service/core/translator/schema/roles.js
+var ROLE = {
+  USER: "user",
+  ASSISTANT: "assistant",
+  TOOL: "tool",
+  SYSTEM: "system",
+  DEVELOPER: "developer"
+};
+// service/core/translator/schema/blocks.js
+var OPENAI_BLOCK = {
+  TEXT: "text",
+  IMAGE_URL: "image_url",
+  IMAGE: "image",
+  INPUT_AUDIO: "input_audio",
+  AUDIO_URL: "audio_url",
+  FILE: "file",
+  FUNCTION: "function"
+};
+var CLAUDE_BLOCK = {
+  TEXT: "text",
+  IMAGE: "image",
+  DOCUMENT: "document",
+  TOOL_USE: "tool_use",
+  TOOL_RESULT: "tool_result",
+  CONTAINER_UPLOAD: "container_upload",
+  THINKING: "thinking",
+  REDACTED_THINKING: "redacted_thinking",
+  SERVER_TOOL_USE: "server_tool_use",
+  WEB_SEARCH_TOOL_RESULT: "web_search_tool_result"
+};
+var RESPONSES_ITEM = {
+  MESSAGE: "message",
+  FUNCTION_CALL: "function_call",
+  FUNCTION_CALL_OUTPUT: "function_call_output",
+  CUSTOM_TOOL_CALL: "custom_tool_call",
+  CUSTOM_TOOL_CALL_OUTPUT: "custom_tool_call_output",
+  ADDITIONAL_TOOLS: "additional_tools",
+  REASONING: "reasoning",
+  OUTPUT_TEXT: "output_text",
+  INPUT_TEXT: "input_text",
+  INPUT_IMAGE: "input_image",
+  SUMMARY_TEXT: "summary_text"
+};
+var VALID_OPENAI_CONTENT_TYPES = [
+  OPENAI_BLOCK.TEXT,
+  OPENAI_BLOCK.IMAGE_URL,
+  OPENAI_BLOCK.IMAGE,
+  OPENAI_BLOCK.INPUT_AUDIO,
+  OPENAI_BLOCK.AUDIO_URL,
+  OPENAI_BLOCK.FILE
+];
+var VALID_OPENAI_MESSAGE_TYPES = [
+  OPENAI_BLOCK.TEXT,
+  OPENAI_BLOCK.IMAGE_URL,
+  OPENAI_BLOCK.IMAGE,
+  "tool_calls",
+  CLAUDE_BLOCK.TOOL_RESULT
+];
+// service/core/translator/schema/finishReasons.js
+var OPENAI_FINISH = {
+  STOP: "stop",
+  LENGTH: "length",
+  TOOL_CALLS: "tool_calls",
+  CONTENT_FILTER: "content_filter"
+};
+var NO_RETRY_EMPTY_FINISH = new Set([OPENAI_FINISH.CONTENT_FILTER]);
+// service/core/translator/formats/responsesApi.js
+function normalizeResponsesInput(input) {
+  if (typeof input === "string") {
+    const text = input.trim() === "" ? "..." : input;
+    return [{ type: RESPONSES_ITEM.MESSAGE, role: ROLE.USER, content: [{ type: RESPONSES_ITEM.INPUT_TEXT, text }] }];
+  }
+  if (Array.isArray(input)) {
+    if (input.length === 0) {
+      return [{ type: RESPONSES_ITEM.MESSAGE, role: ROLE.USER, content: [{ type: RESPONSES_ITEM.INPUT_TEXT, text: "..." }] }];
+    }
+    return input;
+  }
+  return null;
+}
+var MAX_RESPONSES_CALL_ID_LEN = 64;
+var responsesCallIdSeq = 0;
+function clampResponsesCallId(id) {
+  if (typeof id !== "string" || !id)
+    return `call_${Date.now()}_${responsesCallIdSeq += 1}`;
+  return id.length > MAX_RESPONSES_CALL_ID_LEN ? id.substring(0, MAX_RESPONSES_CALL_ID_LEN) : id;
+}
+function coerceResponsesArguments(value) {
+  if (value === undefined || value === null || value === "")
+    return "{}";
+  if (typeof value !== "string") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "{}";
+    }
+  }
   try {
-    parsed = JSON.parse(raw);
+    JSON.parse(value);
+    return value;
   } catch {
-    throw new Error("The request body is not JSON.");
+    return "{}";
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("The request body must be a JSON object.");
+}
+function coerceResponsesOutput(value) {
+  if (typeof value === "string")
+    return value;
+  if (value === undefined || value === null)
+    return "";
+  if (Array.isArray(value)) {
+    return value.map((c) => {
+      try {
+        return c?.text ?? JSON.stringify(c);
+      } catch {
+        return String(c);
+      }
+    }).join("");
   }
-  const stream = parsed.stream === true;
-  const model = typeof parsed.model === "string" ? parsed.model : "";
-  if (!Array.isArray(parsed.messages)) {
-    throw new Error("The request body has no messages.");
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
   }
-  const effectiveOptions = typeof options === "boolean" ? { rtkEnabled: options } : options ?? {};
-  if (effectiveOptions.rtkEnabled ?? true) compressMessages(parsed, true);
-  applyTokenSaverStyles(parsed, effectiveOptions.cavemanLevel ?? "off", effectiveOptions.ponytailLevel ?? "off");
-  if (parsed.max_completion_tokens !== undefined && parsed.max_tokens === undefined) {
-    parsed.max_tokens = parsed.max_completion_tokens;
+}
+
+// service/core/executors/opencode.js
+var OPENCODE_UA = "opencode/latest/2.1.4/cli";
+var OPENCODE_CLIENT = "cli";
+var MAX_SESSION_LENGTH = 256;
+var MAX_TOOL_NAME_LEN = 128;
+var SESSION_HEADER = "x-opencode-session";
+var SESSION_FIELD = "_opencodeSession";
+var OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
+var BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+function hasValidOpencodeVersion(ua) {
+  const m = String(ua || "").match(/^opencode\/[a-z0-9-]+\/(\d+)\.\d+\.\d+\/[a-z0-9-]+$/i);
+  return !!m && parseInt(m[1], 10) >= 2;
+}
+var RESPONSES_MODELS = new Set([
+  "muse-spark-1.2-contributor-free",
+  "muse-spark-1.3-contributor-free"
+]);
+var MESSAGES_MODELS = new Set(["union-alpha"]);
+var lastTimestamp = 0;
+var counter = 0;
+function unstableRandom() {
+  const bytes = crypto2.randomBytes(14);
+  let randomPart = "";
+  for (let i = 0;i < 14; i++) {
+    randomPart += BASE62_CHARS[bytes[i] % 62];
   }
-  if (parsed.reasoning_effort === "auto") delete parsed.reasoning_effort;
-  parsed.stream = true;
-  return { body: JSON.stringify(parsed), stream, model };
+  return randomPart;
+}
+var SESSION_PREFIX_MASK = (1n << 48n) - 1n;
+function descendingTimeHex(time, counterValue) {
+  return (~(BigInt(time) * 0x1000n + BigInt(counterValue)) & SESSION_PREFIX_MASK).toString(16).padStart(12, "0");
+}
+function generateSessionId(timestamp = Date.now()) {
+  if (timestamp !== lastTimestamp) {
+    lastTimestamp = timestamp;
+    counter = 0;
+  }
+  counter++;
+  return `ses_${descendingTimeHex(timestamp, counter)}${unstableRandom()}`;
+}
+var translatedOpencodeSessions = new Map;
+var MAX_TRANSLATED_SESSIONS = 5000;
+var translatedSessionCleanup = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of translatedOpencodeSessions) {
+    if (now - entry.lastUsed > MEMORY_CONFIG.sessionTtlMs) {
+      translatedOpencodeSessions.delete(key);
+    }
+  }
+}, MEMORY_CONFIG.sessionCleanupIntervalMs);
+if (translatedSessionCleanup.unref)
+  translatedSessionCleanup.unref();
+function translateSessionId(sessionId, clientTool = "") {
+  if (typeof sessionId === "string" && OPENCODE_SESSION_RE.test(sessionId.trim())) {
+    return sessionId.trim();
+  }
+  const key = `${clientTool || "generic"}\x00${sessionId || ""}`;
+  const existing = translatedOpencodeSessions.get(key);
+  if (existing) {
+    existing.lastUsed = Date.now();
+    return existing.sessionId;
+  }
+  const translated = `ses_${descendingTimeHex(Date.now(), 1)}${unstableRandom()}`;
+  if (translatedOpencodeSessions.size >= MAX_TRANSLATED_SESSIONS) {
+    translatedOpencodeSessions.delete(translatedOpencodeSessions.keys().next().value);
+  }
+  translatedOpencodeSessions.set(key, { sessionId: translated, lastUsed: Date.now() });
+  return translated;
+}
+function normalizeSession(value) {
+  if (typeof value !== "string")
+    return null;
+  const normalized = value.trim();
+  if (!normalized || normalized.length > MAX_SESSION_LENGTH)
+    return null;
+  return normalized;
+}
+function nativeSession(headers) {
+  if (!headers || typeof headers !== "object")
+    return null;
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === SESSION_HEADER) {
+      const normalized = normalizeSession(value);
+      if (normalized && OPENCODE_SESSION_RE.test(normalized))
+        return normalized;
+    }
+  }
+  return null;
+}
+var stableOpencodeSessions = new Map;
+var MAX_STABLE_SESSIONS = 1000;
+var stableSessionCleanup = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of stableOpencodeSessions) {
+    if (now - entry.lastUsed > MEMORY_CONFIG.sessionTtlMs) {
+      stableOpencodeSessions.delete(key);
+    }
+  }
+}, MEMORY_CONFIG.sessionCleanupIntervalMs);
+if (stableSessionCleanup.unref)
+  stableSessionCleanup.unref();
+function identityKey(credentials) {
+  const connectionId = credentials?.connectionId || credentials?.id;
+  if (connectionId)
+    return `opencode:conn:${String(connectionId).slice(0, 128)}`;
+  const raw = credentials?.rawHeaders || {};
+  const auth = raw.authorization || raw.Authorization || raw["x-api-key"] || raw["X-Api-Key"] || "";
+  if (auth) {
+    const digest = crypto2.createHash("sha256").update(String(auth)).digest("hex").slice(0, 32);
+    return `opencode:auth:${digest}`;
+  }
+  return "opencode:default";
+}
+function stableSessionId(credentials) {
+  const key = identityKey(credentials);
+  const existing = stableOpencodeSessions.get(key);
+  if (existing) {
+    existing.lastUsed = Date.now();
+    stableOpencodeSessions.delete(key);
+    stableOpencodeSessions.set(key, existing);
+    return existing.sessionId;
+  }
+  const sessionId = generateSessionId();
+  if (stableOpencodeSessions.size >= MAX_STABLE_SESSIONS) {
+    stableOpencodeSessions.delete(stableOpencodeSessions.keys().next().value);
+  }
+  stableOpencodeSessions.set(key, { sessionId, lastUsed: Date.now() });
+  return sessionId;
+}
+function bodyHasSessionHints(body) {
+  try {
+    if (!body || typeof body !== "object")
+      return false;
+    if (typeof body.session_id === "string" && body.session_id.trim())
+      return true;
+    if (typeof body.conversation_id === "string" && body.conversation_id.trim())
+      return true;
+    if (typeof body.prompt_cache_key === "string" && body.prompt_cache_key.trim())
+      return true;
+    if (body.metadata && typeof body.metadata.user_id === "string" && body.metadata.user_id.trim())
+      return true;
+    if (body.request && body.request.sessionId != null && String(body.request.sessionId) !== "")
+      return true;
+    const arr = Array.isArray(body.messages) ? body.messages : Array.isArray(body.input) ? body.input : null;
+    if (arr) {
+      let assistantText = "";
+      for (const msg of arr) {
+        if (msg?.role === "assistant") {
+          const content = msg.content;
+          if (typeof content === "string")
+            assistantText += content;
+          else if (Array.isArray(content)) {
+            for (const part of content)
+              assistantText += part?.text || part?.output || "";
+          }
+          if (assistantText.length >= 50)
+            return true;
+        }
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+function baseModelId(model) {
+  return String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
+}
+function isResponsesModel(model) {
+  const base = baseModelId(model);
+  return RESPONSES_MODELS.has(base) || isMuseSparkModel(base);
+}
+function isMessagesModel(model) {
+  return MESSAGES_MODELS.has(baseModelId(model));
+}
+function resolveOpencodeSession(body, credentials, providerSessionId, clientTool) {
+  const headers = credentials?.rawHeaders || {};
+  const native = nativeSession(headers);
+  if (native)
+    return native;
+  let incoming = null;
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === SESSION_HEADER) {
+      incoming = normalizeSession(value);
+      break;
+    }
+  }
+  const hinted = incoming || normalizeSession(providerSessionId);
+  if (hinted)
+    return translateSessionId(hinted, clientTool);
+  if (credentials?.connectionId || bodyHasSessionHints(body)) {
+    let viaManager = null;
+    try {
+      viaManager = resolveSessionId({
+        headers,
+        body,
+        connectionId: credentials?.connectionId,
+        scope: "opencode"
+      });
+    } catch {
+      viaManager = null;
+    }
+    if (viaManager)
+      return translateSessionId(viaManager, clientTool);
+  }
+  return stableSessionId(credentials);
+}
+function normalizeResponsesTools(body) {
+  if (!Array.isArray(body.tools))
+    return;
+  const validNames = new Set;
+  body.tools = body.tools.filter((tool) => {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool))
+      return false;
+    const fn = tool.function && typeof tool.function === "object" && !Array.isArray(tool.function) ? tool.function : null;
+    const rawName = typeof tool.name === "string" ? tool.name : typeof fn?.name === "string" ? fn.name : "";
+    const name = rawName.trim();
+    if (!name)
+      return false;
+    const description = typeof tool.description === "string" ? tool.description : typeof fn?.description === "string" ? fn.description : "";
+    let parameters = tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters) ? tool.parameters : fn?.parameters && typeof fn.parameters === "object" && !Array.isArray(fn.parameters) ? fn.parameters : { type: "object", properties: {} };
+    if (parameters.type === "object" && !parameters.properties)
+      parameters = { ...parameters, properties: {} };
+    for (const k of Object.keys(tool))
+      delete tool[k];
+    tool.type = "function";
+    tool.name = name.slice(0, MAX_TOOL_NAME_LEN);
+    if (description)
+      tool.description = description;
+    tool.parameters = parameters;
+    validNames.add(tool.name);
+    return true;
+  });
+  if (body.tool_choice && typeof body.tool_choice === "object" && !Array.isArray(body.tool_choice)) {
+    if (body.tool_choice.type === "function") {
+      const n = typeof body.tool_choice.name === "string" ? body.tool_choice.name.trim() : "";
+      if (!n || !validNames.has(n))
+        delete body.tool_choice;
+    }
+  }
+}
+function sanitizeResponsesItems(body) {
+  if (!Array.isArray(body.input))
+    return;
+  body.input = body.input.filter((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item))
+      return true;
+    if (item.type === "reasoning")
+      return false;
+    delete item.encrypted_content;
+    delete item.reasoning_encrypted_content;
+    if (item.type === "function_call") {
+      if (!item.name || typeof item.name !== "string" || item.name.trim() === "")
+        return false;
+      item.name = item.name.trim().slice(0, MAX_TOOL_NAME_LEN);
+      item.call_id = clampResponsesCallId(item.call_id);
+      item.arguments = coerceResponsesArguments(item.arguments);
+      return true;
+    }
+    if (item.type === "function_call_output") {
+      item.call_id = clampResponsesCallId(item.call_id);
+      item.output = coerceResponsesOutput(item.output);
+      return true;
+    }
+    return true;
+  });
+}
+function normalizeOpencodeReasoning(model, body) {
+  const current = body.reasoning;
+  const currentReasoning = current && typeof current === "object" && !Array.isArray(current) ? current : null;
+  const requestedEffort = typeof body.reasoning_effort === "string" ? body.reasoning_effort : currentReasoning?.effort;
+  if (typeof requestedEffort !== "string")
+    return;
+  const cleanModel = baseModelId(model || body.model);
+  const supportedLevels = getThinkingLevels("opencode", cleanModel);
+  let effort = requestedEffort.toLowerCase().trim();
+  if ((effort === "max" || effort === "ultra") && supportedLevels?.length && !supportedLevels.includes(effort)) {
+    if (effort === "ultra" && supportedLevels.includes("max"))
+      effort = "max";
+    else if (supportedLevels.includes("xhigh"))
+      effort = "xhigh";
+  }
+  body.reasoning = { ...currentReasoning, effort };
+  if (!body.reasoning.summary)
+    body.reasoning.summary = "auto";
+  delete body.reasoning_effort;
+}
+function dropAdaptiveReasoningEffort(body) {
+  if (body?.reasoning_effort === "auto")
+    delete body.reasoning_effort;
+}
+
+class OpenCodeExecutor extends BaseExecutor {
+  constructor() {
+    super("opencode", PROVIDERS.opencode);
+  }
+  prepareRequestCredentials({ body, credentials, providerSessionId, clientTool } = {}) {
+    const sourceCredentials = credentials || {};
+    const session = resolveOpencodeSession(body, sourceCredentials, providerSessionId, clientTool);
+    return {
+      ...sourceCredentials,
+      [SESSION_FIELD]: session
+    };
+  }
+  transformRequest(model, body, stream, credentials) {
+    if (body && typeof body === "object" && model && !body.model)
+      body.model = model;
+    if (body && typeof body === "object")
+      body.stream = true;
+    if (isResponsesModel(model || body?.model) && body && typeof body === "object") {
+      if ("tool_choice" in body && body.tool_choice !== "auto" && this.config.quirks?.forceAutoToolChoiceModels?.includes(baseModelId(model))) {
+        body.tool_choice = "auto";
+      }
+      const normalized = normalizeResponsesInput(body.input);
+      if (normalized)
+        body.input = normalized;
+      if (!Array.isArray(body.input) || body.input.length === 0) {
+        body.input = [{ type: "message", role: "user", content: [{ type: "input_text", text: "..." }] }];
+      }
+      if (body.max_output_tokens === undefined) {
+        if (body.max_completion_tokens !== undefined)
+          body.max_output_tokens = body.max_completion_tokens;
+        else if (body.max_tokens !== undefined)
+          body.max_output_tokens = body.max_tokens;
+      }
+      delete body.max_tokens;
+      delete body.max_completion_tokens;
+      normalizeOpencodeReasoning(model, body);
+      body.stream = true;
+      body.store = false;
+      normalizeResponsesTools(body);
+      sanitizeResponsesItems(body);
+      applyFingerprintTools(body, true);
+    } else if (body && typeof body === "object") {
+      dropAdaptiveReasoningEffort(body);
+      applyFingerprintTools(body, false, { claude: isMessagesModel(model || body?.model) });
+    }
+    return injectReasoningContent({ provider: this.provider, model, body });
+  }
+  async execute(args) {
+    return super.execute({ ...args, credentials: this.prepareRequestCredentials(args) });
+  }
+  buildUrl(model) {
+    const base = this.config.baseUrl;
+    if (isResponsesModel(model))
+      return `${base}/inference/v1/responses`;
+    if (isMessagesModel(model))
+      return `${base}/inference/v1/messages`;
+    return `${base}/inference/v1/chat/completions`;
+  }
+  buildHeaders(credentials, stream = true, url = "") {
+    const raw = credentials?.rawHeaders || {};
+    const lower = {};
+    for (const [k, v] of Object.entries(raw))
+      lower[k.toLowerCase()] = v;
+    const downstreamUa = lower["user-agent"] || "";
+    const isOpencodeDownstream = hasValidOpencodeVersion(downstreamUa);
+    const session = credentials?.[SESSION_FIELD] || this.prepareRequestCredentials({ credentials })[SESSION_FIELD];
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: "Bearer public",
+      "User-Agent": isOpencodeDownstream ? downstreamUa : OPENCODE_UA,
+      "x-opencode-client": lower["x-opencode-client"] || OPENCODE_CLIENT,
+      "x-opencode-session": session,
+      "x-opencode-session-id": session,
+      "x-session-affinity": session,
+      "x-session-id": session,
+      "x-opencode-project": lower["x-opencode-project"] || "global",
+      Accept: stream ? "text/event-stream" : "*/*"
+    };
+    if (url.endsWith("/messages"))
+      headers["anthropic-version"] = ANTHROPIC_API_VERSION;
+    return headers;
+  }
+}
+
+// service/core/translator/request/openai-responses.js
+var MAX_TOOL_NAME_LEN2 = 128;
+function openaiResponsesToOpenAIRequest(model, body, stream, credentials) {
+  if (!body.input)
+    return body;
+  const result = { ...body };
+  result.messages = [];
+  if (body.instructions) {
+    result.messages.push({ role: ROLE.SYSTEM, content: body.instructions });
+  }
+  let currentAssistantMsg = null;
+  let pendingToolResults = [];
+  let pendingReasoning = "";
+  let pendingReasoningEncrypted = "";
+  const additionalTools = [];
+  const customToolNames = new Set;
+  const inputItems = normalizeResponsesInput(body.input);
+  if (!inputItems)
+    return body;
+  const extractReasoningText = (item) => {
+    if (Array.isArray(item.summary)) {
+      const txt = item.summary.map((s) => s?.text || "").filter(Boolean).join(`
+`);
+      if (txt)
+        return txt;
+    }
+    if (Array.isArray(item.content)) {
+      const txt = item.content.map((c) => c?.text || "").filter(Boolean).join(`
+`);
+      if (txt)
+        return txt;
+    }
+    return "";
+  };
+  const attachPendingReasoning = (msg) => {
+    if (pendingReasoning)
+      msg.reasoning_content = pendingReasoning;
+    if (pendingReasoningEncrypted)
+      msg.encrypted_content = pendingReasoningEncrypted;
+    pendingReasoning = "";
+    pendingReasoningEncrypted = "";
+  };
+  for (const item of inputItems) {
+    const itemType = item.type || (item.role ? RESPONSES_ITEM.MESSAGE : null);
+    if (itemType === RESPONSES_ITEM.MESSAGE) {
+      if (currentAssistantMsg) {
+        result.messages.push(currentAssistantMsg);
+        currentAssistantMsg = null;
+      }
+      if (pendingToolResults.length > 0) {
+        for (const tr of pendingToolResults) {
+          result.messages.push(tr);
+        }
+        pendingToolResults = [];
+      }
+      const content = Array.isArray(item.content) ? item.content.map((c) => {
+        if (c.type === RESPONSES_ITEM.INPUT_TEXT)
+          return { type: OPENAI_BLOCK.TEXT, text: c.text };
+        if (c.type === RESPONSES_ITEM.OUTPUT_TEXT)
+          return { type: OPENAI_BLOCK.TEXT, text: c.text };
+        if (c.type === RESPONSES_ITEM.INPUT_IMAGE) {
+          const url = c.image_url || c.file_id || "";
+          return { type: OPENAI_BLOCK.IMAGE_URL, image_url: { url, detail: c.detail || "auto" } };
+        }
+        return c;
+      }) : item.content;
+      const msg = { role: item.role, content };
+      if (item.role === ROLE.ASSISTANT)
+        attachPendingReasoning(msg);
+      else {
+        pendingReasoning = "";
+        pendingReasoningEncrypted = "";
+      }
+      result.messages.push(msg);
+    } else if (itemType === RESPONSES_ITEM.FUNCTION_CALL || itemType === RESPONSES_ITEM.CUSTOM_TOOL_CALL) {
+      if (!currentAssistantMsg) {
+        currentAssistantMsg = {
+          role: ROLE.ASSISTANT,
+          content: null,
+          tool_calls: []
+        };
+        attachPendingReasoning(currentAssistantMsg);
+      }
+      if (!item.name || typeof item.name !== "string" || item.name.trim() === "")
+        continue;
+      if (itemType === RESPONSES_ITEM.CUSTOM_TOOL_CALL)
+        customToolNames.add(item.name);
+      const toolInput = itemType === RESPONSES_ITEM.CUSTOM_TOOL_CALL ? { input: typeof item.input === "string" ? item.input : JSON.stringify(item.input ?? "") } : item.arguments;
+      currentAssistantMsg.tool_calls.push({
+        id: item.call_id,
+        type: OPENAI_BLOCK.FUNCTION,
+        function: {
+          name: item.name,
+          arguments: typeof toolInput === "string" ? toolInput : JSON.stringify(toolInput ?? {})
+        }
+      });
+    } else if (itemType === RESPONSES_ITEM.FUNCTION_CALL_OUTPUT || itemType === RESPONSES_ITEM.CUSTOM_TOOL_CALL_OUTPUT) {
+      if (currentAssistantMsg) {
+        result.messages.push(currentAssistantMsg);
+        currentAssistantMsg = null;
+      }
+      if (pendingToolResults.length > 0) {
+        for (const tr of pendingToolResults) {
+          result.messages.push(tr);
+        }
+        pendingToolResults = [];
+      }
+      result.messages.push({
+        role: ROLE.TOOL,
+        tool_call_id: item.call_id,
+        content: typeof item.output === "string" ? item.output : JSON.stringify(item.output)
+      });
+    } else if (itemType === RESPONSES_ITEM.ADDITIONAL_TOOLS) {
+      if (Array.isArray(item.tools))
+        additionalTools.push(...item.tools);
+    } else if (itemType === RESPONSES_ITEM.REASONING) {
+      const txt = extractReasoningText(item);
+      if (txt)
+        pendingReasoning = pendingReasoning ? `${pendingReasoning}
+${txt}` : txt;
+      if (typeof item.encrypted_content === "string" && item.encrypted_content) {
+        pendingReasoningEncrypted = item.encrypted_content;
+      }
+      continue;
+    }
+  }
+  if (currentAssistantMsg) {
+    result.messages.push(currentAssistantMsg);
+  }
+  if (pendingToolResults.length > 0) {
+    for (const tr of pendingToolResults) {
+      result.messages.push(tr);
+    }
+  }
+  const responseTools = [
+    ...Array.isArray(body.tools) ? body.tools : [],
+    ...additionalTools
+  ];
+  if (responseTools.length > 0) {
+    result.tools = responseTools.map((tool) => {
+      if (tool.function)
+        return tool;
+      const name = tool.name;
+      if (!name || typeof name !== "string" || name.trim() === "")
+        return null;
+      if (tool.type === "custom") {
+        customToolNames.add(name);
+        const formatHint = [tool.format?.syntax, tool.format?.definition].filter(Boolean).join(`
+`);
+        return {
+          type: OPENAI_BLOCK.FUNCTION,
+          function: {
+            name,
+            description: [String(tool.description || ""), formatHint].filter(Boolean).join(`
+
+`),
+            parameters: {
+              type: "object",
+              properties: {
+                input: {
+                  type: "string",
+                  description: "Raw freeform input for this custom tool"
+                }
+              },
+              required: ["input"],
+              additionalProperties: false
+            }
+          }
+        };
+      }
+      return {
+        type: OPENAI_BLOCK.FUNCTION,
+        function: {
+          name,
+          description: String(tool.description || ""),
+          parameters: normalizeToolParameters(tool.parameters),
+          strict: tool.strict
+        }
+      };
+    }).filter(Boolean);
+  }
+  if (customToolNames.size > 0)
+    result._customToolNames = [...customToolNames];
+  if (result.max_output_tokens !== undefined) {
+    if (result.max_tokens === undefined)
+      result.max_tokens = result.max_output_tokens;
+    delete result.max_output_tokens;
+  }
+  delete result.input;
+  delete result.instructions;
+  delete result.include;
+  delete result.prompt_cache_key;
+  delete result.store;
+  if (typeof result.reasoning?.effort === "string") {
+    result.reasoning_effort = result.reasoning.effort;
+  }
+  delete result.reasoning;
+  delete result.client_metadata;
+  return result;
+}
+function extractInstructionsText(content) {
+  if (typeof content === "string")
+    return content;
+  if (Array.isArray(content)) {
+    return content.map((c) => {
+      if (typeof c?.text === "string")
+        return c.text;
+      if (typeof c?.content === "string")
+        return c.content;
+      return "";
+    }).filter(Boolean).join(`
+`);
+  }
+  return "";
+}
+function normalizeToolParameters(params) {
+  if (!params)
+    return { type: "object", properties: {} };
+  if (params.type === "object" && !params.properties)
+    return { ...params, properties: {} };
+  return params;
+}
+function buildReasoningInputItem(msg) {
+  if (!msg || typeof msg !== "object")
+    return null;
+  const encrypted = typeof msg.encrypted_content === "string" && msg.encrypted_content || typeof msg.reasoning_encrypted_content === "string" && msg.reasoning_encrypted_content || typeof msg.reasoning?.encrypted_content === "string" && msg.reasoning.encrypted_content || "";
+  let summaryText = "";
+  if (typeof msg.reasoning_content === "string" && msg.reasoning_content.trim()) {
+    summaryText = msg.reasoning_content;
+  } else if (typeof msg.reasoning === "string" && msg.reasoning.trim()) {
+    summaryText = msg.reasoning;
+  } else if (Array.isArray(msg.reasoning_details)) {
+    summaryText = msg.reasoning_details.map((d) => typeof d?.text === "string" ? d.text : typeof d?.content === "string" ? d.content : "").filter(Boolean).join(`
+`);
+  }
+  if (!encrypted && !summaryText)
+    return null;
+  const item = { type: RESPONSES_ITEM.REASONING };
+  if (summaryText) {
+    item.summary = [{ type: RESPONSES_ITEM.SUMMARY_TEXT, text: summaryText }];
+  }
+  if (encrypted)
+    item.encrypted_content = encrypted;
+  return item;
+}
+function openaiToOpenAIResponsesRequest(model, body, stream, credentials) {
+  if (body.input) {
+    const out = { ...body, model, stream: true };
+    if (out.max_output_tokens === undefined) {
+      if (out.max_completion_tokens !== undefined)
+        out.max_output_tokens = out.max_completion_tokens;
+      else if (out.max_tokens !== undefined)
+        out.max_output_tokens = out.max_tokens;
+    }
+    delete out.max_tokens;
+    delete out.max_completion_tokens;
+    return out;
+  }
+  const result = {
+    model,
+    input: [],
+    stream: true,
+    store: false
+  };
+  let hasSystemMessage = false;
+  const messages = body.messages || [];
+  for (const msg of messages) {
+    if (msg.role === ROLE.SYSTEM || msg.role === ROLE.DEVELOPER) {
+      if (!hasSystemMessage) {
+        result.instructions = extractInstructionsText(msg.content);
+        hasSystemMessage = true;
+      }
+      continue;
+    }
+    if (msg.role === ROLE.USER || msg.role === ROLE.ASSISTANT) {
+      if (msg.role === ROLE.ASSISTANT) {
+        const reasoningItem = buildReasoningInputItem(msg);
+        if (reasoningItem)
+          result.input.push(reasoningItem);
+      }
+      const contentType = msg.role === ROLE.USER ? RESPONSES_ITEM.INPUT_TEXT : RESPONSES_ITEM.OUTPUT_TEXT;
+      const content = typeof msg.content === "string" ? [{ type: contentType, text: msg.content }] : Array.isArray(msg.content) ? msg.content.map((c) => {
+        if (c.type === OPENAI_BLOCK.TEXT)
+          return { type: contentType, text: c.text };
+        if (c.type === OPENAI_BLOCK.IMAGE_URL) {
+          const url = typeof c.image_url === "string" ? c.image_url : c.image_url?.url;
+          return { type: RESPONSES_ITEM.INPUT_IMAGE, image_url: url, detail: c.image_url?.detail || "auto" };
+        }
+        if (c.type === RESPONSES_ITEM.INPUT_IMAGE)
+          return c;
+        const text = c.text || c.content || JSON.stringify(c);
+        return { type: contentType, text: typeof text === "string" ? text : JSON.stringify(text) };
+      }) : [];
+      if (content.length > 0) {
+        result.input.push({
+          type: RESPONSES_ITEM.MESSAGE,
+          role: msg.role,
+          content
+        });
+      }
+    }
+    if (msg.role === ROLE.ASSISTANT && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        const name = typeof tc.function?.name === "string" ? tc.function.name.trim() : "";
+        if (!name)
+          continue;
+        result.input.push({
+          type: RESPONSES_ITEM.FUNCTION_CALL,
+          call_id: clampResponsesCallId(tc.id),
+          name: name.slice(0, MAX_TOOL_NAME_LEN2),
+          arguments: coerceResponsesArguments(tc.function?.arguments)
+        });
+      }
+    }
+    if (msg.role === ROLE.TOOL) {
+      result.input.push({
+        type: RESPONSES_ITEM.FUNCTION_CALL_OUTPUT,
+        call_id: clampResponsesCallId(msg.tool_call_id),
+        output: coerceResponsesOutput(msg.content)
+      });
+    }
+  }
+  if (!hasSystemMessage) {
+    result.instructions = "";
+  }
+  if (body.tools && Array.isArray(body.tools)) {
+    result.tools = body.tools.map((tool) => {
+      if (tool.type === OPENAI_BLOCK.FUNCTION) {
+        const name = typeof tool.function?.name === "string" ? tool.function.name.trim() : "";
+        if (!name)
+          return null;
+        return {
+          type: OPENAI_BLOCK.FUNCTION,
+          name: name.slice(0, MAX_TOOL_NAME_LEN2),
+          description: String(tool.function.description || ""),
+          parameters: normalizeToolParameters(tool.function.parameters),
+          strict: tool.function.strict
+        };
+      }
+      return tool;
+    }).filter(Boolean);
+  }
+  if (body.temperature !== undefined)
+    result.temperature = body.temperature;
+  if (body.max_output_tokens !== undefined) {
+    result.max_output_tokens = body.max_output_tokens;
+  } else if (body.max_completion_tokens !== undefined) {
+    result.max_output_tokens = body.max_completion_tokens;
+  } else if (body.max_tokens !== undefined) {
+    result.max_output_tokens = body.max_tokens;
+  }
+  if (body.top_p !== undefined)
+    result.top_p = body.top_p;
+  if (body.reasoning !== undefined)
+    result.reasoning = body.reasoning;
+  if (body.reasoning_effort !== undefined)
+    result.reasoning = { effort: body.reasoning_effort, summary: "auto" };
+  if (body.service_tier !== undefined)
+    result.service_tier = body.service_tier;
+  if (body.prompt_cache_key !== undefined)
+    result.prompt_cache_key = body.prompt_cache_key;
+  return result;
+}
+register(FORMATS.OPENAI_RESPONSES, FORMATS.OPENAI, openaiResponsesToOpenAIRequest, null);
+register(FORMATS.OPENAI, FORMATS.OPENAI_RESPONSES, openaiToOpenAIResponsesRequest, null);
+
+// service/core/config/appConstants.js
+var CLAUDE_SYSTEM_PROMPT = "You are Claude Code, Anthropic's official CLI for Claude.";
+
+// service/core/translator/formats/maxTokens.js
+function adjustMaxTokens(body, ceiling = DEFAULT_MAX_TOKENS) {
+  let maxTokens = body.max_tokens || DEFAULT_MAX_TOKENS;
+  if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
+    if (maxTokens < DEFAULT_MIN_TOKENS) {
+      maxTokens = DEFAULT_MIN_TOKENS;
+    }
+  }
+  if (body.thinking?.budget_tokens && maxTokens <= body.thinking.budget_tokens) {
+    maxTokens = body.thinking.budget_tokens + 1024;
+  }
+  if (maxTokens > ceiling)
+    maxTokens = ceiling;
+  return maxTokens;
+}
+
+// service/core/translator/concerns/json.js
+function safeParseJSON(str, fallback) {
+  if (typeof str !== "string")
+    return str;
+  try {
+    return JSON.parse(str);
+  } catch {
+    return fallback;
+  }
+}
+
+// service/core/translator/concerns/image.js
+var DATA_URI_RE = /^data:([^;]+);base64,([\s\S]+)$/;
+function parseDataUri(url) {
+  if (typeof url !== "string")
+    return null;
+  const match = url.match(DATA_URI_RE);
+  return match ? { mimeType: match[1], base64: match[2] } : null;
+}
+
+// service/core/translator/formats/gemini.js
+function extractTextContent(content, separator = "") {
+  if (typeof content === "string")
+    return content;
+  if (Array.isArray(content)) {
+    return content.filter((part) => part.type === OPENAI_BLOCK.TEXT).map((part) => part.text).join(separator);
+  }
+  return "";
+}
+
+// service/core/translator/request/openai-to-claude.js
+var CLAUDE_OAUTH_TOOL_PREFIX = "";
+function openaiToClaudeRequest(model, body, stream) {
+  const toolNameMap = new Map;
+  const modelCeiling = getCapabilitiesForModel(null, model).maxOutput || undefined;
+  const result = {
+    model,
+    max_tokens: adjustMaxTokens(body, modelCeiling),
+    stream
+  };
+  if (body.temperature !== undefined) {
+    result.temperature = body.temperature;
+  }
+  result.messages = [];
+  const systemParts = [];
+  if (body.messages && Array.isArray(body.messages)) {
+    for (const msg of body.messages) {
+      if (msg.role === ROLE.SYSTEM) {
+        systemParts.push(typeof msg.content === "string" ? msg.content : extractTextContent(msg.content, `
+`));
+      }
+    }
+    const nonSystemMessages = body.messages.filter((m) => m.role !== ROLE.SYSTEM);
+    let currentRole = undefined;
+    let currentParts = [];
+    const flushCurrentMessage = () => {
+      if (currentRole && currentParts.length > 0) {
+        result.messages.push({ role: currentRole, content: currentParts });
+        currentParts = [];
+      }
+    };
+    for (const msg of nonSystemMessages) {
+      const newRole = msg.role === ROLE.USER || msg.role === ROLE.TOOL ? ROLE.USER : ROLE.ASSISTANT;
+      const blocks = getContentBlocksFromMessage(msg, toolNameMap);
+      const hasToolUse = blocks.some((b) => b.type === CLAUDE_BLOCK.TOOL_USE);
+      const hasToolResult = blocks.some((b) => b.type === CLAUDE_BLOCK.TOOL_RESULT);
+      if (hasToolResult) {
+        const toolResultBlocks = blocks.filter((b) => b.type === CLAUDE_BLOCK.TOOL_RESULT);
+        const otherBlocks = blocks.filter((b) => b.type !== CLAUDE_BLOCK.TOOL_RESULT);
+        flushCurrentMessage();
+        if (toolResultBlocks.length > 0) {
+          result.messages.push({ role: ROLE.USER, content: toolResultBlocks });
+        }
+        if (otherBlocks.length > 0) {
+          currentRole = newRole;
+          currentParts.push(...otherBlocks);
+        }
+        continue;
+      }
+      if (currentRole !== newRole) {
+        flushCurrentMessage();
+        currentRole = newRole;
+      }
+      currentParts.push(...blocks);
+      if (hasToolUse) {
+        flushCurrentMessage();
+      }
+    }
+    flushCurrentMessage();
+    for (let i = result.messages.length - 1;i >= 0; i--) {
+      const message = result.messages[i];
+      if (message.role === ROLE.ASSISTANT && Array.isArray(message.content) && message.content.length > 0) {
+        const validBlockTypes = [CLAUDE_BLOCK.TEXT, CLAUDE_BLOCK.TOOL_USE, CLAUDE_BLOCK.TOOL_RESULT, CLAUDE_BLOCK.IMAGE];
+        for (let j = message.content.length - 1;j >= 0; j--) {
+          const block = message.content[j];
+          if (validBlockTypes.includes(block.type)) {
+            block.cache_control = { type: "ephemeral" };
+            break;
+          }
+        }
+        break;
+      }
+    }
+  }
+  if (body.response_format) {
+    const responseFormat = body.response_format;
+    if (responseFormat.type === "json_schema" && responseFormat.json_schema?.schema) {
+      const schemaJson = JSON.stringify(responseFormat.json_schema.schema, null, 2);
+      systemParts.push(`You must respond with valid JSON that strictly follows this JSON schema:
+\`\`\`json
+${schemaJson}
+\`\`\`
+Respond ONLY with the JSON object, no other text.`);
+    } else if (responseFormat.type === "json_object") {
+      systemParts.push("You must respond with valid JSON. Respond ONLY with a JSON object, no other text.");
+    }
+  }
+  const claudeCodePrompt = { type: CLAUDE_BLOCK.TEXT, text: CLAUDE_SYSTEM_PROMPT };
+  if (systemParts.length > 0) {
+    const systemText = systemParts.join(`
+`);
+    result.system = [
+      claudeCodePrompt,
+      { type: CLAUDE_BLOCK.TEXT, text: systemText, cache_control: { type: "ephemeral", ttl: "1h" } }
+    ];
+  } else {
+    result.system = [claudeCodePrompt];
+  }
+  if (body.tools && Array.isArray(body.tools)) {
+    result.tools = [];
+    for (const tool of body.tools) {
+      const toolType = tool.type;
+      if (toolType && toolType !== OPENAI_BLOCK.FUNCTION) {
+        result.tools.push(tool);
+        continue;
+      }
+      const toolData = tool.function ?? tool;
+      const originalName = toolData.name;
+      const toolName = CLAUDE_OAUTH_TOOL_PREFIX + originalName;
+      toolNameMap.set(toolName, originalName);
+      result.tools.push({
+        name: toolName,
+        description: toolData.description || "",
+        input_schema: toolData.parameters || toolData.input_schema || { type: "object", properties: {}, required: [] }
+      });
+    }
+    if (result.tools.length > 0) {
+      result.tools[result.tools.length - 1].cache_control = { type: "ephemeral", ttl: "1h" };
+    }
+  }
+  if (body.tool_choice) {
+    result.tool_choice = convertOpenAIToolChoice(body.tool_choice);
+  }
+  if (toolNameMap.size > 0) {
+    result._toolNameMap = toolNameMap;
+  }
+  return result;
+}
+function getContentBlocksFromMessage(msg, toolNameMap = new Map) {
+  const blocks = [];
+  if (msg.role === ROLE.TOOL) {
+    blocks.push({
+      type: CLAUDE_BLOCK.TOOL_RESULT,
+      tool_use_id: msg.tool_call_id,
+      content: msg.content
+    });
+  } else if (msg.role === ROLE.USER) {
+    if (typeof msg.content === "string") {
+      if (msg.content) {
+        blocks.push({ type: CLAUDE_BLOCK.TEXT, text: msg.content });
+      }
+    } else if (Array.isArray(msg.content)) {
+      for (const part of msg.content) {
+        if (part.type === OPENAI_BLOCK.TEXT && part.text) {
+          blocks.push({ type: CLAUDE_BLOCK.TEXT, text: part.text });
+        } else if (part.type === CLAUDE_BLOCK.TOOL_RESULT) {
+          blocks.push({
+            type: CLAUDE_BLOCK.TOOL_RESULT,
+            tool_use_id: part.tool_use_id,
+            content: part.content,
+            ...part.is_error && { is_error: part.is_error }
+          });
+        } else if (part.type === OPENAI_BLOCK.IMAGE_URL) {
+          const url = part.image_url.url;
+          const parsed = parseDataUri(url);
+          if (parsed) {
+            blocks.push({
+              type: CLAUDE_BLOCK.IMAGE,
+              source: { type: "base64", media_type: parsed.mimeType, data: parsed.base64 }
+            });
+          } else if (url.startsWith("http://") || url.startsWith("https://")) {
+            blocks.push({
+              type: CLAUDE_BLOCK.IMAGE,
+              source: { type: "url", url }
+            });
+          }
+        } else if (part.type === OPENAI_BLOCK.IMAGE && part.source) {
+          blocks.push({ type: CLAUDE_BLOCK.IMAGE, source: part.source });
+        } else if (part.type === OPENAI_BLOCK.FILE && part.file) {
+          const fileData = part.file.file_data;
+          const parsed = parseDataUri(fileData);
+          if (parsed && parsed.mimeType === "application/pdf") {
+            blocks.push({
+              type: CLAUDE_BLOCK.DOCUMENT,
+              source: { type: "base64", media_type: parsed.mimeType, data: parsed.base64 }
+            });
+          }
+        }
+      }
+    }
+  } else if (msg.role === ROLE.ASSISTANT) {
+    if (Array.isArray(msg.content)) {
+      for (const part of msg.content) {
+        if (part.type === OPENAI_BLOCK.TEXT && part.text) {
+          blocks.push({ type: CLAUDE_BLOCK.TEXT, text: part.text });
+        } else if (part.type === CLAUDE_BLOCK.TOOL_USE) {
+          blocks.push({ type: CLAUDE_BLOCK.TOOL_USE, id: part.id, name: part.name, input: part.input });
+        } else if (part.type === CLAUDE_BLOCK.THINKING) {
+          const { cache_control, ...thinkingBlock } = part;
+          blocks.push(thinkingBlock);
+        }
+      }
+    } else if (msg.content) {
+      const text = typeof msg.content === "string" ? msg.content : extractTextContent(msg.content, `
+`);
+      if (text) {
+        blocks.push({ type: CLAUDE_BLOCK.TEXT, text });
+      }
+    }
+    if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
+      for (const tc of msg.tool_calls) {
+        if (tc.type === OPENAI_BLOCK.FUNCTION) {
+          const toolName = CLAUDE_OAUTH_TOOL_PREFIX + tc.function.name;
+          blocks.push({
+            type: CLAUDE_BLOCK.TOOL_USE,
+            id: tc.id,
+            name: toolName,
+            input: safeParseJSON(tc.function.arguments, tc.function.arguments)
+          });
+        }
+      }
+    }
+  }
+  return blocks;
+}
+var CLAUDE_TOOL_CHOICE_TYPES = new Set(["auto", "any", "tool", "none"]);
+function convertOpenAIToolChoice(choice) {
+  if (!choice)
+    return { type: "auto" };
+  if (typeof choice === "string") {
+    if (choice === "required")
+      return { type: "any" };
+    return { type: "auto" };
+  }
+  if (typeof choice === "object") {
+    if (choice.function?.name) {
+      return { type: "tool", name: choice.function.name };
+    }
+    if (CLAUDE_TOOL_CHOICE_TYPES.has(choice.type)) {
+      return choice;
+    }
+  }
+  return { type: "auto" };
+}
+register(FORMATS.OPENAI, FORMATS.CLAUDE, openaiToClaudeRequest, null);
+
+// service/core/translator/index.js
+var requestRegistry;
+var responseRegistry;
+function register(from, to, requestFn, responseFn) {
+  requestRegistry ??= new Map;
+  responseRegistry ??= new Map;
+  const key = String(from) + ":" + String(to);
+  if (requestFn)
+    requestRegistry.set(key, requestFn);
+  if (responseFn)
+    responseRegistry.set(key, responseFn);
+}
+function translateRequest(sourceFormat, targetFormat, model, body, stream = true, credentials = null) {
+  requestRegistry ??= new Map;
+  responseRegistry ??= new Map;
+  if (sourceFormat === targetFormat)
+    return body;
+  const translator = requestRegistry.get(String(sourceFormat) + ":" + String(targetFormat));
+  if (!translator) {
+    throw new Error("Unsupported native request translation: " + sourceFormat + " -> " + targetFormat);
+  }
+  return translator(model, body, stream, credentials);
+}
+
+// service/core/provider-adapter.js
+var cleanModelId2 = (model) => {
+  const clean = String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
+  return clean.startsWith("blackrouter/") ? clean.slice("blackrouter/".length) : clean;
+};
+var targetFormatForModel = (model) => {
+  const base = cleanModelId2(model);
+  const registryEntry = (PROVIDERS.opencode.models || []).find((entry) => entry.id === base);
+  if (registryEntry?.targetFormat)
+    return registryEntry.targetFormat;
+  return isMuseSparkModel(base) ? FORMATS.OPENAI_RESPONSES : FORMATS.OPENAI;
+};
+var normalizeHeaders = (headers) => Object.fromEntries(Object.entries(headers || {}).map(([key, value]) => [key.toLowerCase(), String(value)]));
+var toolNameOf2 = (tool) => {
+  if (!tool || typeof tool !== "object")
+    return "";
+  if (typeof tool.name === "string")
+    return tool.name;
+  if (typeof tool.function?.name === "string")
+    return tool.function.name;
+  return "";
+};
+var inferToolNameMap = (sourceNames, transformedBody) => {
+  const map = new Map;
+  const transformedTools = Array.isArray(transformedBody?.tools) ? transformedBody.tools : [];
+  const transformedNames = new Set(transformedTools.map(toolNameOf2).filter(Boolean));
+  for (const originalName of ["read", "shell"]) {
+    if (!sourceNames.has(originalName))
+      continue;
+    const aliasPrefix = originalName + "_client";
+    const alias = [...transformedNames].filter((name) => {
+      if (!name.startsWith(aliasPrefix) || sourceNames.has(name))
+        return false;
+      const suffix = name.slice(aliasPrefix.length);
+      return suffix === "" || [...suffix].every((digit) => digit >= "0" && digit <= "9");
+    })[0];
+    if (alias)
+      map.set(alias, originalName);
+  }
+  return map;
+};
+var normalizeMessagesFingerprintTools = (body) => {
+  if (!body || typeof body !== "object" || !Array.isArray(body.tools))
+    return body;
+  const injectedNames = [];
+  body.tools = body.tools.map((tool) => {
+    const fn = tool?.function;
+    if (!fn || !["read", "shell"].includes(fn.name))
+      return tool;
+    injectedNames.push(fn.name);
+    return {
+      name: fn.name,
+      description: fn.description,
+      input_schema: fn.parameters || { type: "object", properties: {} }
+    };
+  });
+  if (injectedNames.length > 0) {
+    const names = [...new Set(injectedNames)];
+    const list = names.length > 1 ? "read and shell" : names[0];
+    const note = names.length > 1 ? "Do not call the " + list + " tools; they are placeholders that do nothing. Use the other tools you have been given instead." : "Do not call the " + list + " tool; it is a placeholder that does nothing. Use the other tools you have been given instead.";
+    if (typeof body.system === "string" && body.system.trim()) {
+      body.system += `
+
+` + note;
+    } else if (Array.isArray(body.system)) {
+      body.system.push({ type: "text", text: note });
+    } else {
+      body.system = note;
+    }
+  }
+  return body;
+};
+var prepareProviderRequest = async ({ model, body, session, rawHeaders = {} }) => {
+  const upstreamModel = cleanModelId2(model);
+  const originalToolNames = new Set((Array.isArray(body?.tools) ? body.tools : []).map(toolNameOf2).filter(Boolean));
+  const targetFormat = targetFormatForModel(upstreamModel);
+  const credentials = {
+    connectionId: session,
+    rawHeaders: { ...rawHeaders, "x-opencode-session": session },
+    providerSpecificData: {}
+  };
+  const sourceBody = { ...body, model: upstreamModel };
+  const translatedBody = targetFormat === FORMATS.OPENAI ? sourceBody : translateRequest(FORMATS.OPENAI, targetFormat, upstreamModel, sourceBody, true, credentials);
+  const executor = new OpenCodeExecutor;
+  const prepared = await executor.execute({
+    model: upstreamModel,
+    body: translatedBody,
+    stream: true,
+    credentials,
+    providerSessionId: session,
+    clientTool: "generic",
+    dispatch: async ({ url, headers, body: outboundBody, responseFormat }) => {
+      const transportBody = responseFormat === "claude" ? normalizeMessagesFingerprintTools(outboundBody) : outboundBody;
+      const toolNameMap = takeRenamedToolNames(outboundBody) || inferToolNameMap(originalToolNames, outboundBody);
+      return {
+        url: new URL(url),
+        headers: normalizeHeaders(headers),
+        body: JSON.stringify(transportBody),
+        responseFormat,
+        lane: responseFormat === "openai-responses" ? "responses" : responseFormat === "claude" ? "messages" : "chat",
+        toolNameMap
+      };
+    }
+  });
+  return prepared;
 };
 
 // service/usage-observer.ts
@@ -6246,6 +8276,44 @@ var responseHeaders = (headers) => {
     picked["content-type"] = "application/json";
   return picked;
 };
+var createSseFirstByteKeepAlive = (keepAliveMs = Number(process.env.SSE_KEEPALIVE_MS ?? 15000)) => {
+  let timer = null;
+  let seenData = false;
+  const stream = new Transform3({
+    transform(chunk, _encoding, callback) {
+      seenData = true;
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      callback(null, chunk);
+    },
+    flush(callback) {
+      if (timer)
+        clearInterval(timer);
+      timer = null;
+      callback();
+    }
+  });
+  stream.once("pipe", () => {
+    if (!Number.isFinite(keepAliveMs) || keepAliveMs <= 0 || seenData)
+      return;
+    timer = setInterval(() => {
+      if (!seenData && !stream.destroyed && !stream.writableEnded) {
+        stream.push(Buffer.from(`: ping
+
+`));
+      }
+    }, keepAliveMs);
+    timer.unref?.();
+  });
+  stream.once("close", () => {
+    if (timer)
+      clearInterval(timer);
+    timer = null;
+  });
+  return stream;
+};
 var writeJson = (response, status, body, headers = {}) => {
   if (response.headersSent) {
     response.destroy();
@@ -6308,11 +8376,12 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("Prepared request body must be a JSON object.");
     }
-    parsed.model = model;
+    const body = parsed;
+    body.model = model;
     if (!isOpenCodeUpstream(config.upstream)) {
-      return { lane: "chat", body: JSON.stringify(parsed) };
+      return { lane: "chat", body: JSON.stringify(body) };
     }
-    const native = await prepareProviderRequest({ model, body: parsed, session });
+    const native = await prepareProviderRequest({ model, body, session });
     return {
       lane: native.lane,
       body: native.body,
@@ -6322,7 +8391,6 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
     };
   };
   const sendAttempt = async () => {
-
     if (response.destroyed || response.writableEnded)
       return;
     const attempt = attempts[attemptIndex];
@@ -6407,8 +8475,14 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       if (prepared.stream) {
         response.writeHead(status, successHeaders);
         const observer = createUsageObserver((usage) => onUsage?.(usage));
-        if (protocolTransform) {
+        const keepAliveMs = Number(process.env.SSE_KEEPALIVE_MS ?? 15000);
+        const keepAlive = contentType.includes("text/event-stream") && Number.isFinite(keepAliveMs) && keepAliveMs > 0 ? createSseFirstByteKeepAlive(keepAliveMs) : null;
+        if (protocolTransform && keepAlive) {
+          pipeline(answer, protocolTransform, observer, keepAlive, response, () => {});
+        } else if (protocolTransform) {
           pipeline(answer, protocolTransform, observer, response, () => {});
+        } else if (keepAlive) {
+          pipeline(answer, observer, keepAlive, response, () => {});
         } else {
           pipeline(answer, observer, response, () => {});
         }
@@ -6459,6 +8533,1112 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
     upstream.end(upstreamBody);
   };
   sendAttempt();
+};
+
+// service/core/rtk/constants.js
+var RAW_CAP = 10 * 1024 * 1024;
+var MIN_COMPRESS_SIZE = 500;
+var DETECT_WINDOW = 1024;
+var GIT_DIFF_HUNK_MAX_LINES = 100;
+var GIT_LOG_MAX_LINES = 200;
+var DEDUP_LINE_MAX = 2000;
+var GREP_PER_FILE_MAX = 10;
+var FIND_PER_DIR_MAX = 10;
+var FIND_TOTAL_DIR_MAX = 20;
+var STATUS_MAX_FILES = 10;
+var STATUS_MAX_UNTRACKED = 10;
+var LS_EXT_SUMMARY_TOP = 5;
+var LS_NOISE_DIRS = [
+  "node_modules",
+  ".git",
+  "target",
+  "__pycache__",
+  ".next",
+  "dist",
+  "build",
+  ".cache",
+  ".turbo",
+  ".vercel",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".tox",
+  ".venv",
+  "venv",
+  "env",
+  "coverage",
+  ".nyc_output",
+  ".DS_Store",
+  "Thumbs.db",
+  ".idea",
+  ".vscode",
+  ".vs",
+  "*.egg-info",
+  ".eggs"
+];
+var TREE_MAX_LINES = 200;
+var SEARCH_LIST_PER_DIR_MAX = 10;
+var SEARCH_LIST_TOTAL_DIR_MAX = 20;
+var SMART_TRUNCATE_HEAD = 120;
+var SMART_TRUNCATE_TAIL = 60;
+var SMART_TRUNCATE_MIN_LINES = 250;
+var READ_NUMBERED_MIN_HIT_RATIO = 0.7;
+
+// service/core/rtk/filters/gitDiff.js
+function gitDiff(diff, maxLines = 500) {
+  const result = [];
+  let currentFile = "";
+  let added = 0;
+  let removed = 0;
+  let inHunk = false;
+  let hunkShown = 0;
+  let hunkSkipped = 0;
+  let wasTruncated = false;
+  const maxHunkLines = GIT_DIFF_HUNK_MAX_LINES;
+  const lines = diff.split(`
+`);
+  outer:
+    for (const line of lines) {
+      if (line.startsWith("diff --git")) {
+        if (hunkSkipped > 0) {
+          result.push(`  ... (${hunkSkipped} lines truncated)`);
+          wasTruncated = true;
+          hunkSkipped = 0;
+        }
+        if (currentFile && (added > 0 || removed > 0)) {
+          result.push(`  +${added} -${removed}`);
+        }
+        const parts = line.split(" b/");
+        currentFile = parts.length > 1 ? parts.slice(1).join(" b/") : "unknown";
+        result.push(`
+${currentFile}`);
+        added = 0;
+        removed = 0;
+        inHunk = false;
+        hunkShown = 0;
+      } else if (line.startsWith("@@")) {
+        if (hunkSkipped > 0) {
+          result.push(`  ... (${hunkSkipped} lines truncated)`);
+          wasTruncated = true;
+          hunkSkipped = 0;
+        }
+        inHunk = true;
+        hunkShown = 0;
+        result.push(`  ${line}`);
+      } else if (inHunk) {
+        if (line.startsWith("+") && !line.startsWith("+++")) {
+          added += 1;
+          if (hunkShown < maxHunkLines) {
+            result.push(`  ${line}`);
+            hunkShown += 1;
+          } else {
+            hunkSkipped += 1;
+          }
+        } else if (line.startsWith("-") && !line.startsWith("---")) {
+          removed += 1;
+          if (hunkShown < maxHunkLines) {
+            result.push(`  ${line}`);
+            hunkShown += 1;
+          } else {
+            hunkSkipped += 1;
+          }
+        } else if (hunkShown < maxHunkLines && !line.startsWith("\\")) {
+          if (hunkShown > 0) {
+            result.push(`  ${line}`);
+            hunkShown += 1;
+          }
+        }
+      }
+      if (result.length >= maxLines) {
+        result.push(`
+... (more changes truncated)`);
+        wasTruncated = true;
+        break outer;
+      }
+    }
+  if (hunkSkipped > 0) {
+    result.push(`  ... (${hunkSkipped} lines truncated)`);
+    wasTruncated = true;
+  }
+  if (currentFile && (added > 0 || removed > 0)) {
+    result.push(`  +${added} -${removed}`);
+  }
+  if (wasTruncated) {
+    result.push("[full diff: rtk git diff --no-compact]");
+  }
+  return result.join(`
+`);
+}
+gitDiff.filterName = "git-diff";
+
+// service/core/rtk/filters/gitStatus.js
+function gitStatus(input) {
+  const lines = input.split(`
+`);
+  if (lines.length === 0 || lines.length === 1 && !lines[0].trim()) {
+    return "Clean working tree";
+  }
+  let branch = "";
+  const stagedFiles = [];
+  const modifiedFiles = [];
+  const untrackedFiles = [];
+  let staged = 0;
+  let modified = 0;
+  let untracked = 0;
+  let conflicts = 0;
+  for (const raw of lines) {
+    if (!raw.trim())
+      continue;
+    const longBranch = raw.match(/^On branch (\S+)/);
+    if (longBranch) {
+      branch = longBranch[1];
+      continue;
+    }
+    if (raw.startsWith("##")) {
+      branch = raw.replace(/^##\s*/, "");
+      continue;
+    }
+    if (raw.length >= 3 && /^[ MADRCU?!][ MADRCU?!] /.test(raw)) {
+      const x = raw[0];
+      const y = raw[1];
+      const file = raw.slice(3);
+      if (raw.slice(0, 2) === "??") {
+        untracked++;
+        untrackedFiles.push(file);
+        continue;
+      }
+      if ("MADRC".includes(x)) {
+        staged++;
+        stagedFiles.push(file);
+      } else if (x === "U") {
+        conflicts++;
+      }
+      if (y === "M" || y === "D") {
+        modified++;
+        modifiedFiles.push(file);
+      }
+      continue;
+    }
+    const longMatch = raw.match(/^\s*(modified|new file|deleted|renamed|both modified):\s+(.+)$/);
+    if (longMatch) {
+      const kind = longMatch[1];
+      const path = longMatch[2].trim();
+      if (kind === "both modified") {
+        conflicts++;
+      } else if (kind === "modified" || kind === "deleted") {
+        modified++;
+        modifiedFiles.push(path);
+      } else if (kind === "new file" || kind === "renamed") {
+        staged++;
+        stagedFiles.push(path);
+      }
+      continue;
+    }
+  }
+  let out = "";
+  if (branch)
+    out += `* ${branch}
+`;
+  if (staged > 0) {
+    out += `+ Staged: ${staged} files
+`;
+    for (const f of stagedFiles.slice(0, STATUS_MAX_FILES))
+      out += `   ${f}
+`;
+    if (stagedFiles.length > STATUS_MAX_FILES) {
+      out += `   ... +${stagedFiles.length - STATUS_MAX_FILES} more
+`;
+    }
+  }
+  if (modified > 0) {
+    out += `~ Modified: ${modified} files
+`;
+    for (const f of modifiedFiles.slice(0, STATUS_MAX_FILES))
+      out += `   ${f}
+`;
+    if (modifiedFiles.length > STATUS_MAX_FILES) {
+      out += `   ... +${modifiedFiles.length - STATUS_MAX_FILES} more
+`;
+    }
+  }
+  if (untracked > 0) {
+    out += `? Untracked: ${untracked} files
+`;
+    for (const f of untrackedFiles.slice(0, STATUS_MAX_UNTRACKED))
+      out += `   ${f}
+`;
+    if (untrackedFiles.length > STATUS_MAX_UNTRACKED) {
+      out += `   ... +${untrackedFiles.length - STATUS_MAX_UNTRACKED} more
+`;
+    }
+  }
+  if (conflicts > 0) {
+    out += `conflicts: ${conflicts} files
+`;
+  }
+  if (staged === 0 && modified === 0 && untracked === 0 && conflicts === 0) {
+    out += `clean — nothing to commit
+`;
+  }
+  return out.replace(/\n+$/, "");
+}
+gitStatus.filterName = "git-status";
+
+// service/core/rtk/filters/gitLog.js
+function gitLog(text, maxLines = GIT_LOG_MAX_LINES) {
+  if (!text)
+    return "";
+  const input = String(text);
+  const lines = input.split(`
+`);
+  const out = [];
+  let skipped = 0;
+  let inCommit = false;
+  let subjectSeen = false;
+  function pushLine(l) {
+    if (out.length < maxLines) {
+      out.push(l);
+      return true;
+    }
+    skipped++;
+    return false;
+  }
+  for (let i = 0;i < lines.length; i++) {
+    const raw = lines[i];
+    const line = raw.trimEnd();
+    const trimmed = line.trim();
+    if (/^commit [0-9a-f]{7,40}$/i.test(trimmed) || /^[*|/\\ ]+commit [0-9a-f]{7,40}/i.test(trimmed)) {
+      inCommit = true;
+      subjectSeen = false;
+      pushLine(line);
+      continue;
+    }
+    if (inCommit) {
+      if (/^[*|/\\ ]*(Author|Date):/i.test(trimmed)) {
+        pushLine(trimmed);
+        continue;
+      }
+      if (trimmed === "")
+        continue;
+      if (!subjectSeen && /^[*|/\\ ]*    \S/.test(line)) {
+        pushLine("  Subject: " + trimmed);
+        subjectSeen = true;
+        continue;
+      }
+      if (/^\d+ file\w* changed/.test(trimmed)) {
+        pushLine("  " + trimmed);
+        continue;
+      }
+      if (/^diff --git /.test(trimmed)) {
+        pushLine("  ... diff body omitted");
+        continue;
+      }
+      continue;
+    }
+    const graphMatch = trimmed.match(/^[*|/\\ ]+([0-9a-f]{7,40}\s+.+)/i);
+    if (graphMatch) {
+      pushLine(graphMatch[1]);
+      continue;
+    }
+    if (/^[0-9a-f]{7,40}\s+/.test(trimmed)) {
+      pushLine(trimmed);
+      continue;
+    }
+    if (/^[*|/\\ ]+$/.test(trimmed) && /[*|/\\]/.test(trimmed)) {
+      continue;
+    }
+    pushLine(trimmed);
+  }
+  if (skipped > 0)
+    out.push(`... (${skipped} more lines)`);
+  const result = out.join(`
+`);
+  if (!result && input)
+    return input;
+  if (result.length > input.length)
+    return input;
+  return result;
+}
+gitLog.filterName = "git-log";
+
+// service/core/rtk/filters/buildOutput.js
+var RE_CARGO_ERR_CONT = /^\s*(-->|\||\d+\s*\||=)/;
+var DEPRECATION_KEEP = 3;
+function buildOutput(input) {
+  const lines = input.split(`
+`);
+  if (lines.length === 0)
+    return input;
+  const errors = [];
+  const warnings = [];
+  const deprecations = [];
+  let summary = null;
+  let compilingCount = 0;
+  let downloadingCount = 0;
+  let inCargoError = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (inCargoError) {
+      if (!trimmed) {
+        inCargoError = false;
+        continue;
+      }
+      if (RE_CARGO_ERR_CONT.test(line)) {
+        errors.push(line);
+        continue;
+      }
+      inCargoError = false;
+    }
+    if (!trimmed)
+      continue;
+    if (/^npm (ERR!|error)/i.test(trimmed) || /^yarn error/i.test(trimmed)) {
+      errors.push(line);
+      continue;
+    }
+    if (/^npm warn deprecated/i.test(trimmed)) {
+      deprecations.push(line);
+      continue;
+    }
+    if (/^npm warn/i.test(trimmed) || /^yarn warn/i.test(trimmed)) {
+      warnings.push(line);
+      continue;
+    }
+    if (/^error(\[|:)/i.test(trimmed) || trimmed.startsWith("error -->")) {
+      errors.push(line);
+      inCargoError = true;
+      continue;
+    }
+    if (/^warning(\[|:)/i.test(trimmed) || trimmed.startsWith("warning -->")) {
+      warnings.push(line);
+      inCargoError = true;
+      continue;
+    }
+    if (/^ERROR:/i.test(trimmed)) {
+      errors.push(line);
+      continue;
+    }
+    if (/^\[ERROR\]/i.test(trimmed) || /^BUILD FAILED/i.test(trimmed)) {
+      errors.push(line);
+      continue;
+    }
+    if (/^\[WARNING\]/i.test(trimmed)) {
+      warnings.push(line);
+      continue;
+    }
+    if (/^\s*Compiling\s+\S+/i.test(trimmed)) {
+      compilingCount++;
+      continue;
+    }
+    if (/^\s*Downloading\s+\S+/i.test(trimmed) || /^Fetching\s+/i.test(trimmed)) {
+      downloadingCount++;
+      continue;
+    }
+    if (/^(added|removed|changed|audited|installed)\s+\d+\s+package/i.test(trimmed) || /^\s*Finished\s+/i.test(trimmed) || /^BUILD SUCCESS/i.test(trimmed) || /^\d+\s+(vulnerabilities|packages?|warnings?|errors?)/i.test(trimmed) || /^Successfully (installed|built)/i.test(trimmed) || /^To address .* issues/i.test(trimmed) || /^Run `npm (audit|fund)`/i.test(trimmed) || /packages are looking for funding/i.test(trimmed)) {
+      summary = summary ? `${summary}
+${line}` : line;
+      continue;
+    }
+  }
+  let out = "";
+  const keepDep = deprecations.slice(0, DEPRECATION_KEEP);
+  for (const d of keepDep)
+    out += `${d}
+`;
+  if (deprecations.length > DEPRECATION_KEEP) {
+    out += `... +${deprecations.length - DEPRECATION_KEEP} more deprecated packages
+`;
+  }
+  if (compilingCount > 0) {
+    out += `Compiled ${compilingCount} packages
+`;
+  }
+  if (downloadingCount > 0) {
+    out += `Downloaded ${downloadingCount} packages
+`;
+  }
+  for (const e of errors)
+    out += `${e}
+`;
+  const keepWarnings = warnings.slice(0, 5);
+  for (const w of keepWarnings)
+    out += `${w}
+`;
+  if (warnings.length > 5) {
+    out += `... +${warnings.length - 5} more warnings
+`;
+  }
+  if (summary)
+    out += `${summary}
+`;
+  return out.replace(/\n+$/, "") || input;
+}
+buildOutput.filterName = "build-output";
+
+// service/core/rtk/filters/grep.js
+function grep(input) {
+  const byFile = new Map;
+  let total = 0;
+  for (const line of input.split(`
+`)) {
+    const first = line.indexOf(":");
+    if (first === -1)
+      continue;
+    const second = line.indexOf(":", first + 1);
+    if (second === -1)
+      continue;
+    const file = line.slice(0, first);
+    const lineNumStr = line.slice(first + 1, second);
+    const content = line.slice(second + 1);
+    if (!/^\d+$/.test(lineNumStr))
+      continue;
+    total++;
+    if (!byFile.has(file))
+      byFile.set(file, []);
+    byFile.get(file).push([lineNumStr, content]);
+  }
+  if (total === 0)
+    return input;
+  const files = Array.from(byFile.keys()).sort();
+  let out = `${total} matches in ${files.length}F:
+
+`;
+  for (const file of files) {
+    const matches = byFile.get(file);
+    out += `[file] ${file} (${matches.length}):
+`;
+    const show = matches.slice(0, GREP_PER_FILE_MAX);
+    for (const [lineNum, content] of show) {
+      out += `  ${lineNum.padStart(4)}: ${content.trim()}
+`;
+    }
+    if (matches.length > GREP_PER_FILE_MAX) {
+      out += `  +${matches.length - GREP_PER_FILE_MAX}
+`;
+    }
+    out += `
+`;
+  }
+  return out;
+}
+grep.filterName = "grep";
+
+// service/core/rtk/filters/find.js
+function find(input) {
+  const lines = input.split(`
+`).filter((l) => l.trim());
+  if (lines.length === 0)
+    return input;
+  const byDir = new Map;
+  for (const path of lines) {
+    const lastSep = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+    let dir;
+    let basename;
+    if (lastSep === -1) {
+      dir = ".";
+      basename = path;
+    } else {
+      dir = path.slice(0, lastSep) || "/";
+      basename = path.slice(lastSep + 1);
+    }
+    if (!byDir.has(dir))
+      byDir.set(dir, []);
+    byDir.get(dir).push(basename);
+  }
+  const dirs = Array.from(byDir.keys()).sort();
+  let out = `${lines.length} files in ${dirs.length} dirs:
+
+`;
+  const showDirs = dirs.slice(0, FIND_TOTAL_DIR_MAX);
+  for (const dir of showDirs) {
+    const files = byDir.get(dir);
+    const dirLabel = dir.replace(/\\/g, "/");
+    out += `${dirLabel}/  (${files.length})
+`;
+    const showFiles = files.slice(0, FIND_PER_DIR_MAX);
+    for (const f of showFiles)
+      out += `  ${f}
+`;
+    if (files.length > FIND_PER_DIR_MAX) {
+      out += `  +${files.length - FIND_PER_DIR_MAX}
+`;
+    }
+  }
+  if (dirs.length > FIND_TOTAL_DIR_MAX) {
+    out += `
++${dirs.length - FIND_TOTAL_DIR_MAX} more dirs
+`;
+  }
+  return out;
+}
+find.filterName = "find";
+
+// service/core/rtk/filters/dedupLog.js
+function dedupLog(input) {
+  const lines = input.split(`
+`);
+  const out = [];
+  let prev = null;
+  let runCount = 0;
+  let blankStreak = 0;
+  const flushRun = () => {
+    if (prev !== null && runCount > 1) {
+      out.push(`  ... (${runCount - 1} duplicate lines)`);
+    }
+  };
+  for (const line of lines) {
+    if (line.trim() === "") {
+      if (blankStreak < 1)
+        out.push(line);
+      blankStreak += 1;
+      flushRun();
+      prev = null;
+      runCount = 0;
+      continue;
+    }
+    blankStreak = 0;
+    if (line === prev) {
+      runCount += 1;
+      continue;
+    }
+    flushRun();
+    out.push(line);
+    prev = line;
+    runCount = 1;
+    if (out.length >= DEDUP_LINE_MAX) {
+      out.push(`... (truncated at ${DEDUP_LINE_MAX} lines)`);
+      return out.join(`
+`);
+    }
+  }
+  flushRun();
+  return out.join(`
+`);
+}
+dedupLog.filterName = "dedup-log";
+
+// service/core/rtk/filters/ls.js
+var LS_DATE_RE = /\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+(\d{4}|\d{2}:\d{2})\s+/;
+function humanSize(bytes) {
+  if (bytes >= 1048576)
+    return `${(bytes / 1048576).toFixed(1)}M`;
+  if (bytes >= 1024)
+    return `${(bytes / 1024).toFixed(1)}K`;
+  return `${bytes}B`;
+}
+function parseLsLine(line) {
+  const m = LS_DATE_RE.exec(line);
+  if (!m)
+    return null;
+  const name = line.slice(m.index + m[0].length);
+  const beforeDate = line.slice(0, m.index);
+  const beforeParts = beforeDate.split(/\s+/).filter(Boolean);
+  if (beforeParts.length < 4)
+    return null;
+  const perms = beforeParts[0];
+  const fileType = perms.charAt(0);
+  let size = 0;
+  for (let i = beforeParts.length - 1;i >= 0; i--) {
+    const n = Number(beforeParts[i]);
+    if (Number.isInteger(n) && String(n) === beforeParts[i]) {
+      size = n;
+      break;
+    }
+  }
+  return { fileType, size, name };
+}
+function ls(input) {
+  const dirs = [];
+  const files = [];
+  const byExt = new Map;
+  for (const line of input.split(`
+`)) {
+    if (line.startsWith("total ") || line.length === 0)
+      continue;
+    const parsed = parseLsLine(line);
+    if (!parsed)
+      continue;
+    if (parsed.name === "." || parsed.name === "..")
+      continue;
+    if (LS_NOISE_DIRS.includes(parsed.name))
+      continue;
+    if (parsed.fileType === "d") {
+      dirs.push(parsed.name);
+    } else if (parsed.fileType === "-" || parsed.fileType === "l") {
+      const dot = parsed.name.lastIndexOf(".");
+      const ext = dot > 0 ? parsed.name.slice(dot) : "no ext";
+      byExt.set(ext, (byExt.get(ext) || 0) + 1);
+      files.push([parsed.name, humanSize(parsed.size)]);
+    }
+  }
+  if (dirs.length === 0 && files.length === 0)
+    return input;
+  let out = "";
+  for (const d of dirs)
+    out += `${d}/
+`;
+  for (const [name, size] of files)
+    out += `${name}  ${size}
+`;
+  let summary = `
+Summary: ${files.length} files, ${dirs.length} dirs`;
+  if (byExt.size > 0) {
+    const ext = Array.from(byExt.entries()).sort((a, b) => b[1] - a[1]);
+    const parts = ext.slice(0, LS_EXT_SUMMARY_TOP).map(([e, c]) => `${c} ${e}`);
+    summary += ` (${parts.join(", ")}`;
+    if (ext.length > LS_EXT_SUMMARY_TOP) {
+      summary += `, +${ext.length - LS_EXT_SUMMARY_TOP} more`;
+    }
+    summary += ")";
+  }
+  return out + summary;
+}
+ls.filterName = "ls";
+
+// service/core/rtk/filters/tree.js
+function tree(input) {
+  const lines = input.split(`
+`);
+  if (lines.length === 0)
+    return input;
+  const filtered = [];
+  for (const line of lines) {
+    if (line.includes("director") && line.includes("file"))
+      continue;
+    if (line.trim() === "" && filtered.length === 0)
+      continue;
+    filtered.push(line);
+  }
+  while (filtered.length > 0 && filtered[filtered.length - 1].trim() === "") {
+    filtered.pop();
+  }
+  if (filtered.length > TREE_MAX_LINES) {
+    const cut = filtered.length - TREE_MAX_LINES;
+    return filtered.slice(0, TREE_MAX_LINES).join(`
+`) + `
+... +${cut} more lines`;
+  }
+  return filtered.join(`
+`);
+}
+tree.filterName = "tree";
+
+// service/core/rtk/filters/smartTruncate.js
+function smartTruncate(input) {
+  const lines = input.split(`
+`);
+  if (lines.length < SMART_TRUNCATE_MIN_LINES)
+    return input;
+  const head = lines.slice(0, SMART_TRUNCATE_HEAD);
+  const tail = lines.slice(lines.length - SMART_TRUNCATE_TAIL);
+  const cut = lines.length - head.length - tail.length;
+  return [...head, `... +${cut} lines truncated`, ...tail].join(`
+`);
+}
+smartTruncate.filterName = "smart-truncate";
+
+// service/core/rtk/filters/readNumbered.js
+var LINE_RE = /^\s*\d+\|/;
+function readNumbered(input) {
+  const lines = input.split(`
+`);
+  if (lines.length < SMART_TRUNCATE_MIN_LINES)
+    return input;
+  const head = lines.slice(0, SMART_TRUNCATE_HEAD);
+  const tail = lines.slice(lines.length - SMART_TRUNCATE_TAIL);
+  const cut = lines.length - head.length - tail.length;
+  return [
+    ...head,
+    `... +${cut} lines truncated (file continues)`,
+    ...tail
+  ].join(`
+`);
+}
+readNumbered.filterName = "read-numbered";
+var READ_NUMBERED_LINE_RE = LINE_RE;
+
+// service/core/rtk/filters/searchList.js
+var HEADER_RE = /^Result of search in '[^']*' \(total (\d+) files?\):/;
+function searchList(input) {
+  const lines = input.split(`
+`);
+  if (lines.length === 0)
+    return input;
+  const header = lines[0] || "";
+  const rest = lines.slice(1);
+  const paths = [];
+  for (const raw of rest) {
+    const t = raw.trim();
+    if (!t.startsWith("- "))
+      continue;
+    paths.push(t.slice(2));
+  }
+  if (paths.length === 0)
+    return input;
+  const byDir = new Map;
+  for (const p of paths) {
+    const slash = p.lastIndexOf("/");
+    const dir = slash === -1 ? "." : p.slice(0, slash) || "/";
+    const name = slash === -1 ? p : p.slice(slash + 1);
+    if (!byDir.has(dir))
+      byDir.set(dir, []);
+    byDir.get(dir).push(name);
+  }
+  const dirs = Array.from(byDir.keys()).sort();
+  let out = `${header}
+${paths.length} files in ${dirs.length} dirs:
+
+`;
+  for (const dir of dirs.slice(0, SEARCH_LIST_TOTAL_DIR_MAX)) {
+    const names = byDir.get(dir);
+    out += `${dir}/ (${names.length}):
+`;
+    for (const n of names.slice(0, SEARCH_LIST_PER_DIR_MAX))
+      out += `  ${n}
+`;
+    if (names.length > SEARCH_LIST_PER_DIR_MAX) {
+      out += `  +${names.length - SEARCH_LIST_PER_DIR_MAX}
+`;
+    }
+    out += `
+`;
+  }
+  if (dirs.length > SEARCH_LIST_TOTAL_DIR_MAX) {
+    out += `+${dirs.length - SEARCH_LIST_TOTAL_DIR_MAX} more dirs
+`;
+  }
+  return out.replace(/\n+$/, "");
+}
+searchList.filterName = "search-list";
+var SEARCH_LIST_HEADER_RE = HEADER_RE;
+
+// service/core/rtk/autodetect.js
+var RE_GIT_DIFF = /^diff --git /m;
+var RE_GIT_DIFF_HUNK = /^@@ /m;
+var RE_GIT_STATUS = /^On branch |^nothing to commit|^Changes (not |to be )|^Untracked files:/m;
+var RE_GIT_LOG = /^[*|/\\ ]*commit [0-9a-f]{7,40}$/m;
+var RE_PORCELAIN = /^[ MADRCU?!][ MADRCU?!] \S/m;
+var RE_BUILD_OUTPUT = /^(npm (warn|error|ERR!)|yarn (warn|error)|\s*Compiling\s+\S+|\s*Downloading\s+\S+|added \d+ package|\[ERROR\]|BUILD (SUCCESS|FAILED)|\s*Finished\s+|Successfully (installed|built)|ERROR:)/im;
+var RE_TREE_GLYPH = /[├└]──|│  /;
+var RE_LS_ROW = /^[-dlbcps][rwx-]{9}/m;
+var RE_LS_TOTAL = /^total \d+$/m;
+function autoDetectFilter(text) {
+  const head = text.length > DETECT_WINDOW ? text.slice(0, DETECT_WINDOW) : text;
+  if (RE_GIT_LOG.test(head))
+    return gitLog;
+  if (RE_GIT_DIFF.test(head) || RE_GIT_DIFF_HUNK.test(head))
+    return gitDiff;
+  if (RE_GIT_STATUS.test(head))
+    return gitStatus;
+  if (RE_BUILD_OUTPUT.test(head))
+    return buildOutput;
+  if (isMostlyPorcelain(head))
+    return gitStatus;
+  const lines = head.split(`
+`);
+  const nonEmpty = lines.filter((l) => l.trim().length > 0);
+  const first5 = nonEmpty.slice(0, 5);
+  if (first5.some(isGrepLine))
+    return grep;
+  if (nonEmpty.length >= 3 && nonEmpty.every(isPathLike))
+    return find;
+  if (RE_TREE_GLYPH.test(head))
+    return tree;
+  if (RE_LS_TOTAL.test(head) || countMatches(head, RE_LS_ROW) >= 3)
+    return ls;
+  if (SEARCH_LIST_HEADER_RE.test(head))
+    return searchList;
+  if (lines.length >= SMART_TRUNCATE_MIN_LINES && isLineNumbered(lines)) {
+    return readNumbered;
+  }
+  if (nonEmpty.length >= 5)
+    return dedupLog;
+  if (text.split(`
+`).length >= SMART_TRUNCATE_MIN_LINES)
+    return smartTruncate;
+  return null;
+}
+function isGrepLine(line) {
+  const first = line.indexOf(":");
+  if (first === -1)
+    return false;
+  const second = line.indexOf(":", first + 1);
+  if (second === -1)
+    return false;
+  const lineno = line.slice(first + 1, second);
+  return /^\d+$/.test(lineno);
+}
+function isPathLike(line) {
+  const t = line.trim();
+  if (t.length === 0)
+    return false;
+  if (/^[A-Za-z]:[\\/]/.test(t))
+    return true;
+  if (t.includes(":"))
+    return false;
+  return t.startsWith(".") || t.startsWith("/") || t.includes("/");
+}
+function isMostlyPorcelain(head) {
+  const lines = head.split(`
+`).filter((l) => l.trim());
+  if (lines.length < 3)
+    return false;
+  const hits = lines.filter((l) => RE_PORCELAIN.test(l)).length;
+  return hits / lines.length >= 0.6;
+}
+function isLineNumbered(lines) {
+  let hits = 0;
+  let nonEmpty = 0;
+  const sample = lines.slice(0, 100);
+  for (const l of sample) {
+    if (l.length === 0)
+      continue;
+    nonEmpty++;
+    if (READ_NUMBERED_LINE_RE.test(l))
+      hits++;
+  }
+  if (nonEmpty < 5)
+    return false;
+  return hits / nonEmpty >= READ_NUMBERED_MIN_HIT_RATIO;
+}
+function countMatches(text, re) {
+  const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+  return (text.match(g) || []).length;
+}
+
+// service/core/rtk/applyFilter.js
+function safeApply(fn, text) {
+  if (typeof fn !== "function")
+    return text;
+  try {
+    const out = fn(text);
+    if (typeof out !== "string")
+      return text;
+    return out;
+  } catch (err) {
+    const name = fn.filterName || fn.name || "anonymous";
+    console.warn(`[rtk] warning: filter '${name}' panicked — passing through raw output: ${err?.message || err}`);
+    return text;
+  }
+}
+
+// service/core/rtk/index.js
+function compressMessages(body, enabled) {
+  if (!enabled)
+    return null;
+  if (!body)
+    return null;
+  if (body.conversationState) {
+    return compressKiroFormat(body, enabled);
+  }
+  const items = Array.isArray(body.messages) ? body.messages : Array.isArray(body.input) ? body.input : null;
+  if (!items)
+    return null;
+  const stats = { bytesBefore: 0, bytesAfter: 0, hits: [] };
+  try {
+    for (let i = 0;i < items.length; i++) {
+      const msg = items[i];
+      if (!msg)
+        continue;
+      if (msg.type === "function_call_output") {
+        if (typeof msg.output === "string") {
+          msg.output = compressText(msg.output, stats, "openai-responses-string");
+        } else if (Array.isArray(msg.output)) {
+          for (let k = 0;k < msg.output.length; k++) {
+            const part = msg.output[k];
+            if (part && part.type === "input_text" && typeof part.text === "string") {
+              part.text = compressText(part.text, stats, "openai-responses-array");
+            }
+          }
+        }
+        continue;
+      }
+      if (msg.role === "tool" && typeof msg.content === "string") {
+        msg.content = compressText(msg.content, stats, "openai-tool");
+        continue;
+      }
+      if (!Array.isArray(msg.content))
+        continue;
+      if (msg.role === "tool") {
+        for (let k = 0;k < msg.content.length; k++) {
+          const part = msg.content[k];
+          if (part && part.type === "text" && typeof part.text === "string") {
+            part.text = compressText(part.text, stats, "openai-tool-array");
+          }
+        }
+        continue;
+      }
+      for (let j = 0;j < msg.content.length; j++) {
+        const block = msg.content[j];
+        if (!block || block.type !== "tool_result")
+          continue;
+        if (block.is_error === true)
+          continue;
+        if (typeof block.content === "string") {
+          block.content = compressText(block.content, stats, "claude-string");
+        } else if (Array.isArray(block.content)) {
+          for (let k = 0;k < block.content.length; k++) {
+            const part = block.content[k];
+            if (part && part.type === "text" && typeof part.text === "string") {
+              part.text = compressText(part.text, stats, "claude-array");
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[RTK] compressMessages error:", e.message);
+    return null;
+  }
+  return stats;
+}
+function compressKiroFormat(body, enabled) {
+  const stats = { bytesBefore: 0, bytesAfter: 0, hits: [] };
+  try {
+    const state = body.conversationState;
+    const allMessages = [...Array.isArray(state?.history) ? state.history : []];
+    if (state?.currentMessage)
+      allMessages.push(state.currentMessage);
+    for (const msg of allMessages) {
+      const toolResults = msg?.userInputMessage?.userInputMessageContext?.toolResults;
+      if (!Array.isArray(toolResults))
+        continue;
+      for (const tr of toolResults) {
+        if (tr.status === "error")
+          continue;
+        if (!Array.isArray(tr.content))
+          continue;
+        for (const part of tr.content) {
+          if (part && typeof part.text === "string") {
+            part.text = compressText(part.text, stats, "kiro-tool-result");
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[RTK] compressKiroFormat error:", e.message);
+    return null;
+  }
+  return stats;
+}
+function compressText(text, stats, shape) {
+  const bytesIn = text.length;
+  stats.bytesBefore += bytesIn;
+  if (bytesIn < MIN_COMPRESS_SIZE || bytesIn > RAW_CAP) {
+    stats.bytesAfter += bytesIn;
+    return text;
+  }
+  const fn = autoDetectFilter(text);
+  if (!fn) {
+    stats.bytesAfter += bytesIn;
+    return text;
+  }
+  const out = safeApply(fn, text);
+  if (!out || out.length === 0 || out.length >= bytesIn) {
+    stats.bytesAfter += bytesIn;
+    return text;
+  }
+  stats.bytesAfter += out.length;
+  stats.hits.push({ shape, filter: fn.filterName || fn.name, saved: bytesIn - out.length });
+  return out;
+}
+
+// service/rtk.ts
+var compressMessages2 = (body, enabled) => {
+  const stats = compressMessages(body, enabled);
+  return Boolean(stats?.hits?.length);
+};
+
+// service/token-saver-styles.ts
+var CAVEMAN_PROMPTS = {
+  lite: [
+    "Answer concisely in complete sentences. Remove pleasantries, filler, repetition, and unnecessary hedging.",
+    "Preserve the user’s language and exact code, identifiers, paths, commands, URLs, and error strings.",
+    "Keep security warnings, irreversible-action confirmations, and ordered steps clear."
+  ].join(" "),
+  full: [
+    "Use terse technical language; compact phrases are acceptable when unambiguous.",
+    "Remove filler and redundant explanations. Preserve the user’s language and all technical literals exactly.",
+    "Do not compress security warnings, irreversible-action confirmations, or ordered steps where ambiguity could cause mistakes."
+  ].join(" "),
+  ultra: [
+    "Use the fewest words that retain correctness and clarity. Prefer compact, direct answers.",
+    "Never alter code, identifiers, paths, commands, URLs, or error strings.",
+    "Keep safety warnings and destructive-action confirmations explicit. Keep multi-step sequences unambiguous."
+  ].join(" ")
+};
+var PONYTAIL_PROMPTS = {
+  lite: [
+    "When writing code, prefer the smallest correct change.",
+    "Check YAGNI, standard library, native platform features, and already-installed dependencies before adding abstractions or packages.",
+    "Never omit explicitly requested behavior, trust-boundary validation, error handling, security, or accessibility.",
+    "For non-trivial logic, include one runnable check or a focused test."
+  ].join(" "),
+  full: [
+    "Act as an efficient senior developer. Prefer deletion over addition and the smallest correct diff.",
+    "Use standard library, native platform features, and existing dependencies first.",
+    "Avoid unrequested factories, one-implementation interfaces, configuration that never changes, and scaffolding for hypothetical future needs.",
+    "Never remove required behavior, validation, error handling, security, or accessibility. Test non-trivial logic."
+  ].join(" "),
+  ultra: [
+    "Minimize implementation and explanation aggressively. Choose the smallest correct change; delete unnecessary code before adding code.",
+    "Do not add new dependencies, abstractions, or future-proof scaffolding unless the task requires them.",
+    "Do not simplify away requested behavior, validation, error handling, security, or accessibility. Add a runnable check for non-trivial logic."
+  ].join(" ")
+};
+var applyTokenSaverStyles = (body, cavemanLevel = "off", ponytailLevel = "off") => {
+  const prompts = [];
+  if (cavemanLevel !== "off")
+    prompts.push(CAVEMAN_PROMPTS[cavemanLevel]);
+  if (ponytailLevel !== "off")
+    prompts.push(PONYTAIL_PROMPTS[ponytailLevel]);
+  if (prompts.length === 0 || !Array.isArray(body.messages))
+    return false;
+  const instruction = prompts.join(`
+
+`);
+  const messages = body.messages;
+  const systemIndex = messages.findIndex((message) => !!message && typeof message === "object" && !Array.isArray(message) && message.role === "system");
+  const current = systemIndex >= 0 ? messages[systemIndex] : null;
+  if (current && typeof current.content === "string") {
+    const existing = current.content.trim();
+    current.content = existing ? existing + `
+
+` + instruction : instruction;
+  } else {
+    messages.unshift({ role: "system", content: instruction });
+  }
+  return true;
+};
+
+// service/zen.ts
+var sessionId = generateSessionId;
+var prepareChat = (raw, options) => {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("The request body is not JSON.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("The request body must be a JSON object.");
+  }
+  const body = parsed;
+  const stream = body.stream === true;
+  const model = typeof body.model === "string" ? body.model : "";
+  if (!Array.isArray(body.messages)) {
+    throw new Error("The request body has no messages.");
+  }
+  const effectiveOptions = typeof options === "boolean" ? { rtkEnabled: options } : options ?? {};
+  const rtkEnabled = effectiveOptions.rtkEnabled ?? true;
+  if (rtkEnabled)
+    compressMessages2(body, true);
+  applyTokenSaverStyles(body, effectiveOptions.cavemanLevel ?? "off", effectiveOptions.ponytailLevel ?? "off");
+  if (body.max_completion_tokens !== undefined && body.max_tokens === undefined) {
+    body.max_tokens = body.max_completion_tokens;
+  }
+  if (body.reasoning_effort === "auto")
+    delete body.reasoning_effort;
+  body.stream = true;
+  return { body: JSON.stringify(body), stream, model };
 };
 
 // service/router-server.ts
@@ -6564,7 +9744,7 @@ var startRouterServer = (deps) => new Promise((resolve, reject) => {
         const prepared = prepareChat(body, {
           rtkEnabled: config.rtkEnabled,
           cavemanLevel: config.cavemanLevel,
-          ponytailLevel: config.ponytailLevel,
+          ponytailLevel: config.ponytailLevel
         });
         const pool = deps.pickPool ? deps.pickPool() : null;
         const tokenUsage = {};
@@ -6633,29 +9813,31 @@ var startRouterServer = (deps) => new Promise((resolve, reject) => {
 });
 
 // service/runtime.ts
-var REFRESH_INTERVAL_MS = 10 * 60000;
-var REQUEST_LOG_LIMIT = REQUEST_HISTORY_LIMIT;
-var PACKAGE_ROOT = path4.dirname(path4.dirname(fileURLToPath(import.meta.url)));
-var RELAY_FILES = {
-  http: path4.join("relays", "cloudflare", "worker.js"),
-  cloudflare: path4.join("relays", "cloudflare", "worker.js"),
-  vercel: path4.join("relays", "vercel", "api", "relay.js"),
-  netlify: path4.join("relays", "netlify", "functions", "relay.mjs"),
-  deno: path4.join("relays", "deno", "main.ts")
-};
 var normalizeTestSse = (raw, lane, model, toolNameMap) => {
-  if (!lane) return Promise.resolve(raw);
-  const transform = lane === "chat"
-    ? createToolNameRestoreTransform(toolNameMap)
-    : createOpenCodeResponseTransform(lane, model, toolNameMap);
-  if (!transform) return Promise.resolve(raw);
+  if (!lane)
+    return Promise.resolve(raw);
+  const transform = lane === "chat" ? createToolNameRestoreTransform(toolNameMap) : createOpenCodeResponseTransform(lane, model, toolNameMap);
+  if (!transform)
+    return Promise.resolve(raw);
   return new Promise((resolve, reject) => {
     const chunks = [];
-    transform.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    transform.on("data", (chunk) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
     transform.on("error", reject);
     transform.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     transform.end(raw);
   });
+};
+var REFRESH_INTERVAL_MS = 10 * 60000;
+var REQUEST_LOG_LIMIT = REQUEST_HISTORY_LIMIT;
+var PACKAGE_ROOT = path5.dirname(path5.dirname(fileURLToPath(import.meta.url)));
+var RELAY_FILES = {
+  http: path5.join("relays", "cloudflare", "worker.js"),
+  cloudflare: path5.join("relays", "cloudflare", "worker.js"),
+  vercel: path5.join("relays", "vercel", "api", "relay.js"),
+  netlify: path5.join("relays", "netlify", "functions", "relay.mjs"),
+  deno: path5.join("relays", "deno", "main.ts")
 };
 var createRuntime = (store = createConfigStore()) => {
   let config = store.load();
@@ -6874,7 +10056,7 @@ var createRuntime = (store = createConfigStore()) => {
         };
       }
       const file = RELAY_FILES[kind];
-      const code = await readFile(path4.join(PACKAGE_ROOT, file), "utf8");
+      const code = await readFile(path5.join(PACKAGE_ROOT, file), "utf8");
       return { kind, code };
     },
     createProxyPool: async (input) => {
