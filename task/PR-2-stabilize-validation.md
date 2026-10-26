@@ -16,6 +16,17 @@
 
 Use `goals.md` as the project source of truth and follow `BR-SCOPE-1.0`: MUST before SHOULD; COULD only with approval. Preserve the core/provider-translator/OpenChamber-adapter/transport/response-stream boundaries. Default to loopback, redact credentials, and never silently bypass a selected proxy or relay with a direct connection. Do not claim a test/build/provider works without evidence.
 
+## Execution priorities and test integrity
+
+Work strictly one task at a time and report the result before moving to the next task. MVP stability takes precedence over new features and UI polish.
+
+- Do not delete, skip, weaken, loosen assertions, or make tests pass by changing expectations to match broken behavior.
+- Fix implementation defects when a regression test exposes a real defect. Correct test typing only when the type model is inaccurate; preserve the test's behavioral intent.
+- Add/retain regression coverage for the native OpenCode path: required headers/fingerprints, request translation and endpoint selection, session affinity, real inference for Test Model, streaming and non-streaming responses, cancellation/timeouts, and actionable upstream failures.
+- The primary acceptance path is OpenChamber/OpenCode -> loopback BlackRouter -> OpenCode Zen Free -> valid response. Verify with evidence; type-check passing alone does not prove OpenCode works.
+- Verify direct, HTTP proxy, and relay behavior separately. A selected proxy/relay must never silently fall back to direct egress.
+- Keep new feature work out of the MVP until all MUST requirements in `goals.md` / `BR-SCOPE-1.0` pass.
+
 ## Progress checklist
 
 ### Audit
@@ -53,6 +64,6 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 
 **Current state:** Audit is complete. First source fix committed as `b49c87f2ffa9df96ac18cc3377bf008da8c9ce89`; the Web ReadableStream type assertion has not yet been validated by TypeScript/CI. A prior write attempt was blocked and did not change source files. Do not treat any unchecked item as done.
 
-**Next action:** Verify the stream type fix through the latest CI/type-check result. Then address the `service/zen.test.ts` typing failures as the next discrete task.
+**Next action:** First verify the stream type fix through CI/type-check. Do not proceed by weakening tests. Then fix the `service/zen.test.ts` type errors while preserving every assertion's behavioral intent; afterward validate the end-to-end native OpenCode MVP path.
 
 **Update protocol:** After each work session, update this file with the actual status, changed files/commit SHA, commands or CI evidence, remaining blockers, and the next concrete action. Only check an item after verifying it.
