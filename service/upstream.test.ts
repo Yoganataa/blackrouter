@@ -186,6 +186,20 @@ describe('where a call goes', () => {
     expect(buildTarget(poolConfig, 'models').headers).toEqual({});
   });
 
+
+  test('uses the current OpenCode CLI fingerprint when refreshing the free catalog', async () => {
+    const captured = new Headers();
+    const fakeFetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      for (const [key, value] of new Headers(init?.headers).entries()) captured.set(key, value);
+      return new Response(JSON.stringify({ data: [{ id: 'big-pickle' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    await fetchModelIds(config(), fakeFetch as typeof fetch);
+    expect(captured.get('user-agent')).toBe('opencode/latest/2.1.4/cli');
+  });
+
   test('loads a complete catalog from a custom OpenAI-compatible upstream', async () => {
     const capturedHeaders: string[] = [];
     const fakeFetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
