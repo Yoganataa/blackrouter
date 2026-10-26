@@ -307,6 +307,7 @@ describe('native TLS transport is passed through', () => {
     const prepared = await prepareProviderRequest({ model: 'oc/big-pickle', body: { model: 'oc/big-pickle', messages: [{ role: 'user', content: 'Hello' }] }, session: 'tls-seam-test' });
     expect(typeof prepared.directFetch).toBe('function');
     expect(prepared.url.toString()).toContain('/inference/v1/chat/completions');
+
   });
 });
 
