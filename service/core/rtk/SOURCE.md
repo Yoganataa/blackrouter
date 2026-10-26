@@ -31,3 +31,12 @@ Keep OpenChamber routing and HTTP/proxy dispatch outside the copied provider mod
 For updates, compare the listed upstream files at a newly pinned commit; only adjust
 compatibility modules at the boundaries if native APIs change. Run the test suite,
 type check, and bundle build before merging.
+
+## Local compatibility adaptations
+
+The pinned upstream RTK modules remain the core implementation. Two compatibility fixes are deliberately documented here:
+
+- `autodetect.js` checks the total number of input lines for line-numbered reads and samples the beginning of the full input. The prior implementation only counted lines within the detection prefix, so long numbered reads with short lines were misclassified as generic logs.
+- `index.js` exports its existing internal `compressText` helper so the BlackRouter facade can preserve its previous import surface. `service/rtk.ts` defaults the legacy `compressMessages(body)` call to enabled and re-exports `compactSmartTruncate` and `compressText` for compatibility.
+
+These changes do not replace the upstream compression filters; they fix the integration seam and are covered by focused regression cases in `service/rtk.test.ts`. The checked-in `service/main.js` bundle has matching updates, pending a clean Bun-generated build.
