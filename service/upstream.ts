@@ -11,6 +11,7 @@ import { resolveModelMetadata } from './model-metadata.ts';
 import { aggregateStream } from './sse.ts';
 import { createOpenCodeResponseTransform, resolveOpenCodeLane } from './opencode-protocol.ts';
 import type { PreparedChat } from './zen.ts';
+// @ts-ignore - the selected provider core is copied from upstream JavaScript.
 import { prepareProviderRequest } from './core/provider-adapter.js';
 import { resolveModelCandidates, shouldAdvanceAfterStatus } from './model-fallback.ts';
 import { parseRetryAfterMs } from './retry-after.ts';
