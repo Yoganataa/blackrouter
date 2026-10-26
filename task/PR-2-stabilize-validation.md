@@ -3,7 +3,8 @@
 **Repository:** `Yoganataa/blackrouter`  
 **Working branch:** `feat/port-9router-rtk-upstream`  
 **Pull request:** [#2 — feat: port native core and upstream free-tier fixes](https://github.com/Yoganataa/blackrouter/pull/2)  
-**Last known CI commit:** `a53ccfb04bf578ec7884769c5bf2f563d2425151`
+**Latest source commit verified by CI:** `e61f195394ccd34d7783126862309b26af258189`  
+**Latest CI-generated bundle commit:** `7496260` (service bundle synchronized)
 
 ## Status legend
 
@@ -43,22 +44,24 @@ Work strictly one task at a time and report the result before moving to the next
 - [x] Run `bun test` and resolve all failures without weakening assertions: 146 passed, 0 failed (run `40349762310`).
 - [x] Run `bun run build`; CI regenerated and committed `service/main.js` (`9339826f` prefix).
 - [ ] Review relevant tests for direct transport, HTTP proxy, relay selection, API routing, and streaming behavior.
-- [ ] Verify loopback-by-default behavior and credential redaction.
+- [x] Verify both listeners bind to `127.0.0.1` by code inspection (`service/main.ts`, `service/router-server.ts`).
+- [x] Redact proxy URL userinfo and sensitive query values in panel state; preserve stored credentials when the panel posts an unchanged redacted pool URL. Unit tests and CI verify this behavior.
+- [ ] Audit all logs/diagnostics for secret leakage beyond the panel-state path.
 - [ ] Verify that selecting a proxy/relay never silently falls back to a direct upstream connection.
 - [ ] Check every MUST requirement in `goals.md` / `BR-SCOPE-1.0` against code or test evidence.
-- [ ] Recheck the latest PR CI run after fixes and record its run/commit.
+- [x] Recheck CI after the credential-redaction fix; run `40377741429` passed on source commit `e61f195394ccd34d7783126862309b26af258189`.
 
 ## Known CI failures (last observed run)
 
 GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verify-and-bundle`.
 
-- [ ] `service/upstream.ts(791,56)`: `ReadableStream<Uint8Array<ArrayBufferLike>>` is not assignable to the stream type expected by `Readable.fromWeb`.
-- [ ] `service/zen.test.ts(6,8)`: no declaration for `./core/utils/opencodeFingerprint.js`.
-- [ ] `service/zen.test.ts(7,36)`: no declaration for `./core/executors/opencode.js`.
-- [ ] `service/zen.test.ts(31,50)`: property `function` does not exist on inferred type `never`.
-- [ ] `service/zen.test.ts(33,12)` and `(34,12)`: `shell` possibly undefined.
-- [ ] `service/zen.test.ts(41,17)` and `(42,17)`: property `system` does not exist on the inferred fixture type.
-- [ ] `service/zen.test.ts(274,58)` and `(291,58)`: no declaration for `opencodeFingerprint.js`.
+- [x] `service/upstream.ts(791,56)`: Node Web ReadableStream type mismatch fixed and verified by CI.
+- [x] `service/zen.test.ts(6,8)`: upstream JS module declaration issue fixed with a targeted annotation.
+- [x] `service/zen.test.ts(7,36)`: upstream JS module declaration issue fixed with a targeted annotation.
+- [x] `service/zen.test.ts(31,50)`: fixture has explicit structural typing.
+- [x] `service/zen.test.ts(33,12)` and `(34,12)`: explicit runtime assertion for the required shell fingerprint.
+- [x] `service/zen.test.ts(41,17)` and `(42,17)`: Messages system fixture type corrected.
+- [x] `service/zen.test.ts(274,58)` and `(291,58)`: upstream JS module declaration issue fixed with targeted annotations.
 
 ## Latest session checkpoint (2026-10-26)
 
@@ -80,10 +83,29 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 
 **Latest code change:** `32379478efc085b3330176494a740e5f2ed85b87` adds the egress-policy regression test. It does not weaken existing assertions and does not change runtime source.
 
+## Latest session checkpoint (2026-10-27)
+
+**Phase:** Panel-state proxy credential redaction — implemented and CI-verified. The overall MUST acceptance path remains incomplete.
+
+- [x] Added `redactProxyUrlCredentials()` for URL userinfo and sensitive query parameters.
+- [x] `runtime.state()` now returns redacted proxy URLs alongside the already-redacted upstream API key.
+- [x] Added `preserveProxyPoolCredentials()` so panel actions that submit a redacted but otherwise unchanged pool URL retain the actual stored proxy credentials. A genuinely changed URL is accepted as submitted.
+- [x] Added regression tests for redaction, preserving credentials during metadata-only changes, and accepting an intentionally changed URL.
+- [x] Code inspection confirmed the host service and OpenAI-compatible gateway listeners bind to `127.0.0.1`.
+- [x] CI run [40377741429](https://github.com/Yoganataa/blackrouter/actions/runs/40377741429) passed on source commit `e61f195394ccd34d7783126862309b26af258189`: type-check passed, **150 tests passed / 0 failed across 15 files**, and build passed.
+- [x] CI generated and committed the updated `service/main.js` bundle as `7496260`; the workflow reported successful bundle synchronization.
+- [ ] Audit all logs and diagnostics for possible secrets beyond panel-state serialization.
+- [ ] Validate live OpenChamber host loading and a real OpenCode Zen Free inference response.
+- [ ] Verify direct, HTTP proxy, and relay routes independently in a running environment, including cancellation/timeouts and streaming/non-streaming.
+- [ ] Check every MUST in `goals.md` / `BR-SCOPE-1.0` against evidence.
+
+**Changed files:** `service/config.ts`, `service/runtime.ts`, `service/config.test.ts`, generated `service/main.js`, and this task log.
+
+**Next action:** audit logs/diagnostics for secret leakage, then continue request-lifecycle checks and run OpenChamber host-level plus live OpenCode Zen Free smoke tests where an executable environment is available.
 ## Session handoff
 
-**Current state:** Type-check, 147 unit/integration tests, and build passed in CI. The bundle is synchronized. Egress policy now has an integration regression test for the case where OpenCode rejects all configured relay pools; the original failure response is preserved and no direct route is attempted.
+**Current state:** Latest CI run `40377741429` passed type-check, 150 tests, and build. Panel state now redacts proxy URL credentials and preserves stored credentials during metadata-only pool changes. The egress regression test also confirms configured relay pools are not bypassed after OpenCode rejects them. MVP host-level/live provider acceptance remains incomplete.
 
-**Next action:** Continue MUST acceptance validation: inspect/validate the full request lifecycle and configuration/security boundaries, then run OpenChamber host-level and live OpenCode Zen Free smoke tests where an executable environment is available. The repository CI does not by itself prove the upstream provider currently responds or that the extension loads in the host application.
+**Next action:** Audit logs/diagnostics for secret leakage, then continue request-lifecycle checks and run OpenChamber host-level plus live OpenCode Zen Free smoke tests where an executable environment is available. The repository CI does not by itself prove the upstream provider currently responds or that the extension loads in the host application.
 
 **Update protocol:** After each work session, update this file with actual status, changed files/commit SHA, commands or CI evidence, remaining blockers, and the next concrete action. Only check an item after verifying it.
