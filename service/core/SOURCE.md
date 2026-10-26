@@ -44,9 +44,11 @@ boundary around native provider behavior:
 - `executors/base.js` delegates native URL selection, request transforms, and
   provider headers to the OpenChamber transport dispatch instead of importing
   9Router's unrelated generic credential/proxy stack.
-- `provider-adapter.js` selects the target format from the native provider
-  registry/family resolver, invokes the upstream translators and executor, and
+- `provider-adapter.js` reads explicit target-format declarations from the native
+  OpenCode provider registry, invokes the upstream translators and executor, and
   returns a request envelope for BlackRouter's direct, HTTP-proxy, or relay transport.
+  Unlisted models retain the same Chat default as the selected native executor; the
+  adapter does not add an independent family-routing table.
 - `config/providers.js` narrows the native provider registry to OpenCode Free.
 - `providers/capabilities.js`, `providers/thinkingLevels.js`,
   `providers/shared.js`, `config/appConstants.js`, and
