@@ -42,14 +42,23 @@ describe('official OpenCode free-tier regressions adapted from 9Router #5222', (
   });
 
   test('uses a current-time, stable translated session for foreign conversation ids', () => {
+    const before = Date.now();
     const id = translateSessionId('claude:conversation-5222-regression', 'claude');
+    const after = Date.now();
     expect(id).toMatch(SESSION_RE);
     expect(translateSessionId('claude:conversation-5222-regression', 'claude')).toBe(id);
+
+    // The 12-hex prefix stores a 36-bit millisecond timestamp, so compare
+    // circularly modulo 2^36 just like the upstream regression test.
+    const MOD = 2 ** 36;
     const timestampField = BigInt('0x' + id.slice(4, 16));
     const counter = Number((~timestampField) & 0xfffn);
-    expect(counter).toBe(1);
     const decodedTime = Number(((~timestampField) & ((1n << 48n) - 1n)) >> 12n);
-    expect(Math.abs(Date.now() - decodedTime)).toBeLessThan(10_000);
+    const circularDistance = (a: number, b: number) =>
+      Math.min((a - b + MOD) % MOD, (b - a + MOD) % MOD);
+
+    expect(counter).toBe(1);
+    expect(circularDistance(decodedTime, before % MOD)).toBeLessThanOrEqual(after - before + 1000);
   });
 });
 
