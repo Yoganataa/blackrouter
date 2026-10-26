@@ -2,6 +2,7 @@ import type { CavemanLevel, PonytailLevel } from '../contract.ts';
 
 import { compressMessages } from './rtk.ts';
 import { applyTokenSaverStyles } from './token-saver-styles.ts';
+// @ts-ignore - the selected provider core is copied from upstream JavaScript.
 import { generateSessionId } from './core/provider-adapter.js';
 
 export const sessionId = generateSessionId;
