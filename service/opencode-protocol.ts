@@ -1,5 +1,7 @@
 import { Transform } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
+// @ts-ignore - native helper copied from the upstream provider core.
+import { restoreToolNames } from './core/utils/opencodeFingerprint.js';
 
 export type OpenCodeLane = 'chat' | 'responses' | 'messages';
 type AnyObject = Record<string, any>;
@@ -25,6 +27,66 @@ const parseFrame = (frame: string): SseFrame | null => {
   return { event, data: data.join('\n') };
 };
 
+export const createToolNameRestoreTransform = (
+  toolNameMap?: Map<string, string> | null,
+): Transform | null => {
+  if (!toolNameMap?.size) return null;
+
+  const decoder = new StringDecoder('utf8');
+  let buffer = '';
+  const stream = new Transform({
+    transform(chunk: Buffer | string, _encoding, callback) {
+      try {
+        buffer += typeof chunk === 'string' ? chunk : decoder.write(chunk);
+        let separator = /\r?\n\r?\n/.exec(buffer);
+        while (separator && separator.index !== undefined) {
+          const frame = buffer.slice(0, separator.index);
+          buffer = buffer.slice(separator.index + separator[0].length);
+          processFrame(frame);
+          separator = /\r?\n\r?\n/.exec(buffer);
+        }
+        callback();
+      } catch (error) {
+        callback(error instanceof Error ? error : new Error(String(error)));
+      }
+    },
+    flush(callback) {
+      try {
+        buffer += decoder.end();
+        if (buffer.trim()) processFrame(buffer);
+        callback();
+      } catch (error) {
+        callback(error instanceof Error ? error : new Error(String(error)));
+      }
+    },
+  });
+
+  const processFrame = (rawFrame: string): void => {
+    const frame = parseFrame(rawFrame);
+    if (!frame || frame.data === '[DONE]') {
+      stream.push(Buffer.from(rawFrame + '\n\n'));
+      return;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(frame.data);
+    } catch {
+      stream.push(Buffer.from(rawFrame + '\n\n'));
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      stream.push(Buffer.from(rawFrame + '\n\n'));
+      return;
+    }
+    const restored = restoreToolNames(parsed as AnyObject, toolNameMap);
+    const eventLine = frame.event ? \`event: \${frame.event}\n\` : '';
+    stream.push(Buffer.from(\`\${eventLine}data: \${JSON.stringify(restored)}\n\n\`));
+  };
+
+  return stream;
+};
+
 const responseErrorMessage = (payload: AnyObject): string => {
   const response = payload.response && typeof payload.response === 'object' ? payload.response as AnyObject : {};
   const error = payload.error && typeof payload.error === 'object'
@@ -35,7 +97,7 @@ const responseErrorMessage = (payload: AnyObject): string => {
   return typeof error.message === 'string' ? error.message : JSON.stringify(error);
 };
 
-export const createOpenCodeResponseTransform = (lane: OpenCodeLane, requestedModel: string): Transform | null => {
+export const createOpenCodeResponseTransform = (lane: OpenCodeLane, requestedModel: string, toolNameMap?: Map<string, string> | null): Transform | null => {
   if (lane === 'chat') return null;
 
   const decoder = new StringDecoder('utf8');
@@ -63,7 +125,8 @@ export const createOpenCodeResponseTransform = (lane: OpenCodeLane, requestedMod
   let messageStopReason = 'end_turn';
 
   const emitData = (payload: AnyObject): void => {
-    stream.push(Buffer.from(`data: ${JSON.stringify(payload)}\n\n`));
+    const restored = toolNameMap?.size ? restoreToolNames(payload, toolNameMap) : payload;
+    stream.push(Buffer.from(`data: ${JSON.stringify(restored)}\n\n`));
   };
   const emitChunk = (delta: AnyObject, finish: string | null = null, usage?: AnyObject): void => {
     const chunk: AnyObject = {
