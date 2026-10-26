@@ -2,7 +2,6 @@ import { OpenCodeExecutor, generateSessionId } from "./executors/opencode.js";
 import { FORMATS } from "./translator/formats.js";
 import { translateRequest } from "./translator/index.js";
 import { PROVIDERS } from "./config/providers.js";
-import { opencodeFamilyFormats } from "./providers/models/helpers.js";
 import { takeRenamedToolNames } from "./utils/opencodeFingerprint.js";
 
 const cleanModelId = (model) => {
@@ -12,11 +11,9 @@ const cleanModelId = (model) => {
 const targetFormatForModel = (model) => {
   const base = cleanModelId(model);
   const registryEntry = (PROVIDERS.opencode.models || []).find((entry) => entry.id === base);
-  if (registryEntry?.targetFormat) return registryEntry.targetFormat;
-  const family = opencodeFamilyFormats(base);
-  if (family?.targetFormat) return family.targetFormat;
-  if (family?.supportedFormats?.length === 1) return family.supportedFormats[0];
-  return FORMATS.OPENAI;
+  // Match the native OpenCode executor: only curated registry entries override
+  // the Chat default, and the executor itself chooses Responses/Messages lanes.
+  return registryEntry?.targetFormat || FORMATS.OPENAI;
 };
 
 const normalizeHeaders = (headers) => Object.fromEntries(
