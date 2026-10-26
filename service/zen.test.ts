@@ -5,6 +5,10 @@ import {
   applyFingerprintTools,
 } from './core/utils/opencodeFingerprint.js';
 import { translateSessionId } from './core/executors/opencode.js';
+// @ts-ignore - native capability modules are copied from upstream JavaScript.
+import { getCapabilitiesForModel } from './core/providers/capabilities.js';
+// @ts-ignore - native capability modules are copied from upstream JavaScript.
+import { getThinkingLevels } from './core/providers/thinkingLevels.js';
 
 describe('official OpenCode free-tier regressions adapted from 9Router #5222', () => {
   test('adds the CLI environment marker without replacing caller instructions', () => {
@@ -323,4 +327,42 @@ describe('preparing a client chat body', () => {
     }), false);
     expect(JSON.parse(prepared.body).messages[0].content).toBe(diff);
   });
+describe('official OpenCode Free model reasoning fixes', () => {
+  test('publishes the full OpenAI reasoning enum for MiMo v2.6 Free', () => {
+    expect(getCapabilitiesForModel('opencode', 'mimo-v2.6-flash-free')).toMatchObject({
+      reasoning: true,
+      thinkingFormat: 'openai',
+      thinkingCanDisable: true,
+      contextWindow: 1048576,
+      maxOutput: 131072,
+    });
+    expect(getThinkingLevels('opencode', 'oc/mimo-v2.6-flash-free')).toEqual([
+      'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
+    ]);
+  });
+
+  test('keeps GLM 5.3 Free on reasoning_effort and never advertises disable', () => {
+    expect(getCapabilitiesForModel('opencode', 'glm-5.3-flash-free')).toMatchObject({
+      reasoning: true,
+      thinkingFormat: 'openai',
+      thinkingCanDisable: false,
+    });
+    expect(getThinkingLevels('opencode', 'glm-5.3-flash-free')).toEqual([
+      'minimal', 'low', 'medium', 'high', 'xhigh',
+    ]);
+  });
+
+  test('advertises low/high/max for DeepSeek v4.1 Flash Free and caps its context', () => {
+    expect(getCapabilitiesForModel('opencode', 'deepseek-v4.1-flash-free')).toMatchObject({
+      reasoning: true,
+      thinkingFormat: 'deepseek',
+      contextWindow: 330000,
+      maxOutput: 128000,
+    });
+    expect(getThinkingLevels('opencode', 'oc/deepseek-v4.1-flash-free')).toEqual([
+      'low', 'high', 'max',
+    ]);
+  });
+});
+
 });
