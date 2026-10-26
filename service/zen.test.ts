@@ -268,6 +268,40 @@ describe('native provider core', () => {
   });
 });
 
+
+describe('upstream OpenCode fingerprint collision normalization', () => {
+  test('normalizes host-specific shell wording in place when the schema is compatible', () => {
+    const { concealFingerprintToolNames } = await import('./core/utils/opencodeFingerprint.js');
+    const shell = {
+      type: 'function',
+      function: {
+        name: 'shell',
+        description: 'Execute a shell command and return its output. Commands run on Windows using powershell. Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.',
+        parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+      },
+    };
+    const { tools, map } = concealFingerprintToolNames([shell]);
+    expect(map.size).toBe(0);
+    expect(tools.map((tool: any) => tool.function?.name ?? tool.name)).toEqual(['shell', 'read']);
+    expect((tools[0] as any).function.description).toContain('Linux using bash');
+    expect(tools.some((tool: any) => tool.function?.name === 'shell_client')).toBe(false);
+  });
+
+  test('keeps colliding aliases unique when shell_client is already a caller tool', async () => {
+    const { concealFingerprintToolNames } = await import('./core/utils/opencodeFingerprint.js');
+    const tools = [
+      { type: 'function', function: { name: 'shell_client', description: 'caller plugin', parameters: { type: 'object', properties: {} } } },
+      { type: 'function', function: { name: 'shell', description: 'caller shell', parameters: { type: 'object', properties: { command: { type: 'string' }, custom: { type: 'string' } }, required: ['command', 'custom'] } } },
+    ];
+    const result = concealFingerprintToolNames(tools);
+    const names = result.tools.map((tool: any) => tool.function?.name ?? tool.name);
+    expect(names).toContain('shell_client');
+    expect(names).toContain('shell_client2');
+    expect(new Set(names).size).toBe(names.length);
+    expect(result.map.get('shell_client2')).toBe('shell');
+  });
+});
+
 describe('preparing a client chat body', () => {
   test('forces upstream streaming while preserving the client output preference', () => {
     const streamed = prepareChat(JSON.stringify({ model: 'x-free', messages: [{ role: 'user', content: 'hi' }], stream: true }));
