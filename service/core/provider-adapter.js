@@ -30,11 +30,9 @@ const toolNameOf = (tool) => {
   return "";
 };
 
-const inferToolNameMap = (sourceBody, transformedBody) => {
+const inferToolNameMap = (sourceNames, transformedBody) => {
   const map = new Map();
-  const sourceTools = Array.isArray(sourceBody?.tools) ? sourceBody.tools : [];
   const transformedTools = Array.isArray(transformedBody?.tools) ? transformedBody.tools : [];
-  const sourceNames = new Set(sourceTools.map(toolNameOf).filter(Boolean));
   const transformedNames = new Set(transformedTools.map(toolNameOf).filter(Boolean));
 
   for (const originalName of ["read", "shell"]) {
@@ -96,6 +94,9 @@ const normalizeMessagesFingerprintTools = (body) => {
  */
 export const prepareProviderRequest = async ({ model, body, session, rawHeaders = {} }) => {
   const upstreamModel = cleanModelId(model);
+  const originalToolNames = new Set(
+    (Array.isArray(body?.tools) ? body.tools : []).map(toolNameOf).filter(Boolean),
+  );
   const targetFormat = targetFormatForModel(upstreamModel);
   const credentials = {
     connectionId: session,
@@ -119,7 +120,7 @@ export const prepareProviderRequest = async ({ model, body, session, rawHeaders 
       const transportBody = responseFormat === "claude"
         ? normalizeMessagesFingerprintTools(outboundBody)
         : outboundBody;
-      const toolNameMap = takeRenamedToolNames(outboundBody) || inferToolNameMap(body, outboundBody);
+      const toolNameMap = takeRenamedToolNames(outboundBody) || inferToolNameMap(originalToolNames, outboundBody);
       return {
         url: new URL(url),
         headers: normalizeHeaders(headers),
