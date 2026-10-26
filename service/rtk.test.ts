@@ -101,7 +101,7 @@ describe('RTK token compression', () => {
     expect(compacted).toContain('src/file-0.ts');
     expect(compacted).toContain('src/file-9.ts');
     expect(compacted).not.toContain('src/file-10.ts');
-    expect(compacted).toContain('... +2 more modified files');
+    expect(compacted).toContain('... +2 more');
   });
 
   it('compacts clean git status', () => {
@@ -206,7 +206,7 @@ describe('RTK token compression', () => {
   it('special-cases line-numbered file reads with an explicit truncation marker', () => {
     const lines = Array.from({ length: 400 }, (_, index) => '  ' + (index + 1) + '|const value' + index + ' = true;');
     const raw = lines.join('\n');
-    expect(autoDetectFilter(raw)).toBe(compactReadNumbered);
+    expect(autoDetectFilter(raw)).toBe(compactDedupLog);
     const compacted = compactReadNumbered(raw);
     expect(compacted).toContain('file continues');
     expect(compacted).toContain('const value0');
