@@ -52,6 +52,20 @@ describe('RTK token compression', () => {
     expect(compacted).not.toContain('No newline at end of file');
   });
 
+  it('uses the upstream ten-match grep cap per file', () => {
+    const raw = Array.from({ length: 12 }, (_, index) =>
+      `src/app.ts:${index + 1}:value-${index + 1} ${'x'.repeat(25)}`,
+    ).join('\n');
+    const compacted = compactGrep(raw);
+
+    expect(compacted).toContain('12 matches in 1F:');
+    expect(compacted).toContain('[file] src/app.ts (12):');
+    expect(compacted).toContain('value-10');
+    expect(compacted).not.toContain('value-11');
+    expect(compacted).not.toContain('value-12');
+    expect(compacted).toContain('+2');
+  });
+
   it('compacts git status output into branch and counts', () => {
     const raw = `## main\n M src/contract.ts\n M src/zen.ts\n?? new-file.txt\n`;
     const compacted = compactGitStatus(raw);
