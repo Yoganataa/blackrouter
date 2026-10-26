@@ -1,4 +1,4 @@
-import { compressMessages as upstreamCompressMessages } from "./vendor/9router-rtk/index.js";
+import { compressMessages as upstreamCompressMessages } from "./core/rtk/index.js";
 // service/main.ts
 import http5 from "node:http";
 
