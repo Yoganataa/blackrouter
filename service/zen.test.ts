@@ -16,7 +16,7 @@ describe('official OpenCode free-tier regressions adapted from 9Router #5222', (
   });
 
   test('does not duplicate an existing CLI environment marker', () => {
-    const body = { instructions: 'Caller prompt\\n<env>\\nexisting\\n</env>' };
+    const body = { instructions: 'Caller prompt\n<env>\nexisting\n</env>' };
     expect(applyEnvFingerprint(body, true)).toBe(false);
     expect(body.instructions.match(/<env>/g)).toHaveLength(1);
   });
