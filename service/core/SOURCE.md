@@ -5,8 +5,8 @@ BlackRouter's backend core is assembled from selected native modules in
 
 \`f39d8f07481ae8518e93175f0ecaaafa61573c6c\`
 
-This is intentionally a **scoped provider-core port**, not a copy of the 9Router
-application or dashboard. OpenChamber continues to own the UI and panel. BlackRouter
+This is intentionally a **scoped provider-core port**, not a copy of the upstream
+application or dashboard. The original MIT license is retained in [LICENSE](./LICENSE). OpenChamber continues to own the UI and panel. BlackRouter
 owns the OpenAI-compatible listener, relay/direct transport, local configuration,
 and response-stream adapter.
 
