@@ -470,7 +470,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         if (pool && attempted.has(pool.id)) break;
         if (pool) attempted.add(pool.id);
         try {
-          let nativeRequest: { url?: URL; headers?: Record<string, string>; body?: string; lane?: OpenCodeLane; toolNameMap?: Map<string, string> | null } | null = null;
+          let nativeRequest: { url?: URL; headers?: Record<string, string>; body?: string; lane?: OpenCodeLane; toolNameMap?: Map<string, string> | null; directFetch?: (url: URL, options: RequestInit) => Promise<Response> } | null = null;
           if (isOpenCodeUpstream(config.upstream)) {
             const parsedBody = JSON.parse(prepared.body) as Record<string, unknown>;
             nativeRequest = await prepareProviderRequest({ model: modelId, body: parsedBody, session: runtimeSession });
@@ -511,12 +511,9 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
             status = answer.status;
             retryAfter = answer.retryAfter;
           } else {
-            const answer = await fetch(target.url, {
-              method: 'POST',
-              headers: testHeaders,
-              body: outboundBody,
-              signal: AbortSignal.timeout(15_000),
-            });
+            const useNativeTls = isOpenCodeUpstream(config.upstream) && !pool && activePoolCount === 0 && typeof nativeRequest?.directFetch === 'function';
+            const fetcher = useNativeTls ? nativeRequest!.directFetch! : fetch;
+            const answer = await fetcher(target.url, { method: 'POST', headers: testHeaders, body: outboundBody, signal: AbortSignal.timeout(15_000) });
             resultText = await answer.text();
             status = answer.status;
             retryAfter = answer.headers.get('retry-after') ?? undefined;
