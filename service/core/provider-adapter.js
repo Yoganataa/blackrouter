@@ -3,6 +3,7 @@ import { FORMATS } from "./translator/formats.js";
 import { translateRequest } from "./translator/index.js";
 import { PROVIDERS } from "./config/providers.js";
 import { opencodeFamilyFormats } from "./providers/models/helpers.js";
+import { takeRenamedToolNames } from "./utils/opencodeFingerprint.js";
 
 const cleanModelId = (model) => {
   const clean = String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
@@ -90,12 +91,14 @@ export const prepareProviderRequest = async ({ model, body, session, rawHeaders 
       const transportBody = responseFormat === "claude"
         ? normalizeMessagesFingerprintTools(outboundBody)
         : outboundBody;
+      const toolNameMap = takeRenamedToolNames(outboundBody);
       return {
-      url: new URL(url),
-      headers: normalizeHeaders(headers),
-      body: JSON.stringify(transportBody),
-      responseFormat,
-      lane: responseFormat === "openai-responses" ? "responses" : responseFormat === "claude" ? "messages" : "chat",
+        url: new URL(url),
+        headers: normalizeHeaders(headers),
+        body: JSON.stringify(transportBody),
+        responseFormat,
+        lane: responseFormat === "openai-responses" ? "responses" : responseFormat === "claude" ? "messages" : "chat",
+        toolNameMap,
       };
     },
   });
