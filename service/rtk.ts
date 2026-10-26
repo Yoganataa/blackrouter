@@ -1,38 +1,38 @@
 /**
- * Compatibility facade for the RTK implementation vendored from decolua/9router.
+ * Compatibility facade for the RTK implementation copied from upstream RTK source.
  *
- * Keep upstream behavior in service/vendor/9router-rtk unchanged. This module
+ * Keep upstream behavior in service/core/rtk unchanged. This module
  * retains BlackRouter's existing export names and boolean compressMessages API.
  */
 
-// @ts-ignore - upstream JS is vendored verbatim to make source updates easy to audit.
-import { compressMessages as upstreamCompressMessages } from './vendor/9router-rtk/index.js';
-// @ts-ignore - upstream JS is vendored verbatim to make source updates easy to audit.
-import { autoDetectFilter as upstreamAutoDetectFilter } from './vendor/9router-rtk/autodetect.js';
-// @ts-ignore - upstream JS is vendored verbatim to make source updates easy to audit.
-import { buildOutput } from './vendor/9router-rtk/filters/buildOutput.js';
-// @ts-ignore - upstream JS is vendored verbatim to make source updates easy to audit.
-import { dedupLog } from './vendor/9router-rtk/filters/dedupLog.js';
-// @ts-ignore - upstream JS is vendored verbatim to make source updates easy to audit.
-import { find } from './vendor/9router-rtk/filters/find.js';
-// @ts-ignore - upstream JS is vendored verbatim to make source updates easy to audit.
-import { gitDiff } from './vendor/9router-rtk/filters/gitDiff.js';
-// @ts-ignore - upstream JS is vendored verbatim to make source updates easy to audit.
-import { gitLog } from './vendor/9router-rtk/filters/gitLog.js';
-// @ts-ignore - upstream JS is vendored verbatim to make source updates easy to audit.
-import { gitStatus } from './vendor/9router-rtk/filters/gitStatus.js';
-// @ts-ignore - upstream JS is vendored verbatim to make source updates easy to audit.
-import { grep } from './vendor/9router-rtk/filters/grep.js';
-// @ts-ignore - upstream JS is vendored verbatim to make source updates easy to audit.
-import { ls } from './vendor/9router-rtk/filters/ls.js';
-// @ts-ignore - upstream JS is vendored verbatim to make source updates easy to audit.
-import { readNumbered } from './vendor/9router-rtk/filters/readNumbered.js';
-// @ts-ignore - upstream JS is vendored verbatim to make source updates easy to audit.
-import { searchList } from './vendor/9router-rtk/filters/searchList.js';
-// @ts-ignore - upstream JS is vendored verbatim to make source updates easy to audit.
-import { smartTruncate as upstreamSmartTruncate } from './vendor/9router-rtk/filters/smartTruncate.js';
-// @ts-ignore - upstream JS is vendored verbatim to make source updates easy to audit.
-import { tree } from './vendor/9router-rtk/filters/tree.js';
+// @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
+import { compressMessages as upstreamCompressMessages } from './core/rtk/index.js';
+// @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
+import { autoDetectFilter as upstreamAutoDetectFilter } from './core/rtk/autodetect.js';
+// @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
+import { buildOutput } from './core/rtk/filters/buildOutput.js';
+// @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
+import { dedupLog } from './core/rtk/filters/dedupLog.js';
+// @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
+import { find } from './core/rtk/filters/find.js';
+// @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
+import { gitDiff } from './core/rtk/filters/gitDiff.js';
+// @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
+import { gitLog } from './core/rtk/filters/gitLog.js';
+// @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
+import { gitStatus } from './core/rtk/filters/gitStatus.js';
+// @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
+import { grep } from './core/rtk/filters/grep.js';
+// @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
+import { ls } from './core/rtk/filters/ls.js';
+// @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
+import { readNumbered } from './core/rtk/filters/readNumbered.js';
+// @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
+import { searchList } from './core/rtk/filters/searchList.js';
+// @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
+import { smartTruncate as upstreamSmartTruncate } from './core/rtk/filters/smartTruncate.js';
+// @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
+import { tree } from './core/rtk/filters/tree.js';
 
 type TextFilter = ((input: string) => string) & { filterName?: string };
 
