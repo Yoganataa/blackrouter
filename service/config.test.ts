@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { DEFAULT_PORT, createApiKey, createConfigStore, defaultConfig, defaultConfigPath } from './config.ts';
+import { DEFAULT_PORT, createApiKey, createConfigStore, defaultConfig, defaultConfigPath, preserveProxyPoolCredentials, redactProxyUrlCredentials } from './config.ts';
 
 const withDirectory = (run: (directory: string) => void): void => {
   const directory = mkdtempSync(path.join(tmpdir(), 'blackrouter-settings-'));
@@ -42,6 +42,48 @@ describe('the router settings', () => {
       expect(store.load().port).toBe(25000);
       expect(store.load().selectedModels).toEqual(['x-free']);
     });
+  });
+
+
+  test('redacts proxy URL credentials and sensitive query values for panel state', () => {
+    const url = 'https://alice:top-secret@proxy.example:8443/relay?api_key=query-secret&region=eu';
+    const redacted = redactProxyUrlCredentials(url);
+    expect(redacted).not.toContain('alice');
+    expect(redacted).not.toContain('top-secret');
+    expect(redacted).not.toContain('query-secret');
+    expect(redacted).toContain('REDACTED');
+    expect(redacted).toContain('region=eu');
+  });
+
+  test('preserves stored proxy credentials when panel changes pool metadata only', () => {
+    const previous = [{
+      id: 'auth-proxy',
+      name: 'Authenticated proxy',
+      type: 'http' as const,
+      proxyUrl: 'http://alice:top-secret@127.0.0.1:7890',
+      isActive: true,
+    }];
+    const panelCopy = previous.map((pool) => ({
+      ...pool,
+      proxyUrl: redactProxyUrlCredentials(pool.proxyUrl),
+      isActive: false,
+    }));
+    expect(preserveProxyPoolCredentials(previous, panelCopy)).toEqual([{
+      ...previous[0],
+      isActive: false,
+    }]);
+  });
+
+  test('accepts a genuinely changed proxy URL rather than restoring old credentials', () => {
+    const previous = [{
+      id: 'auth-proxy',
+      name: 'Authenticated proxy',
+      type: 'http' as const,
+      proxyUrl: 'http://alice:top-secret@127.0.0.1:7890',
+      isActive: true,
+    }];
+    const incoming = [{ ...previous[0], proxyUrl: 'http://127.0.0.1:7891' }];
+    expect(preserveProxyPoolCredentials(previous, incoming)[0]?.proxyUrl).toBe('http://127.0.0.1:7891');
   });
 
   test('migrates legacy relay configuration into proxyPools', () => {
