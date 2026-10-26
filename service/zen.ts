@@ -188,12 +188,6 @@ export const prepareChat = (raw: string, options?: boolean | PrepareChatOptions)
   const effectiveOptions: PrepareChatOptions = typeof options === 'boolean'
     ? { rtkEnabled: options }
     : (options ?? {});
-  applyTokenSaverStyles(
-    parsed,
-    effectiveOptions.cavemanLevel ?? 'off',
-    effectiveOptions.ponytailLevel ?? 'off',
-  );
-
   const openCodeFreeTier = effectiveOptions.openCodeFreeTier ?? true;
   if (openCodeFreeTier) {
     ensureFreeTierTools(parsed);
@@ -216,6 +210,13 @@ export const prepareChat = (raw: string, options?: boolean | PrepareChatOptions)
   if (rtkEnabled) {
     compressMessages(parsed as Record<string, unknown>, true);
   }
+
+  // 9Router runs RTK before the post-translation prompt injectors.
+  applyTokenSaverStyles(
+    parsed,
+    effectiveOptions.cavemanLevel ?? 'off',
+    effectiveOptions.ponytailLevel ?? 'off',
+  );
 
   if (parsed.max_completion_tokens !== undefined && parsed.max_tokens === undefined) {
     parsed.max_tokens = parsed.max_completion_tokens;
