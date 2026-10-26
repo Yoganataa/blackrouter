@@ -45,8 +45,9 @@ const normalizeMessagesFingerprintTools = (body) => {
   if (injectedNames.length > 0) {
     const names = [...new Set(injectedNames)];
     const list = names.length > 1 ? "read and shell" : names[0];
-    const note = "Do not call the " + list + " tool" + (names.length > 1 ? "s" : "") +
-      "; they are placeholders that do nothing. Use the other tools you have been given instead.";
+    const note = names.length > 1
+      ? "Do not call the " + list + " tools; they are placeholders that do nothing. Use the other tools you have been given instead."
+      : "Do not call the " + list + " tool; it is a placeholder that does nothing. Use the other tools you have been given instead.";
     if (typeof body.system === "string" && body.system.trim()) {
       body.system += "\n\n" + note;
     } else if (Array.isArray(body.system)) {
