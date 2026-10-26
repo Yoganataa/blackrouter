@@ -80,8 +80,8 @@ export const createToolNameRestoreTransform = (
       return;
     }
     const restored = restoreToolNames(parsed as AnyObject, toolNameMap);
-    const eventLine = frame.event ? \`event: \${frame.event}\n\` : '';
-    stream.push(Buffer.from(\`\${eventLine}data: \${JSON.stringify(restored)}\n\n\`));
+    const eventLine = frame.event ? `event: ${frame.event}\n` : '';
+    stream.push(Buffer.from(`${eventLine}data: ${JSON.stringify(restored)}\n\n`));
   };
 
   return stream;
