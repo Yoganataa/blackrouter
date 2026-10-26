@@ -249,6 +249,20 @@ describe('RTK token compression', () => {
     expect(autoDetectFilter(grepText)).toBe(compactGrep);
   });
 
+  it('matches the 9Router 500-character minimum compression threshold', () => {
+    const raw = [
+      'diff --git a/x.ts b/x.ts',
+      '@@ -1,1 +1,8 @@',
+      ...Array.from({ length: 8 }, (_, index) => '+' + 'x'.repeat(35) + index),
+    ].join('\n');
+    expect(raw.length).toBeGreaterThan(256);
+    expect(raw.length).toBeLessThan(500);
+
+    const payload = { messages: [{ role: 'tool', tool_call_id: 'call_small', content: raw }] };
+    expect(compressMessages(payload, true)).toBe(false);
+    expect(payload.messages[0]?.content).toBe(raw);
+  });
+
   it('compresses tool result messages in OpenAI format', () => {
     let diff = 'diff --git a/huge.ts b/huge.ts\n@@ -1,1 +1,200 @@\n';
     for (let i = 0; i < 200; i++) {
