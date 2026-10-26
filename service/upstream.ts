@@ -261,7 +261,7 @@ export const fetchModelIds = async (
 ): Promise<{ ids: string[]; free: string[]; rawEntries: Array<Record<string, unknown>> }> => {
   const target = buildTarget(config, 'models');
   const isOpenCode = isOpenCodeUpstream(config.upstream);
-  const upstreamUserAgent = isOpenCode ? 'opencode/latest/2.0.26/cli' : 'BlackRouter/1.0';
+  const upstreamUserAgent = isOpenCode ? 'opencode/latest/2.1.4/cli' : 'BlackRouter/1.0';
   let payload: ModelsAnswer;
 
   if (target.agent && fetchImpl === fetch) {
