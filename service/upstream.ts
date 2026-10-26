@@ -382,7 +382,7 @@ export
  * waiting for its first data frame. Mirrors official 9Router PR #5167 using
  * BlackRouter's Node stream pipeline. The timer stops at the first data byte.
  */
-const createSseFirstByteKeepAlive = (keepAliveMs = Number(process.env.SSE_KEEPALIVE_MS ?? 15_000)) => {
+export const createSseFirstByteKeepAlive = (keepAliveMs = Number(process.env.SSE_KEEPALIVE_MS ?? 15_000)) => {
   let timer: ReturnType<typeof setInterval> | null = null;
   let seenData = false;
   const stream = new Transform({
@@ -404,7 +404,7 @@ const createSseFirstByteKeepAlive = (keepAliveMs = Number(process.env.SSE_KEEPAL
     if (!Number.isFinite(keepAliveMs) || keepAliveMs <= 0 || seenData) return;
     timer = setInterval(() => {
       if (!seenData && !stream.destroyed && !stream.writableEnded) {
-        stream.push(Buffer.from(': ping\\n\\n'));
+        stream.push(Buffer.from(': ping\n\n'));
       }
     }, keepAliveMs);
     timer.unref?.();
