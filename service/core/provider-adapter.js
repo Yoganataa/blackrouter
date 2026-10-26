@@ -3,6 +3,7 @@ import { FORMATS } from "./translator/formats.js";
 import { translateRequest } from "./translator/index.js";
 import { PROVIDERS } from "./config/providers.js";
 import { takeRenamedToolNames } from "./utils/opencodeFingerprint.js";
+import { isMuseSparkModel } from "./providers/models/helpers.js";
 
 const cleanModelId = (model) => {
   const clean = String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
@@ -11,9 +12,10 @@ const cleanModelId = (model) => {
 const targetFormatForModel = (model) => {
   const base = cleanModelId(model);
   const registryEntry = (PROVIDERS.opencode.models || []).find((entry) => entry.id === base);
-  // Match the native OpenCode executor: only curated registry entries override
-  // the Chat default, and the executor itself chooses Responses/Messages lanes.
-  return registryEntry?.targetFormat || FORMATS.OPENAI;
+  // Match the native OpenCode executor: the curated registry selects explicit
+  // targets, and its native Muse Spark predicate covers future catalog variants.
+  if (registryEntry?.targetFormat) return registryEntry.targetFormat;
+  return isMuseSparkModel(base) ? FORMATS.OPENAI_RESPONSES : FORMATS.OPENAI;
 };
 
 const normalizeHeaders = (headers) => Object.fromEntries(
