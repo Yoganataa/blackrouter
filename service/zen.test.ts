@@ -293,6 +293,7 @@ describe('native provider core', () => {
 describe('upstream OpenCode fingerprint collision normalization', () => {
   test('normalizes host-specific shell wording in place when the schema is compatible', async () => {
     // @ts-ignore - upstream helper is JavaScript and intentionally retains source parity.
+    // @ts-ignore - upstream helper is JavaScript and intentionally retains source parity.
     const { concealFingerprintToolNames } = await import('./core/utils/opencodeFingerprint.js');
     const shell = {
       type: 'function',
@@ -310,6 +311,7 @@ describe('upstream OpenCode fingerprint collision normalization', () => {
   });
 
   test('keeps colliding aliases unique when shell_client is already a caller tool', async () => {
+    // @ts-ignore - upstream helper is JavaScript and intentionally retains source parity.
     const { concealFingerprintToolNames } = await import('./core/utils/opencodeFingerprint.js');
     const tools = [
       { type: 'function', function: { name: 'shell_client', description: 'caller plugin', parameters: { type: 'object', properties: {} } } },
