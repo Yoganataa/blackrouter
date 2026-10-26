@@ -35,10 +35,10 @@ const collectRestored = (input: string, toolNameMap: Map<string, string>): Promi
   });
 
 const frame = (event: string, payload: unknown): string =>
-  \`event: \${event}\\ndata: \${JSON.stringify(payload)}\\n\\n\`;
+  `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
 
 const parseOpenAiChunks = (sse: string): Array<Record<string, any>> => sse
-  .split(/\\r?\\n/)
+  .split(/\r?\n/)
   .flatMap((line) => {
     const trimmed = line.trim();
     if (!trimmed.startsWith('data:')) return [];
