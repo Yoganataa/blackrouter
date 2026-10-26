@@ -2,7 +2,7 @@ import { OpenCodeExecutor, generateSessionId } from "./executors/opencode.js";
 import { FORMATS } from "./translator/formats.js";
 import { translateRequest } from "./translator/index.js";
 
-const cleanModelId = (model) => String(model || "").replace(/\\([^()]+\\)\\s*$/, "").trim();
+const cleanModelId = (model) => String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
 const targetFormatForModel = (model) => {
   const clean = cleanModelId(model);
   const base = clean.includes("/") ? clean.split("/").pop() : clean;
