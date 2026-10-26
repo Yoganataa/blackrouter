@@ -1,14 +1,34 @@
 import { describe, expect, test } from 'bun:test';
 
+// @ts-ignore - upstream core modules are JavaScript and intentionally retain source parity.
 import {
   applyEnvFingerprint,
   applyFingerprintTools,
 } from './core/utils/opencodeFingerprint.js';
+// @ts-ignore - upstream core modules are JavaScript and intentionally retain source parity.
 import { translateSessionId } from './core/executors/opencode.js';
 // @ts-ignore - native capability modules are copied from upstream JavaScript.
 import { getCapabilitiesForModel } from './core/providers/capabilities.js';
 // @ts-ignore - native capability modules are copied from upstream JavaScript.
 import { getThinkingLevels } from './core/providers/thinkingLevels.js';
+
+type FingerprintTool = {
+  type?: string;
+  name?: string;
+  function?: {
+    name?: string;
+    description?: string;
+    parameters?: { required?: string[]; [key: string]: unknown };
+  };
+  [key: string]: unknown;
+};
+
+type FingerprintBody = {
+  instructions?: string;
+  system?: string;
+  tools: FingerprintTool[];
+  messages: Array<{ role: string; content: string }>;
+};
 
 describe('official OpenCode free-tier regressions adapted from 9Router #5222', () => {
   test('adds the CLI environment marker without replacing caller instructions', () => {
@@ -26,17 +46,18 @@ describe('official OpenCode free-tier regressions adapted from 9Router #5222', (
   });
 
   test('fingerprints OpenCode read/shell tools and accepts host shell wording', () => {
-    const body = { tools: [], messages: [{ role: 'user', content: 'hello' }] };
+    const body: FingerprintBody = { tools: [], messages: [{ role: 'user', content: 'hello' }] };
     applyFingerprintTools(body, false);
     const shell = body.tools.find((tool) => tool.function?.name === 'shell');
     expect(shell).toBeDefined();
+    if (!shell?.function) throw new Error('OpenCode shell fingerprint tool was not generated');
     expect(shell.function.description).toContain('Execute a shell command');
-    expect(shell.function.parameters.required).toEqual(['command']);
+    expect(shell.function.parameters?.required).toEqual(['command']);
   });
 
 
   test('fingerprints Messages requests in the top-level system field', () => {
-    const body = { tools: [], messages: [{ role: 'user', content: 'hello' }] };
+    const body: FingerprintBody = { tools: [], messages: [{ role: 'user', content: 'hello' }] };
     applyFingerprintTools(body, false, { claude: true });
     expect(body.system).toContain('<env>');
     expect(body.system).toContain('Working directory:');
@@ -271,6 +292,7 @@ describe('native provider core', () => {
 
 describe('upstream OpenCode fingerprint collision normalization', () => {
   test('normalizes host-specific shell wording in place when the schema is compatible', async () => {
+    // @ts-ignore - upstream helper is JavaScript and intentionally retains source parity.
     const { concealFingerprintToolNames } = await import('./core/utils/opencodeFingerprint.js');
     const shell = {
       type: 'function',
