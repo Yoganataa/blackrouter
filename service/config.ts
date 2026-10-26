@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { routerConfigSchema, type RouterConfig } from '../contract.ts';
+import { routerConfigSchema, type ProxyPool, type RouterConfig } from '../contract.ts';
 
 /**
  * Where BlackRouter keeps its own settings.
@@ -17,6 +17,42 @@ import { routerConfigSchema, type RouterConfig } from '../contract.ts';
 /** 9router's default port, kept so an existing client config keeps working. */
 export const DEFAULT_PORT = 20128;
 export const OPENCODE_ZEN = 'https://opencode.ai/zen/v1';
+
+
+/** Redact URL-embedded credentials before exposing proxy settings to the panel. */
+export const redactProxyUrlCredentials = (value: string): string => {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) {
+      url.username = 'REDACTED';
+      url.password = 'REDACTED';
+    }
+    const sensitiveQueryKey = /^(?:token|secret|password|passwd|auth|api[_-]?key|access[_-]?token|refresh[_-]?token|signature|sig)$/i;
+    for (const key of [...url.searchParams.keys()]) {
+      if (sensitiveQueryKey.test(key)) url.searchParams.set(key, 'REDACTED');
+    }
+    return url.toString();
+  } catch {
+    // Also cover malformed URLs that still contain conventional URL userinfo.
+    return value.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/@]*@/i, '$1REDACTED@');
+  }
+};
+
+/**
+ * Panel actions often send the complete pool list to change only activation
+ * state. Restore the stored URL when the submitted value is exactly our
+ * redacted projection; a genuinely edited URL is kept as submitted.
+ */
+export const preserveProxyPoolCredentials = (
+  previous: readonly ProxyPool[],
+  incoming: readonly ProxyPool[],
+): ProxyPool[] =>
+  incoming.map((pool) => {
+    const stored = previous.find((candidate) => candidate.id === pool.id);
+    return stored && pool.proxyUrl === redactProxyUrlCredentials(stored.proxyUrl)
+      ? { ...pool, proxyUrl: stored.proxyUrl }
+      : pool;
+  });
 
 export const createApiKey = (): string => `sk-${randomBytes(24).toString('hex')}`;
 
