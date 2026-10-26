@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { pipeline, Readable, Writable } from 'node:stream';
 
 import type { RouterConfig } from '../contract.ts';
-import { buildTarget, createSseFirstByteKeepAlive, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels } from './upstream.ts';
+import { buildTarget, createSseFirstByteKeepAlive, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels, isOpenCodeFreeTierGateResponse } from './upstream.ts';
 // @ts-ignore - the native provider executor is copied from upstream JavaScript.
 import { prepareProviderRequest } from './core/provider-adapter.js';
 
@@ -93,6 +93,14 @@ describe('where a call goes', () => {
 
     const custom = buildTarget(config({ upstream: 'https://custom-gateway.local/v1' }), 'chat');
     expect(custom.url.toString()).toBe('https://custom-gateway.local/v1/chat/completions');
+  });
+
+  test('recognizes only the OpenCode free-tier egress gate response', () => {
+    expect(isOpenCodeFreeTierGateResponse(403, '{"type":"FreeTierError"}', true, true)).toBe(true);
+    expect(isOpenCodeFreeTierGateResponse(403, '{"type":"Forbidden"}', true, true)).toBe(false);
+    expect(isOpenCodeFreeTierGateResponse(403, '{"type":"FreeTierError"}', false, true)).toBe(false);
+    expect(isOpenCodeFreeTierGateResponse(403, '{"type":"FreeTierError"}', true, false)).toBe(false);
+    expect(isOpenCodeFreeTierGateResponse(200, '{"type":"FreeTierError"}', true, true)).toBe(false);
   });
 
   test('detects the official OpenCode host without accepting lookalike hostnames', () => {
