@@ -5814,7 +5814,7 @@ var createOpenCodeResponseTransform = (lane, requestedModel) => {
 // service/zen.ts
 import { randomBytes as randomBytes2 } from "node:crypto";
 
-// service/rtk.ts — source-compatible facade for the vendored 9Router RTK module.
+// service/rtk.ts — compatibility facade for the upstream RTK core.
 var compressMessages = (body, enabled) => {
   const stats = upstreamCompressMessages(body, enabled);
   return Boolean(stats && stats.hits && stats.hits.length);
