@@ -119,7 +119,7 @@ export const prepareProviderRequest = async ({ model, body, session, rawHeaders 
     credentials,
     providerSessionId: session,
     clientTool: "generic",
-    dispatch: async ({ url, headers, body: outboundBody, responseFormat }) => {
+    dispatch: async ({ url, headers, body: outboundBody, responseFormat, directFetch }) => {
       const transportBody = responseFormat === "claude"
         ? normalizeMessagesFingerprintTools(outboundBody)
         : outboundBody;
@@ -131,6 +131,7 @@ export const prepareProviderRequest = async ({ model, body, session, rawHeaders 
         responseFormat,
         lane: responseFormat === "openai-responses" ? "responses" : responseFormat === "claude" ? "messages" : "chat",
         toolNameMap,
+        directFetch,
       };
     },
   });
