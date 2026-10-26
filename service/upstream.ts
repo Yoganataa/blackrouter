@@ -9,8 +9,9 @@ import type { ProxyPool, RouterConfig, RouterModel } from '../contract.ts';
 import { upstreamError } from './errors.ts';
 import { resolveModelMetadata } from './model-metadata.ts';
 import { aggregateStream } from './sse.ts';
-import { createOpenCodeResponseTransform, prepareOpenCodeRequestBody, resolveOpenCodeLane } from './opencode-protocol.ts';
-import { freeTierHeaders, type PreparedChat } from './zen.ts';
+import { createOpenCodeResponseTransform, resolveOpenCodeLane } from './opencode-protocol.ts';
+import type { PreparedChat } from './zen.ts';
+import { prepareProviderRequest } from './core/provider-adapter.js';
 import { resolveModelCandidates, shouldAdvanceAfterStatus } from './model-fallback.ts';
 import { parseRetryAfterMs } from './retry-after.ts';
 import { createUsageObserver, extractTokenUsage, type TokenUsage } from './usage-observer.ts';
@@ -150,6 +151,7 @@ export const buildTarget = (
   call: 'models' | 'chat',
   poolOverride?: ProxyPool | null,
   modelId?: string,
+  nativeUrl?: URL,
 ): UpstreamRequest => {
   const activePool =
     poolOverride !== undefined
@@ -167,8 +169,12 @@ export const buildTarget = (
   let targetPath: string;
 
   if (isOpenCode) {
-    targetOrigin = 'https://opencode.ai';
-    targetPath = resolveOpencodePath(call, modelId);
+    targetOrigin = nativeUrl?.origin ?? 'https://opencode.ai';
+    targetPath = call === 'models'
+      ? '/zen/v1/models'
+      : nativeUrl
+        ? \`\${nativeUrl.pathname}\${nativeUrl.search}\`
+        : resolveOpencodePath(call, modelId);
   } else {
     targetOrigin = `${parsed.protocol}//${parsed.host}`;
     const basePath = parsed.pathname.replace(/\/+$/, '');
@@ -493,27 +499,40 @@ export const proxyChatCompletion = (
     ...(fallbackReasons.length > 0 ? { 'x-blackrouter-fallback-reason': fallbackReasons.join(' -> ') } : {}),
   });
 
-  const modelAwareBody = (model: string): { lane: ReturnType<typeof resolveOpenCodeLane>; body: string } => {
-    const lane = resolveOpenCodeLane(config.upstream, model);
-    let raw = prepared.body;
+  const modelAwareBody = async (model: string): Promise<{
+    lane: ReturnType<typeof resolveOpenCodeLane>;
+    body: string;
+    headers?: Record<string, string>;
+    url?: URL;
+  }> => {
+    let parsed: unknown;
     try {
-      const parsed: unknown = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        (parsed as Record<string, unknown>).model = model;
-        raw = JSON.stringify(parsed);
-      }
+      parsed = JSON.parse(prepared.body);
     } catch {
-      // prepareChat already validated the request body; keep the original body
-      // so the request still surfaces a useful conversion error below.
+      throw new Error('Prepared request body was not valid JSON.');
     }
-    const isOpenCode = isOpenCodeUpstream(config.upstream);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Prepared request body must be a JSON object.');
+    }
+    const body = parsed as Record<string, unknown>;
+    body.model = model;
+
+    if (!isOpenCodeUpstream(config.upstream)) {
+      return { lane: 'chat', body: JSON.stringify(body) };
+    }
+
+    // Use the upstream provider executor for model routing, native request
+    // translation, request identity, body normalization, and headers.
+    const native = await prepareProviderRequest({ model, body, session });
     return {
-      lane,
-      body: prepareOpenCodeRequestBody(raw, lane, isOpenCode),
+      lane: native.lane as ReturnType<typeof resolveOpenCodeLane>,
+      body: native.body as string,
+      headers: native.headers as Record<string, string>,
+      url: native.url as URL,
     };
   };
 
-  const sendAttempt = (): void => {
+  const sendAttempt = async (): Promise<void> => {
     if (response.destroyed || response.writableEnded) return;
     const attempt = attempts[attemptIndex];
     if (!attempt) {
@@ -530,21 +549,25 @@ export const proxyChatCompletion = (
     const candidate = attempt.pool;
     let lane: ReturnType<typeof resolveOpenCodeLane>;
     let upstreamBody: string;
+    let nativeHeaders: Record<string, string> = {};
+    let nativeUrl: URL | undefined;
     try {
-      const preparedForModel = modelAwareBody(attempt.model);
+      const preparedForModel = await modelAwareBody(attempt.model);
       lane = preparedForModel.lane;
       upstreamBody = preparedForModel.body;
+      nativeHeaders = preparedForModel.headers ?? {};
+      nativeUrl = preparedForModel.url;
     } catch (error) {
       writeOpenAiError(
         response,
         400,
-        error instanceof Error ? error.message : 'Could not convert the OpenCode request body.',
+        error instanceof Error ? error.message : 'Could not prepare the native provider request.',
         'invalid_request',
       );
       return;
     }
 
-    const target = buildTarget(config, 'chat', candidate, attempt.model);
+    const target = buildTarget(config, 'chat', candidate, attempt.model, nativeUrl);
     const transport = target.url.protocol === 'http:' ? http : https;
     const upstream = transport.request(
       target.url,
@@ -552,9 +575,8 @@ export const proxyChatCompletion = (
         method: 'POST',
         agent: target.agent,
         headers: {
-          ...(isOpenCodeUpstream(config.upstream) ? freeTierHeaders(session) : {}),
+          ...(isOpenCodeUpstream(config.upstream) ? nativeHeaders : {}),
           ...target.headers,
-          ...(lane === 'messages' ? { 'anthropic-version': '2023-06-01' } : {}),
           'content-type': 'application/json',
           accept: 'text/event-stream',
           'content-length': String(Buffer.byteLength(upstreamBody)),
