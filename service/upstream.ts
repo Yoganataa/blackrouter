@@ -2,7 +2,7 @@ import http from 'node:http';
 import type { ServerResponse } from 'node:http';
 import https from 'node:https';
 import type { Socket } from 'node:net';
-import { pipeline, Transform } from 'node:stream';
+import { pipeline, Readable, Transform } from 'node:stream';
 import tls from 'node:tls';
 
 import type { ProxyPool, RouterConfig, RouterModel } from '../contract.ts';
@@ -540,6 +540,7 @@ export const proxyChatCompletion = (
     headers?: Record<string, string>;
     url?: URL;
     toolNameMap?: Map<string, string> | null;
+    directFetch?: (url: URL, options: RequestInit) => Promise<Response>;
   }> => {
     let parsed: unknown;
     try {
@@ -566,6 +567,7 @@ export const proxyChatCompletion = (
       headers: native.headers as Record<string, string>,
       url: native.url as URL,
       toolNameMap: native.toolNameMap as Map<string, string> | null,
+      directFetch: native.directFetch as ((url: URL, options: RequestInit) => Promise<Response>) | undefined,
     };
   };
 
@@ -589,6 +591,7 @@ export const proxyChatCompletion = (
     let nativeHeaders: Record<string, string> = {};
     let nativeUrl: URL | undefined;
     let nativeToolNameMap: Map<string, string> | null = null;
+    let nativeDirectFetch: ((url: URL, options: RequestInit) => Promise<Response>) | undefined;
     try {
       const preparedForModel = await modelAwareBody(attempt.model);
       lane = preparedForModel.lane;
@@ -596,6 +599,7 @@ export const proxyChatCompletion = (
       nativeHeaders = preparedForModel.headers ?? {};
       nativeUrl = preparedForModel.url;
       nativeToolNameMap = preparedForModel.toolNameMap ?? null;
+      nativeDirectFetch = preparedForModel.directFetch;
     } catch (error) {
       writeOpenAiError(
         response,
@@ -606,22 +610,10 @@ export const proxyChatCompletion = (
       return;
     }
 
-    const target = buildTarget(config, 'chat', candidate, nativeUrl);
+    const requestHeaders = { ...(isOpenCodeUpstream(config.upstream) ? nativeHeaders : {}), ...target.headers, 'content-type': 'application/json', accept: 'text/event-stream', 'content-length': String(Buffer.byteLength(upstreamBody)) };
     const transport = target.url.protocol === 'http:' ? http : https;
-    const upstream = transport.request(
-      target.url,
-      {
-        method: 'POST',
-        agent: target.agent,
-        headers: {
-          ...(isOpenCodeUpstream(config.upstream) ? nativeHeaders : {}),
-          ...target.headers,
-          'content-type': 'application/json',
-          accept: 'text/event-stream',
-          'content-length': String(Buffer.byteLength(upstreamBody)),
-        },
-      },
-      (answer) => {
+    const usesNativeDirectTransport = candidate === null && isOpenCodeUpstream(config.upstream) && typeof nativeDirectFetch === 'function';
+    const handleAnswer = (answer: http.IncomingMessage): void => {
         const status = answer.statusCode ?? 502;
         const retryAfterHeader = answer.headers['retry-after'];
         const retryAfter = typeof retryAfterHeader === 'string' ? retryAfterHeader : undefined;
@@ -782,34 +774,36 @@ export const proxyChatCompletion = (
           writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, 'upstream_unreachable');
         });
         if (protocolTransform) answer.pipe(protocolTransform);
-      },
-    );
-
-    upstream.on('error', (error) => {
-      // Network failures can also use the bounded model/pool chain. If there
-      // is no remaining candidate, expose the final transport error.
-      if (!response.headersSent && !response.destroyed && advanceToNextAttempt()) {
-        fallbackReasons.push(`network error on ${lastRequestedModel}`);
-        sendAttempt();
-        return;
-      }
-      const finalAttempt = attempt;
-      const routeHeaders = routingHeaders(finalAttempt);
+    };
+    const handleTransportError = (error: Error): void => {
+      if (!response.headersSent && !response.destroyed && advanceToNextAttempt()) { fallbackReasons.push(`network error on ${lastRequestedModel}`); sendAttempt(); return; }
+      const routeHeaders = routingHeaders(attempt);
       for (const [name, value] of Object.entries(routeHeaders)) response.setHeader(name, value);
-      writeOpenAiError(
-        response,
-        502,
-        `The upstream did not answer for ${lastRequestedModel}: ${error.message}`,
-        'upstream_unreachable',
-        routeHeaders,
-      );
-    });
-
+      writeOpenAiError(response, 502, `The upstream did not answer for ${lastRequestedModel}: ${error.message}`, 'upstream_unreachable', routeHeaders);
+    };
+    let upstream: ReturnType<typeof transport.request> | null = null;
+    let directAbort: AbortController | null = null;
+    if (usesNativeDirectTransport && nativeDirectFetch) {
+      directAbort = new AbortController();
+      void nativeDirectFetch(target.url, { method: 'POST', headers: requestHeaders, body: upstreamBody, signal: AbortSignal.any([directAbort.signal, AbortSignal.timeout(120_000)]) })
+        .then((fetched) => {
+          const body = fetched.body ? Readable.fromWeb(fetched.body as ReadableStream<Uint8Array>) : Readable.from([]);
+          const wrapped = body as unknown as http.IncomingMessage;
+          Object.defineProperty(wrapped, 'statusCode', { value: fetched.status });
+          Object.defineProperty(wrapped, 'headers', { value: Object.fromEntries(fetched.headers.entries()) });
+          handleAnswer(wrapped);
+        })
+        .catch((error: unknown) => handleTransportError(error instanceof Error ? error : new Error(String(error))));
+    } else {
+      upstream = transport.request(target.url, { method: 'POST', agent: target.agent, headers: requestHeaders }, handleAnswer);
+      upstream.on('error', handleTransportError);
+      upstream.end(upstreamBody);
+    }
     response.on('close', () => {
-      if (!response.writableEnded) upstream.destroy();
+      if (response.writableEnded) return;
+      upstream?.destroy();
+      directAbort?.abort(new Error('Downstream client disconnected.'));
     });
-
-    upstream.end(upstreamBody);
   };
 
   sendAttempt();
