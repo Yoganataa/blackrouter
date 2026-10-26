@@ -74,7 +74,7 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - [ ] Run `bun test` and investigate every failure without weakening tests.
 - [ ] Run `bun run build` and inspect generated `service/main.js`.
 
-**Evidence/blocker:** GitHub PR head is `bc767ad5d0819119f9afc98d584892b1a1000a57`. The GitHub commit-status query returned no status checks, and the workflow-run query returned no PR-triggered runs for the preceding commit. No local Bun execution has been performed in this session. Therefore, code edits are confirmed in the branch, but type-check/test/build are **not verified**.
+**Evidence/blocker:** Source edits are committed in `bc767ad5d0819119f9afc98d584892b1a1000a57`; checkpoint commit is `a6f4174ebe7e65c1731b7675cd929b9471de350b`. The GitHub commit-status query returned no status checks, and the workflow-run query returned no PR-triggered runs for the source commit. No local Bun execution has been performed in this session. Therefore, code edits are confirmed in the branch, but type-check/test/build are **not verified**.
 
 **Next action:** Obtain a real `bun run type-check` result (via a runnable environment or a new CI run); fix any remaining diagnostics based on that output. Do not mark the phase as validated until the command/CI confirms it.
 
