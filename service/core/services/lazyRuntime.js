@@ -1,7 +1,7 @@
-// Lazy loader for heavy optional runtime deps (playwright-core, wreq-js).
+// Lazy loader for optional runtime dependencies used by the native OpenCode transport.
 //
-// They are devDependencies only, so end-user installs stay small. On first
-// use the package is downloaded into <DATA_DIR>/runtime (same pattern as
+// The TLS runtime is installed only when first needed, keeping normal installs small. On first
+// use the package is downloaded into the BlackRouter writable data directory (same pattern as
 // cli/hooks/sqliteRuntime.js) and imported from there. Resolution order:
 // app node_modules (dev / traced standalone) → runtime dir → npm install.
 //
@@ -13,11 +13,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { getWritableDataDir } from "../utils/writableDataDir.js";
+import { getWritableDataDir } from "./writableDataDir.js";
 
-// Keep in sync with package.json devDependencies.
+// Keep versions aligned with the upstream runtime dependency contract.
 const LAZY_DEP_VERSIONS = {
-  "playwright-core": "^1.62.1",
   "wreq-js": "^3.2.0",
 };
 
