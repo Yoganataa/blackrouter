@@ -16,124 +16,40 @@ import path from "node:path";
 /** Names required by the upstream free-tier gate. */
 export const OPENCODE_FINGERPRINT_TOOLS = ["read", "shell"];
 
-// Verbatim from the OpenCode v2.0.26 CLI. Upstream compares description and
+// Verbatim sentence chains from the OpenCode v2 CLI tool builders
+// (tool/plugin/read.ts, tool/plugin/shell.ts). Upstream compares description and
 // parameters, so do not reword or reformat these.
-const FINGERPRINT_TOOL_DEFINITIONS = {
+const READ_DESCRIPTION = "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.";
+
+const FINGERPRINT_TOOL_PARAMETERS = {
   read: {
-    description: "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.",
-    parameters: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "File or directory to read" },
-        offset: { type: "integer", minimum: 0, description: "The line or directory entry to start reading from (1-based)" },
-        limit: { type: "integer", minimum: 0, description: "The maximum number of lines or directory entries to read (defaults to and capped at 2000)" },
-      },
-      required: ["path"],
-      additionalProperties: false,
+    type: "object",
+    properties: {
+      path: { type: "string", description: "File or directory to read" },
+      offset: { type: "integer", minimum: 0, description: "The line or directory entry to start reading from (1-based)" },
+      limit: { type: "integer", minimum: 0, description: "The maximum number of lines or directory entries to read (defaults to and capped at 2000)" },
     },
+    required: ["path"],
+    additionalProperties: false,
   },
   shell: {
-    description: "Execute a shell command and return its output. Commands run on Linux using bash. Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.",
-    parameters: {
-      type: "object",
-      properties: {
-        command: { type: "string", description: "Shell command string to execute" },
-        workdir: { type: "string", description: "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead." },
-        timeout: { type: "integer", minimum: 0, description: "Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default." },
-        background: { type: "boolean", description: "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion." },
-      },
-      required: ["command"],
-      additionalProperties: false,
+    type: "object",
+    properties: {
+      command: { type: "string", description: "Shell command string to execute" },
+      workdir: { type: "string", description: "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead." },
+      timeout: { type: "integer", minimum: 0, description: "Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default." },
+      background: { type: "boolean", description: "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion." },
     },
+    required: ["command"],
+    additionalProperties: false,
   },
 };
 
-// Request body -> names renamed for that request. transformRequest() mutates the
-// same body object that chatCore passed into the executor, so a WeakMap keeps the
-// mapping request-local without putting transport metadata on the wire.
-const renamedToolNames = new WeakMap();
-
-/** The fingerprint name when `name` is exactly one; "" otherwise. */
-export function fingerprintToolKey(name) {
-  const trimmed = String(name ?? "").trim();
-  return OPENCODE_FINGERPRINT_TOOLS.includes(trimmed) ? trimmed : "";
-}
-
-/** Read a tool name from either flat ({name}) or chat ({function:{name}}) shape. */
-function toolNameOf(tool) {
-  if (!tool || typeof tool !== "object" || Array.isArray(tool)) return "";
-  if (typeof tool.name === "string" && tool.name.trim()) return tool.name.trim();
-  const fn = tool.function;
-  if (fn && typeof fn === "object" && !Array.isArray(fn) && typeof fn.name === "string") {
-    return fn.name.trim();
-  }
-  return "";
-}
-
-function chatFunctionOf(tool) {
-  const fn = tool?.function;
-  return fn && typeof fn === "object" && !Array.isArray(fn) ? fn : null;
-}
-
-/** True when `tool` already carries OpenCode's exact definition for `key`. */
-function isFingerprintDefinition(tool, key) {
-  const def = tool && (chatFunctionOf(tool) || tool);
-  const want = FINGERPRINT_TOOL_DEFINITIONS[key];
-  return !!def && def.description === want.description
-    && JSON.stringify(def.parameters) === JSON.stringify(want.parameters);
-}
-
-function withToolName(tool, name) {
-  const fn = chatFunctionOf(tool);
-  return fn ? { ...tool, function: { ...fn, name } } : { ...tool, name };
-}
-
-/**
- * Move caller tools off the fingerprint names when their definition differs
- * from OpenCode's, so the exact definitions can be appended without a
- * duplicate name. Everything else, including case variants such as `Read`, is
- * preserved verbatim; upstream accepts them alongside `read`.
- *
- * @param {Array} tools
- * @returns {{ tools: Array, map: Map<string,string> }} map: sent name -> original name
- */
-export function concealFingerprintToolNames(tools) {
-  const map = new Map();
-  if (!Array.isArray(tools) || tools.length === 0) return { tools, map };
-
-  const taken = new Set(tools.map(toolNameOf));
-  const seen = new Set();
-  const out = [];
-  for (const tool of tools) {
-    if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
-      out.push(tool);
-      continue;
-    }
-
-    const key = fingerprintToolKey(toolNameOf(tool));
-    if (!key) {
-      out.push(tool);
-      continue;
-    }
-
-    // Duplicate declarations of one name are rejected upstream; keep the first.
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    if (isFingerprintDefinition(tool, key)) {
-      out.push(tool);
-      continue;
-    }
-
-    let alias = `${key}_client`;
-    for (let i = 2; taken.has(alias); i++) alias = `${key}_client${i}`;
-    taken.add(alias);
-    map.set(alias, key);
-    out.push(withToolName(tool, alias));
-  }
-  return { tools: out, map };
-}
-
+// OpenCode derives the shell description's OS wording from the tool host
+// (tool/plugin/shell.ts: "Commands run on ${OS} using ${shell}.", with dev builds
+// sending Windows=powershell, macOS=zsh, Linux=bash). Every real wording is
+// accepted: #4971/#5157 — a Windows-worded caller `shell` used to be renamed
+// and leak a placeholder note because only the Linux form matched.
 const SHELL_DESCRIPTION_HEAD = "Execute a shell command and return its output.";
 const SHELL_DESCRIPTION_TAIL = "Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.";
 const SHELL_PLATFORM_WORDINGS = {
