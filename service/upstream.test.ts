@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
+import { pipeline, Readable, Writable } from 'node:stream';
 
 import type { RouterConfig } from '../contract.ts';
-import { buildTarget, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels } from './upstream.ts';
+import { buildTarget, createSseFirstByteKeepAlive, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels } from './upstream.ts';
 // @ts-ignore - the native provider executor is copied from upstream JavaScript.
 import { prepareProviderRequest } from './core/provider-adapter.js';
 
@@ -217,4 +218,70 @@ describe('where a call goes', () => {
     expect(chat.url.toString()).toBe('https://custom-deno.deno.dev/');
     expect(chat.headers['x-relay-target']).toBe('https://opencode.ai');
   });
+
+describe('SSE first-byte keepalive', () => {
+  test('emits comments while idle and preserves subsequent SSE bytes', async () => {
+    const source = new Readable({ read() {} });
+    const chunks: Buffer[] = [];
+    const destination = new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      },
+    });
+    const finished = new Promise<void>((resolve, reject) => {
+      pipeline(source, createSseFirstByteKeepAlive(5), destination, (error) => error ? reject(error) : resolve());
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    source.push(Buffer.from('data: {"choices":[]}\n\n'));
+    source.push(null);
+    await finished;
+    const output = Buffer.concat(chunks).toString('utf8');
+    expect(output).toContain(': ping\n\n');
+    expect(output).toContain('data: {"choices":[]}\n\n');
+  });
+
+  test('stops heartbeats after the first upstream chunk', async () => {
+    const source = new Readable({ read() {} });
+    const chunks: Buffer[] = [];
+    const destination = new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      },
+    });
+    const finished = new Promise<void>((resolve, reject) => {
+      pipeline(source, createSseFirstByteKeepAlive(5), destination, (error) => error ? reject(error) : resolve());
+    });
+    source.push(Buffer.from('data: first\n\n'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    source.push(Buffer.from('data: second\n\n'));
+    source.push(null);
+    await finished;
+    const output = Buffer.concat(chunks).toString('utf8');
+    expect(output).toContain('data: first\n\n');
+    expect(output).toContain('data: second\n\n');
+    expect(output).not.toContain(': ping\n\n');
+  });
+
+  test('disables heartbeats at zero milliseconds', async () => {
+    const source = new Readable({ read() {} });
+    const chunks: Buffer[] = [];
+    const destination = new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      },
+    });
+    const finished = new Promise<void>((resolve, reject) => {
+      pipeline(source, createSseFirstByteKeepAlive(0), destination, (error) => error ? reject(error) : resolve());
+    });
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    source.push(Buffer.from('data: only\n\n'));
+    source.push(null);
+    await finished;
+    expect(Buffer.concat(chunks).toString('utf8')).not.toContain(': ping\n\n');
+  });
+});
+
 });
