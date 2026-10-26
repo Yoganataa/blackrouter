@@ -57,8 +57,10 @@ export function autoDetectFilter(text) {
   // Cursor Glob search list header
   if (SEARCH_LIST_HEADER_RE.test(head)) return searchList;
 
-  // Line-numbered file dump ("  N|content") — fire only if many lines match
-  if (lines.length >= SMART_TRUNCATE_MIN_LINES && isLineNumbered(lines)) {
+  // Line-numbered file dumps can exceed DETECT_WINDOW. Use the full input
+  // to count total lines, but only sample its first 100 lines for classification.
+  const totalLines = 1 + (text.match(/\n/g)?.length ?? 0);
+  if (totalLines >= SMART_TRUNCATE_MIN_LINES && isLineNumbered(text.split("\n", 100))) {
     return readNumbered;
   }
 
