@@ -93,6 +93,10 @@ describe('native provider core', () => {
     expect(body.messages).toBeInstanceOf(Array);
     expect(body.messages[0].role).toBe('user');
     expect(body.system).toContain('Use tools where useful.');
+    expect(body.system).toContain('Do not call the read and shell tools');
+    expect(body.tools.some((tool: any) => tool.name === 'read' && tool.input_schema && !tool.function)).toBe(true);
+    expect(body.tools.some((tool: any) => tool.name === 'shell' && tool.input_schema && !tool.function)).toBe(true);
+    expect(body.tools.every((tool: any) => !tool.function)).toBe(true);
   });
 });
 
