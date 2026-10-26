@@ -40,9 +40,13 @@ const inferToolNameMap = (sourceNames, transformedBody) => {
 
     // The native helper only aliases conflicting caller definitions to this family.
     // Do not map an alias that was itself already declared by the caller.
+    const aliasPrefix = originalName + "_client";
     const alias = [...transformedNames]
-      .filter((name) => new RegExp("^" + originalName + "_client\\\\d*$").test(name))
-      .find((name) => !sourceNames.has(name));
+      .filter((name) => {
+        if (!name.startsWith(aliasPrefix) || sourceNames.has(name)) return false;
+        const suffix = name.slice(aliasPrefix.length);
+        return suffix === "" || [...suffix].every((digit) => digit >= "0" && digit <= "9");
+      })[0];
     if (alias) map.set(alias, originalName);
   }
   return map;
