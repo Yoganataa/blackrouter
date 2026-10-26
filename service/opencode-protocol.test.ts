@@ -1,12 +1,28 @@
 import { describe, expect, test } from 'bun:test';
 
-import { createOpenCodeResponseTransform } from './opencode-protocol.ts';
+import { createOpenCodeResponseTransform, createToolNameRestoreTransform } from './opencode-protocol.ts';
 
 const collect = (lane: 'responses' | 'messages', model: string, input: string): Promise<string> =>
   new Promise((resolve, reject) => {
     const transform = createOpenCodeResponseTransform(lane, model);
     if (!transform) {
       reject(new Error('Expected a protocol transform.'));
+      return;
+    }
+    let output = '';
+    transform.on('data', (chunk: Buffer | string) => {
+      output += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk;
+    });
+    transform.on('error', reject);
+    transform.on('end', () => resolve(output));
+    transform.end(input);
+  });
+
+const collectRestored = (input: string, toolNameMap: Map<string, string>): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const transform = createToolNameRestoreTransform(toolNameMap);
+    if (!transform) {
+      reject(new Error('Expected a tool-name restore transform.'));
       return;
     }
     let output = '';
@@ -78,4 +94,20 @@ describe('provider response stream adapters', () => {
     expect(chunks.some((chunk) => chunk.usage?.prompt_tokens === 5 && chunk.usage?.completion_tokens === 2)).toBe(true);
     expect(output).toContain('data: [DONE]');
   });
+  test('restores native tool aliases in OpenAI Chat SSE without changing other fields', async () => {
+    const original = {
+      id: 'chatcmpl_1',
+      choices: [{
+        index: 0,
+        delta: { tool_calls: [{ index: 0, function: { name: 'read_client', arguments: '' } }] },
+      }],
+    };
+    const input = 'data: ' + JSON.stringify(original) + '\n\ndata: [DONE]\n\n';
+    const output = await collectRestored(input, new Map([['read_client', 'read']]));
+    const chunks = parseOpenAiChunks(output);
+
+    expect(chunks[0]?.choices?.[0]?.delta?.tool_calls?.[0]?.function?.name).toBe('read');
+    expect(output).toContain('data: [DONE]');
+  });
+
 });
