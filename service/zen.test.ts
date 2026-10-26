@@ -1,10 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 // @ts-ignore - upstream core modules are JavaScript and intentionally retain source parity.
-import {
-  applyEnvFingerprint,
-  applyFingerprintTools,
-} from './core/utils/opencodeFingerprint.js';
+import { applyEnvFingerprint, applyFingerprintTools } from './core/utils/opencodeFingerprint.js';
 // @ts-ignore - upstream core modules are JavaScript and intentionally retain source parity.
 import { translateSessionId } from './core/executors/opencode.js';
 // @ts-ignore - native capability modules are copied from upstream JavaScript.
