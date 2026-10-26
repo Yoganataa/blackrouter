@@ -625,3 +625,5 @@ button, input, textarea { font: inherit; color: inherit; }
   .br-pool-actions { flex-wrap: wrap; justify-content: flex-end; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+
+`;
