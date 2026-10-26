@@ -17,6 +17,7 @@ https://opencode.ai/inference/v1/chat/completions (OpenCode Free models)
 - **OpenAI Compatible Endpoint**: Binds `http://127.0.0.1:20128/v1` with standard `/v1/models` and `/v1/chat/completions` (streaming SSE & folded JSON).
 - **Upstream Provider**: OpenCode Zen Free remains the default. A configurable OpenAI-compatible API base URL and optional Bearer API key can be used for other chat-completions providers; the key is stored locally and redacted from panel state.
 - **Official OpenCode Free Integration**: Accurately cloaks OpenCode Zen requests with OpenCode CLI v2 client headers, fingerprint tools (`read` and `shell`), and conversation session affinity.
+- **Native Provider Core**: Uses the upstream OpenCode executor and native request translators for Chat Completions, Responses, and Messages. Provider identity, endpoint choice, fingerprint tools, request headers, and model-specific request shaping live in `service/core/`; BlackRouter supplies only the OpenChamber transport boundary and response-stream adapter. The current core scope is OpenCode Free; additional providers are intentionally not included yet. Source revision and adapter boundaries are documented in `service/core/SOURCE.md`.
 - **Dynamic v2 Endpoint Routing**:
   - Chat completions route to `/inference/v1/chat/completions`
   - Muse Spark models route to `/inference/v1/responses`
