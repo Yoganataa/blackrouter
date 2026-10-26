@@ -1,17 +1,22 @@
-import os from "node:os";
-import path from "node:path";
-
 /**
  * Helpers for the OpenCode free-tier client fingerprint.
  *
- * Live upstream probes (OpenCode v2, /inference/v1) show that free-tier
- * requests must declare OpenCode's own `read` and `shell` tools with their exact
- * descriptions and parameter schemas; stubbed descriptions, renamed schemas or
- * tool_choice "none" are answered with 403 FreeTierError. Caller tools are sent
- * untouched, except one that already uses an exact fingerprint name with a
- * different definition: it travels under an alias and the response side
- * restores the caller's original name.
+ * Two upstream gates are mirrored here (both measured end-to-end with the
+ * official client as control, issue #5128):
+ *
+ * - Tools: free-tier requests must declare OpenCode's own `read` and `shell`
+ *   tools with their exact descriptions and parameter schemas; stubbed
+ *   descriptions, renamed schemas or tool_choice "none" are answered with 403
+ *   FreeTierError. Caller tools are sent untouched, except one that already
+ *   uses an exact fingerprint name with a different definition: it travels
+ *   under an alias and the response side restores the caller's original name.
+ * - System prompt: the CLI's `<env>` environment marker must be present in the
+ *   system content; a foreign prompt without it is answered 429
+ *   FreeUsageLimitError regardless of headers, UA or sessions
+ *   (applyEnvFingerprint below).
  */
+import os from "node:os";
+import path from "node:path";
 
 /** Names required by the upstream free-tier gate. */
 export const OPENCODE_FINGERPRINT_TOOLS = ["read", "shell"];
@@ -45,6 +50,11 @@ const FINGERPRINT_TOOL_PARAMETERS = {
   },
 };
 
+// OpenCode derives the shell description's OS wording from the tool host
+// (tool/plugin/shell.ts: "Commands run on ${OS} using ${shell}.", with dev builds
+// sending Windows=powershell, macOS=zsh, Linux=bash). Every real wording is
+// accepted: #4971/#5157 — a Windows-worded caller `shell` used to be renamed
+// and leak a placeholder note because only the Linux form matched.
 const SHELL_DESCRIPTION_HEAD = "Execute a shell command and return its output.";
 const SHELL_DESCRIPTION_TAIL = "Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.";
 const SHELL_PLATFORM_WORDINGS = {
