@@ -32,7 +32,7 @@ This directory contains upstream RTK JavaScript modules copied from `decolua/9ro
 
 `service/rtk.ts` is the BlackRouter compatibility facade. Keep adaptation there; do not edit the vendored filter implementation to fit OpenChamber. This allows later updates to replace these files from a selected 9Router commit and review upstream diffs file-by-file.
 
-The checked-in runtime bundle `service/main.js` must be regenerated from source with `bun run build` after the facade is switched. Do not hand-edit that generated bundle as the source of truth.
+`service/main.js` currently imports the vendored RTK entry through a relative ESM import so the runtime uses the same source even where Bun is unavailable. Running `bun run build` will inline the modules into the normal distribution bundle; the source modules and compatibility facade remain the source of truth.
 
 ## Update procedure
 
