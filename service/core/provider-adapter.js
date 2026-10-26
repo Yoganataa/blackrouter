@@ -6,8 +6,8 @@ const cleanModelId = (model) => String(model || "").replace(/\([^()]+\)\s*$/, ""
 const targetFormatForModel = (model) => {
   const clean = cleanModelId(model);
   const base = clean.includes("/") ? clean.split("/").pop() : clean;
-  if (/^muse[-_]?spark(?:$|[-_:.\\s])/i.test(base)) return FORMATS.OPENAI_RESPONSES;
-  if (/^union[-_]?alpha(?:$|[-_:.\\s])/i.test(base)) return FORMATS.CLAUDE;
+  if (/^muse[-_]?spark(?:$|[-_:.\s])/i.test(base)) return FORMATS.OPENAI_RESPONSES;
+  if (/^union[-_]?alpha(?:$|[-_:.\s])/i.test(base)) return FORMATS.CLAUDE;
   return FORMATS.OPENAI;
 };
 
