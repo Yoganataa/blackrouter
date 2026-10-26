@@ -28,9 +28,9 @@ const parseFrame = (frame: string): SseFrame | null => {
 };
 
 // Matches the OpenCode Free passthrough quirk in the official registry:
- // some lanes (notably mimo-v2.6-flash-free) emit reasoning under the OpenRouter
- // aliases `reasoning` and `reasoning_details[]`. Lift only when the canonical
- // reasoning_content field is absent; preserve aliases for clients that use them.
+// some lanes (notably mimo-v2.6-flash-free) emit reasoning under the OpenRouter
+// aliases `reasoning` and `reasoning_details[]`. Lift only when the canonical
+// reasoning_content field is absent; preserve aliases for clients that use them.
 const liftReasoningAliases = (delta: AnyObject): AnyObject => {
   if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) return delta;
   if (typeof delta.reasoning === 'string' && delta.reasoning) {
@@ -42,7 +42,7 @@ const liftReasoningAliases = (delta: AnyObject): AnyObject => {
         if (typeof part === 'string') return part;
         if (!part || typeof part !== 'object') return '';
         const value = part as AnyObject;
-        return typeof value.text === 'string' ? value.text
+        return typeof value.text === 'string' && value.text ? value.text
           : typeof value.content === 'string' ? value.content : '';
       })
       .join('');
