@@ -159,6 +159,14 @@ export function concealFingerprintToolNames(tools) {
       continue;
     }
 
+    // Same tool, different wording. Adopt OpenCode's definition in place: the
+    // caller keeps its own name, so there is no alias to restore, no alias name
+    // for the model to collide with, and no placeholder to explain away.
+    if (canNormalizeInPlace(tool, key)) {
+      out.push(withFingerprintDefinition(tool, key));
+      continue;
+    }
+
     let alias = `${key}_client`;
     for (let i = 2; taken.has(alias); i++) alias = `${key}_client${i}`;
     taken.add(alias);
