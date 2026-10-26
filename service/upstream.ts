@@ -128,30 +128,10 @@ export const hasSameUpstreamOrigin = (left: string, right: string): boolean => {
   }
 };
 
-export const isMuseSparkModel = (id: string): boolean => /^muse[-_]?spark(?:$|[-_:.\s])/i.test(id);
-export const isUnionAlphaModel = (id: string): boolean => /^union[-_]?alpha(?:$|[-_:.\s])/i.test(id);
-
-export const resolveOpencodePath = (call: 'models' | 'chat', modelId?: string): string => {
-  if (call === 'models') return '/zen/v1/models';
-  const clean = (modelId || '').replace(/\([^()]+\)\s*$/, '').trim().toLowerCase();
-  const base = clean.includes('/') ? clean.split('/').pop()! : clean;
-  if (isMuseSparkModel(base)) return '/inference/v1/responses';
-  if (isUnionAlphaModel(base)) return '/inference/v1/messages';
-  return '/inference/v1/chat/completions';
-};
-
-/**
- * Where one API call goes.
- *
- * Direct: the call is relative to the configured API base.
- * Standard forward proxy (type 'http'): calls target upstream directly through a CONNECT tunnel agent.
- * Relay proxy pool (cloudflare, vercel, deno, netlify): forwards to relay URL with x-relay-target/path.
- */
 export const buildTarget = (
   config: Pick<RouterConfig, 'upstream' | 'upstreamApiKey' | 'proxyPools'>,
   call: 'models' | 'chat',
   poolOverride?: ProxyPool | null,
-  modelId?: string,
   nativeUrl?: URL,
 ): UpstreamRequest => {
   const activePool =
@@ -171,11 +151,13 @@ export const buildTarget = (
 
   if (isOpenCode) {
     targetOrigin = nativeUrl?.origin ?? 'https://opencode.ai';
-    targetPath = call === 'models'
-      ? '/zen/v1/models'
-      : nativeUrl
-        ? nativeUrl.pathname + nativeUrl.search
-        : resolveOpencodePath(call, modelId);
+    if (call === 'models') {
+      targetPath = '/zen/v1/models';
+    } else if (nativeUrl) {
+      targetPath = nativeUrl.pathname + nativeUrl.search;
+    } else {
+      throw new Error('The native provider core must resolve the OpenCode request URL before transport.');
+    }
   } else {
     targetOrigin = `${parsed.protocol}//${parsed.host}`;
     const basePath = parsed.pathname.replace(/\/+$/, '');
@@ -568,7 +550,7 @@ export const proxyChatCompletion = (
       return;
     }
 
-    const target = buildTarget(config, 'chat', candidate, attempt.model, nativeUrl);
+    const target = buildTarget(config, 'chat', candidate, nativeUrl);
     const transport = target.url.protocol === 'http:' ? http : https;
     const upstream = transport.request(
       target.url,
