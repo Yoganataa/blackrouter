@@ -23,6 +23,34 @@ const normalizeHeaders = (headers) => Object.fromEntries(
   Object.entries(headers || {}).map(([key, value]) => [key.toLowerCase(), String(value)]),
 );
 
+const toolNameOf = (tool) => {
+  if (!tool || typeof tool !== "object") return "";
+  if (typeof tool.name === "string") return tool.name;
+  if (typeof tool.function?.name === "string") return tool.function.name;
+  return "";
+};
+
+const inferToolNameMap = (sourceBody, transformedBody) => {
+  const map = new Map();
+  const sourceTools = Array.isArray(sourceBody?.tools) ? sourceBody.tools : [];
+  const transformedTools = Array.isArray(transformedBody?.tools) ? transformedBody.tools : [];
+  const sourceNames = new Set(sourceTools.map(toolNameOf).filter(Boolean));
+  const transformedNames = new Set(transformedTools.map(toolNameOf).filter(Boolean));
+
+  for (const originalName of ["read", "shell"]) {
+    if (!sourceNames.has(originalName)) continue;
+
+    // The native helper only aliases conflicting caller definitions to this family.
+    // Do not map an alias that was itself already declared by the caller.
+    const alias = [...transformedNames]
+      .filter((name) => new RegExp("^" + originalName + "_client\\\\d*$").test(name))
+      .find((name) => !sourceNames.has(name));
+    if (alias) map.set(alias, originalName);
+  }
+  return map;
+};
+
+
 /**
  * The native executor currently appends fingerprint placeholders in OpenAI
  * Chat shape for every non-Responses body. After the native OpenAI -> Claude
@@ -91,7 +119,7 @@ export const prepareProviderRequest = async ({ model, body, session, rawHeaders 
       const transportBody = responseFormat === "claude"
         ? normalizeMessagesFingerprintTools(outboundBody)
         : outboundBody;
-      const toolNameMap = takeRenamedToolNames(outboundBody);
+      const toolNameMap = takeRenamedToolNames(outboundBody) || inferToolNameMap(body, outboundBody);
       return {
         url: new URL(url),
         headers: normalizeHeaders(headers),
