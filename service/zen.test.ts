@@ -22,7 +22,7 @@ type FingerprintTool = {
 
 type FingerprintBody = {
   instructions?: string;
-  system?: string;
+  system?: string | Array<{ text?: string }>;
   tools: FingerprintTool[];
   messages: Array<{ role: string; content: string }>;
 };
@@ -56,8 +56,8 @@ describe('official OpenCode free-tier regressions adapted from 9Router #5222', (
   test('fingerprints Messages requests in the top-level system field', () => {
     const body: FingerprintBody = { tools: [], messages: [{ role: 'user', content: 'hello' }] };
     applyFingerprintTools(body, false, { claude: true });
-    expect(body.system).toBeInstanceOf(Array);
-    const systemText = body.system.map((block: { text?: string }) => block.text ?? '').join(' ');
+    if (!Array.isArray(body.system)) throw new Error('Messages system fingerprint was not emitted as content blocks');
+    const systemText = body.system.map((block) => block.text ?? '').join(' ');
     expect(systemText).toContain('<env>');
     expect(systemText).toContain('Working directory:');
     expect(body.messages.some((message: { role?: string }) => message.role === 'system')).toBe(false);
