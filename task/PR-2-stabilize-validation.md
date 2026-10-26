@@ -36,12 +36,12 @@ Work strictly one task at a time and report the result before moving to the next
 - [x] Confirm unit tests and build were skipped by CI after type-check failed.
 
 ### Fix and verify
-- [/] Apply the Node Web ReadableStream type assertion in `service/upstream.ts` around line 791; source change is present, compile/CI verification is still pending.
-- [/] Add targeted `@ts-ignore` annotations only to imports of upstream JavaScript modules that intentionally have no declarations; TypeScript/CI verification is pending.
-- [/] Add explicit structural types for the fingerprint fixture and an explicit runtime failure if the required shell fingerprint is absent; verify with TypeScript/CI.
-- [ ] Run `bun run type-check` and confirm it passes.
-- [ ] Run `bun test` and review all failures.
-- [ ] Run `bun run build` and confirm the generated bundles are valid.
+- [x] Apply the Node Web ReadableStream type assertion in `service/upstream.ts` around line 791; verified by CI type-check.
+- [x] Add targeted `@ts-ignore` annotations only to imports of upstream JavaScript modules that intentionally have no declarations; verified by CI type-check.
+- [x] Add explicit structural types for the fingerprint fixture and an explicit runtime failure if the required shell fingerprint is absent; verified by CI type-check.
+- [x] Run `bun run type-check` and confirm it passes (run `40349762310`).
+- [x] Run `bun test` and resolve all failures without weakening assertions: 146 passed, 0 failed (run `40349762310`).
+- [x] Run `bun run build`; CI regenerated and committed `service/main.js` (`9339826f` prefix).
 - [ ] Review relevant tests for direct transport, HTTP proxy, relay selection, API routing, and streaming behavior.
 - [ ] Verify loopback-by-default behavior and credential redaction.
 - [ ] Verify that selecting a proxy/relay never silently falls back to a direct upstream connection.
@@ -62,26 +62,30 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 
 ## Latest session checkpoint (2026-10-26)
 
-**Phase:** TypeScript source-error remediation — edits applied, validation not yet proven.
+**Phase:** TypeScript remediation + automated quality gate — validated by GitHub Actions. Full MVP acceptance is still pending host/transport smoke tests.
 
-- [x] Inspected the current branch versions of `service/upstream.ts` and `service/zen.test.ts`.
-- [x] Applied the Node Web ReadableStream type assertion in `service/upstream.ts` (commit `b49c87f2ffa9df96ac18cc3377bf008da8c9ce89`).
-- [x] Added explicit fixture interfaces to prevent empty-array inference to `never[]` in `service/zen.test.ts`.
-- [x] Kept the shell fingerprint assertion meaningful: the test throws if the required shell fingerprint is missing; no assertion was removed or weakened.
-- [x] Added targeted TypeScript suppressions for imports of upstream JavaScript modules without declarations; runtime imports and test assertions remain intact.
-- [x] Committed the test typing edits through `bc767ad5d0819119f9afc98d584892b1a1000a57`.
-- [ ] Run `bun run type-check` and confirm all listed TypeScript diagnostics are gone.
-- [ ] Run `bun test` and investigate every failure without weakening tests.
-- [ ] Run `bun run build` and inspect generated `service/main.js`.
+- [x] Fixed the Node Web ReadableStream type incompatibility and upstream JavaScript import typing.
+- [x] Preserved the shell fingerprint assertion and added explicit structural fixture types.
+- [x] CI type-check passes on commit `fcd631ed9d3d789809ff4333e85c43533e28dfc1`.
+- [x] Fixed a real runtime defect in `service/core/utils/opencodeFingerprint.js`: the normalization path called undefined `canNormalizeInPlace` and `withFingerprintDefinition` helpers. Added helpers that normalize only accepted OpenCode fingerprint descriptions with a compatible subset schema; custom schemas remain aliased.
+- [x] Corrected the Messages regression test to inspect Anthropic `system` content blocks instead of incorrectly treating the field as a string. Its type model now reflects the actual string-or-content-block shape and fails explicitly if content blocks are absent.
+- [x] CI unit tests pass: **146 passed, 0 failed across 15 files** (run `40349762310`).
+- [x] CI build passes; workflow regenerated and committed `service/main.js` in commit `9339826f` (full SHA to confirm from branch).
+- [ ] Confirm a clean CI run on the generated-bundle commit.
+- [ ] Inspect the generated bundle diff and ensure source/runtime behavior remains synchronized.
+- [ ] Verify OpenChamber host load and the primary OpenCode Zen Free inference path with an actual valid response.
+- [ ] Verify direct, HTTP proxy, and relay paths separately, including no silent direct-egress fallback.
+- [ ] Verify streaming/non-streaming, cancellation/timeouts, Test Model, loopback default, and credential redaction.
+- [ ] Check all MUST requirements in `goals.md` / `BR-SCOPE-1.0` against implementation and evidence.
 
-**Evidence/blocker:** Source edits are committed in `bc767ad5d0819119f9afc98d584892b1a1000a57`; checkpoint commit is `a6f4174ebe7e65c1731b7675cd929b9471de350b`. The GitHub commit-status query returned no status checks, and the workflow-run query returned no PR-triggered runs for the source commit. No local Bun execution has been performed in this session. Therefore, code edits are confirmed in the branch, but type-check/test/build are **not verified**.
+**CI evidence:** [Run 40349762310](https://github.com/Yoganataa/blackrouter/actions/runs/40349762310) completed successfully through type-check, unit tests, and build. Test output: 146 pass / 0 fail. The workflow committed regenerated `service/main.js` as `9339826f`. Earlier runs failed because of (1) missing fingerprint normalization helpers and (2) the test assuming Messages `system` was a string; those were fixed in source and tests without weakening behavioral assertions. Do not claim the OpenCode end-to-end path or transport/security requirements are complete until smoke-tested.
 
-**Next action:** Obtain a real `bun run type-check` result (via a runnable environment or a new CI run); fix any remaining diagnostics based on that output. Do not mark the phase as validated until the command/CI confirms it.
+**Latest source fixes:** `ed019186c7b81ce8e79fa676a681b1c5f07213f7` adds the missing fingerprint helpers; `b9d57e57e16e92ee43fce9b610a96058ceda4cdb` corrects Messages system assertions; `fcd631ed9d3d789809ff4333e85c43533e28dfc1` corrects the test fixture type. Bundle generation commit: `9339826f` (confirm full SHA from the branch).
 
 ## Session handoff
 
-**Current state:** Audit is complete. The stream type assertion and focused test-typing edits are committed, but no TypeScript/test/build result is available yet. A prior write attempt was blocked and did not change source files. Do not treat any unchecked item as done.
+**Current state:** The TypeScript gate, all 146 unit tests, and bundle build have passed in GitHub Actions. The build regenerated `service/main.js` and pushed commit `9339826f`. The current phase is not fully complete: generated-bundle CI confirmation and live OpenChamber/OpenCode plus direct/proxy/relay smoke tests remain.
 
-**Next action:** Verify the stream and `service/zen.test.ts` typing edits using `bun run type-check`. Preserve all test assertions; then run tests/build and validate the end-to-end native OpenCode MVP path.
+**Next action:** Confirm the latest branch head and CI status after the generated-bundle push; inspect the generated service bundle diff. Then perform or obtain evidence for the primary OpenCode Zen Free inference flow and transport/security acceptance checks. Do not mark an unchecked item complete without evidence.
 
-**Update protocol:** After each work session, update this file with the actual status, changed files/commit SHA, commands or CI evidence, remaining blockers, and the next concrete action. Only check an item after verifying it.
+**Update protocol:** After each work session, update this file with actual status, changed files/commit SHA, commands or CI evidence, remaining blockers, and the next concrete action. Only check an item after verifying it.
