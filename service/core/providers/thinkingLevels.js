@@ -1,10 +1,13 @@
-// Scoped upstream thinking-level resolver for the OpenCode Free provider slice.
-// Muse Spark declares the upstream OpenAI effort levels; other selected models
-// do not currently publish a reasoning picker in this core.
+// Scoped thinking levels derived from the upstream provider capability contract.
+import { getCapabilitiesForModel } from "./capabilities.js";
+
 const OPENAI_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"];
+
 export function getThinkingLevels(provider, model) {
   if (provider !== "opencode") return null;
   const clean = String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
   const id = clean.includes("/") ? clean.split("/").pop() : clean;
-  return /^muse[-_]?spark(?:$|[-_:.\s])/i.test(id) ? OPENAI_LEVELS : null;
+  const capabilities = getCapabilitiesForModel(provider, id);
+  if (!capabilities.reasoning) return null;
+  return capabilities.thinkingFormat === "openai" ? OPENAI_LEVELS : null;
 }
