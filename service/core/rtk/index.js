@@ -117,7 +117,7 @@ function compressKiroFormat(body, enabled) {
   return stats;
 }
 
-function compressText(text, stats, shape) {
+export function compressText(text, stats, shape) {
   const bytesIn = text.length;
   stats.bytesBefore += bytesIn;
 
