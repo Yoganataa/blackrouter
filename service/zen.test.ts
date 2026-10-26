@@ -56,8 +56,10 @@ describe('official OpenCode free-tier regressions adapted from 9Router #5222', (
   test('fingerprints Messages requests in the top-level system field', () => {
     const body: FingerprintBody = { tools: [], messages: [{ role: 'user', content: 'hello' }] };
     applyFingerprintTools(body, false, { claude: true });
-    expect(body.system).toContain('<env>');
-    expect(body.system).toContain('Working directory:');
+    expect(body.system).toBeInstanceOf(Array);
+    const systemText = body.system.map((block: { text?: string }) => block.text ?? '').join(' ');
+    expect(systemText).toContain('<env>');
+    expect(systemText).toContain('Working directory:');
     expect(body.messages.some((message: { role?: string }) => message.role === 'system')).toBe(false);
     const shell = body.tools.find((tool: { function?: { name?: string } }) => tool.function?.name === 'shell');
     expect(shell).toBeDefined();
