@@ -6,15 +6,8 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import http4 from "node:http";
 import https3 from "node:https";
-import path5 from "node:path";
+import path7 from "node:path";
 import { fileURLToPath } from "node:url";
-import fsBR from "node:fs";
-import osBR from "node:os";
-import pathBR from "node:path";
-import { spawn as spawnBR } from "node:child_process";
-import { createRequire as createRequireBR } from "node:module";
-import { pathToFileURL as pathToFileURLBR } from "node:url";
-import { Readable as ReadableBR } from "node:stream";
 
 // node_modules/zod/v3/helpers/util.js
 var util;
@@ -5390,7 +5383,7 @@ import http3 from "node:http";
 // service/upstream.ts
 import http2 from "node:http";
 import https2 from "node:https";
-import { pipeline, Transform as Transform3 } from "node:stream";
+import { pipeline, Readable, Transform as Transform3 } from "node:stream";
 import tls from "node:tls";
 
 // service/sse.ts
@@ -5566,6 +5559,31 @@ function withToolName(tool, name) {
   const fn = chatFunctionOf(tool);
   return fn ? { ...tool, function: { ...fn, name } } : { ...tool, name };
 }
+function canNormalizeInPlace(tool, key) {
+  const def = chatFunctionOf(tool) || tool;
+  if (!ACCEPTED_FINGERPRINT_DESCRIPTIONS[key].has(def.description))
+    return false;
+  const actual = def.parameters;
+  const expected = FINGERPRINT_TOOL_PARAMETERS[key];
+  if (!actual || actual.type !== "object" || !actual.properties || typeof actual.properties !== "object")
+    return false;
+  if (!Array.isArray(actual.required) || JSON.stringify(actual.required) !== JSON.stringify(expected.required))
+    return false;
+  for (const [name, property] of Object.entries(actual.properties)) {
+    const nativeProperty = expected.properties[name];
+    if (!nativeProperty || property?.type !== nativeProperty.type)
+      return false;
+  }
+  return true;
+}
+function withFingerprintDefinition(tool, key) {
+  const definition = FINGERPRINT_TOOL_DEFINITIONS[key];
+  const fn = chatFunctionOf(tool);
+  if (fn) {
+    return { ...tool, function: { ...fn, description: definition.description, parameters: definition.parameters } };
+  }
+  return { ...tool, description: definition.description, parameters: definition.parameters, strict: false };
+}
 function concealFingerprintToolNames(tools) {
   const map = new Map;
   if (!Array.isArray(tools) || tools.length === 0)
@@ -5588,6 +5606,10 @@ function concealFingerprintToolNames(tools) {
     seen.add(key);
     if (isFingerprintDefinition(tool, key)) {
       out.push(tool);
+      continue;
+    }
+    if (canNormalizeInPlace(tool, key)) {
+      out.push(withFingerprintDefinition(tool, key));
       continue;
     }
     let alias = `${key}_client`;
@@ -5872,15 +5894,17 @@ var parseFrame = (frame) => {
 var liftReasoningAliases = (delta) => {
   if (typeof delta.reasoning_content === "string" && delta.reasoning_content)
     return delta;
-  if (typeof delta.reasoning === "string" && delta.reasoning)
+  if (typeof delta.reasoning === "string" && delta.reasoning) {
     return { ...delta, reasoning_content: delta.reasoning };
+  }
   if (Array.isArray(delta.reasoning_details)) {
     const text = delta.reasoning_details.map((part) => {
       if (typeof part === "string")
         return part;
       if (!part || typeof part !== "object")
         return "";
-      return typeof part.text === "string" && part.text ? part.text : typeof part.content === "string" ? part.content : "";
+      const value = part;
+      return typeof value.text === "string" && value.text ? value.text : typeof value.content === "string" ? value.content : "";
     }).join("");
     if (text)
       return { ...delta, reasoning_content: text };
@@ -5945,9 +5969,10 @@ var createToolNameRestoreTransform = (toolNameMap) => {
       payload.choices = payload.choices.map((choice) => {
         if (!choice || typeof choice !== "object")
           return choice;
-        if (!choice.delta || typeof choice.delta !== "object" || Array.isArray(choice.delta))
-          return choice;
-        return { ...choice, delta: liftReasoningAliases(choice.delta) };
+        const item = choice;
+        if (!item.delta || typeof item.delta !== "object" || Array.isArray(item.delta))
+          return item;
+        return { ...item, delta: liftReasoningAliases(item.delta) };
       });
     }
     const restored = restoreToolNames(payload, toolNameMap);
@@ -6270,142 +6295,6 @@ var createOpenCodeResponseTransform = (lane, requestedModel, toolNameMap) => {
 // service/core/executors/opencode.js
 import crypto2 from "crypto";
 
-
-// Adapted from the current official OpenCode TLS client and lazy-runtime loader.
-// Keep the cipher sequence verbatim: OpenCode's free-tier gate fingerprints TLS.
-const OPENCODE_CIPHER_LIST_BR = [
-  "TLS_AES_128_GCM_SHA256",
-  "TLS_AES_256_GCM_SHA384",
-  "TLS_CHACHA20_POLY1305_SHA256",
-  "ECDHE-ECDSA-AES128-GCM-SHA256",
-  "ECDHE-RSA-AES128-GCM-SHA256",
-  "ECDHE-ECDSA-AES256-GCM-SHA384",
-  "ECDHE-RSA-AES256-GCM-SHA384",
-  "ECDHE-ECDSA-CHACHA20-POLY1305",
-  "ECDHE-RSA-CHACHA20-POLY1305",
-  "ECDHE-ECDSA-AES128-SHA",
-  "ECDHE-RSA-AES128-SHA",
-  "ECDHE-ECDSA-AES256-SHA",
-  "ECDHE-RSA-AES256-SHA",
-  "AES128-GCM-SHA256",
-  "AES256-GCM-SHA384",
-  "AES128-SHA",
-  "AES256-SHA"
-].join(":");
-const OPENCODE_TLS_TIMEOUT_BR = 120000;
-const LAZY_DEP_VERSIONS_BR = { "wreq-js": "^3.2.0" };
-const LAZY_DEP_INFLIGHT_BR = new Map();
-let opencodeTlsSessionPromiseBR = null;
-let writableDataDirCacheBR = null;
-
-function writableDataDirBR() {
-  if (writableDataDirCacheBR) return writableDataDirCacheBR;
-  const configRoot = pathBR.join(osBR.homedir(), ".openchamber", "blackrouter");
-  const candidates = [
-    process.env.BLACKROUTER_DATA_DIR,
-    process.env.OPENCHAMBER_DATA_DIR ? pathBR.join(process.env.OPENCHAMBER_DATA_DIR, "blackrouter") : null,
-    configRoot,
-    pathBR.join(osBR.tmpdir(), "blackrouter-runtime")
-  ].filter((value) => typeof value === "string" && value.length > 0);
-  for (const candidate of candidates) {
-    try {
-      fsBR.mkdirSync(candidate, { recursive: true });
-      fsBR.accessSync(candidate, fsBR.constants.W_OK);
-      writableDataDirCacheBR = candidate;
-      return candidate;
-    } catch {}
-  }
-  writableDataDirCacheBR = process.cwd();
-  return writableDataDirCacheBR;
-}
-
-function isMissingModuleBR(error) {
-  const code = String(error?.code || "");
-  return code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND";
-}
-
-function installRuntimeDepBR(pkg, version, dir) {
-  fsBR.mkdirSync(dir, { recursive: true });
-  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-  return new Promise((resolve) => {
-    const child = spawnBR(npm, ["install", "--no-audit", "--no-fund", "--prefer-online", pkg + "@" + version], {
-      cwd: dir,
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: process.platform === "win32"
-    });
-    let stderr = "";
-    child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
-    child.on("error", (error) => resolve({ ok: false, stderr: String(error.message || error) }));
-    child.on("close", (status) => resolve({ ok: status === 0, stderr }));
-  });
-}
-
-async function loadRuntimeDepBR(pkg) {
-  if (!LAZY_DEP_INFLIGHT_BR.has(pkg)) {
-    LAZY_DEP_INFLIGHT_BR.set(pkg, (async () => {
-      try {
-        return await import(pkg);
-      } catch (error) {
-        if (!isMissingModuleBR(error)) throw error;
-      }
-      const dir = pathBR.join(writableDataDirBR(), "runtime");
-      const runtimeRequire = createRequireBR(pathBR.join(dir, "package.json"));
-      try {
-        return await import(pathToFileURLBR(runtimeRequire.resolve(pkg)).href);
-      } catch (error) {
-        if (!isMissingModuleBR(error)) throw error;
-      }
-      const version = LAZY_DEP_VERSIONS_BR[pkg] || "latest";
-      const installed = await installRuntimeDepBR(pkg, version, dir);
-      if (!installed.ok) {
-        const detail = installed.stderr.split("\n").filter(Boolean).pop() || "unknown npm error";
-        throw new Error(pkg + " could not be installed on demand (" + detail.slice(0, 160) + ")");
-      }
-      return import(pathToFileURLBR(createRequireBR(pathBR.join(dir, "package.json")).resolve(pkg)).href);
-    })().finally(() => LAZY_DEP_INFLIGHT_BR.delete(pkg)));
-  }
-  return LAZY_DEP_INFLIGHT_BR.get(pkg);
-}
-
-class OpencodeTlsUnavailableErrorBR extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "OpencodeTlsUnavailableError";
-  }
-}
-
-async function opencodeTlsFetchBR(url, init = {}, { signal, timeoutMs = OPENCODE_TLS_TIMEOUT_BR } = {}) {
-  let session;
-  if (!opencodeTlsSessionPromiseBR) {
-    opencodeTlsSessionPromiseBR = loadRuntimeDepBR("wreq-js").then((wreq) => {
-      if (typeof wreq.createSession !== "function") throw new Error("wreq-js runtime is missing createSession");
-      return wreq.createSession({ emulation: { tlsOptions: { cipherList: OPENCODE_CIPHER_LIST_BR } } });
-    }).catch((error) => {
-      opencodeTlsSessionPromiseBR = null;
-      throw error;
-    });
-  }
-  try {
-    session = await opencodeTlsSessionPromiseBR;
-  } catch (error) {
-    throw new OpencodeTlsUnavailableErrorBR(
-      "wreq-js unavailable (" + (error instanceof Error ? error.message : "unknown") + "); using the built-in fetch fallback"
-    );
-  }
-  const options = {
-    method: init.method || "GET",
-    headers: init.headers,
-    redirect: "follow",
-    timeout: timeoutMs
-  };
-  if (init.body !== undefined) options.body = init.body;
-  if (signal) options.signal = signal;
-  const result = await session.fetch(url, options);
-  const headers = {};
-  result.headers?.forEach?.((value, key) => { headers[key] = value; });
-  return new Response(result.body, { status: result.status, statusText: result.statusText, headers });
-}
-
 // service/core/executors/base.js
 class BaseExecutor {
   constructor(provider, config) {
@@ -6535,7 +6424,7 @@ var CAPABILITIES = {
     reasoning: true,
     thinkingFormat: "openai",
     thinkingCanDisable: false,
-    contextWindow: 1000000,
+    contextWindow: 1e6,
     maxOutput: 128000
   },
   "mimo-v2.6-flash-free": {
@@ -6850,6 +6739,169 @@ var OPENCODE_FAMILIES = [
   { match: /^(minimax|qwen)/, supportedFormats: [FORMATS.OPENAI, FORMATS.CLAUDE] },
   { match: /^claude-/i, supportedFormats: [FORMATS.CLAUDE] }
 ];
+
+// service/core/services/lazyRuntime.js
+import { spawn } from "node:child_process";
+import fs2 from "node:fs";
+import path6 from "node:path";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+
+// service/core/services/writableDataDir.js
+import fs from "node:fs";
+import os2 from "node:os";
+import path5 from "node:path";
+var cached = null;
+function getWritableDataDir() {
+  if (cached)
+    return cached;
+  const configRoot = path5.join(os2.homedir(), ".openchamber", "blackrouter");
+  const candidates = [
+    process.env.BLACKROUTER_DATA_DIR,
+    process.env.OPENCHAMBER_DATA_DIR ? path5.join(process.env.OPENCHAMBER_DATA_DIR, "blackrouter") : null,
+    configRoot,
+    path5.join(os2.tmpdir(), "blackrouter-runtime")
+  ].filter((value) => typeof value === "string" && value.length > 0);
+  for (const candidate of candidates) {
+    try {
+      fs.mkdirSync(candidate, { recursive: true });
+      fs.accessSync(candidate, fs.constants.W_OK);
+      cached = candidate;
+      return candidate;
+    } catch {}
+  }
+  cached = process.cwd();
+  return cached;
+}
+
+// service/core/services/lazyRuntime.js
+var LAZY_DEP_VERSIONS = {
+  "wreq-js": "^3.2.0"
+};
+function getRuntimeDir() {
+  return path6.join(getWritableDataDir(), "runtime");
+}
+function isModuleMissing(error) {
+  const code = String(error?.code || "");
+  return code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND";
+}
+function npmInstall(pkg, version) {
+  const cwd = getRuntimeDir();
+  fs2.mkdirSync(cwd, { recursive: true });
+  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+  const args = ["install", "--no-audit", "--no-fund", "--prefer-online", `${pkg}@${version}`];
+  return new Promise((resolve) => {
+    const child = spawn(npm, args, { cwd, stdio: ["ignore", "pipe", "pipe"], shell: process.platform === "win32" });
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", (error) => resolve({ ok: false, stderr: String(error.message || error) }));
+    child.on("close", (status) => resolve({ ok: status === 0, stderr }));
+  });
+}
+var inflight = new Map;
+async function load(pkg) {
+  try {
+    return await import(pkg);
+  } catch (error) {
+    if (!isModuleMissing(error))
+      throw error;
+  }
+  const runtimeRequire = createRequire(path6.join(getRuntimeDir(), "package.json"));
+  try {
+    return await import(pathToFileURL(runtimeRequire.resolve(pkg)).href);
+  } catch (error) {
+    if (!isModuleMissing(error))
+      throw error;
+  }
+  const version = LAZY_DEP_VERSIONS[pkg] || "latest";
+  const dir = getRuntimeDir();
+  const res = await npmInstall(pkg, version);
+  if (!res.ok) {
+    const reason = (res.stderr.match(/npm ERR! ?(.+)/) || [])[1] || res.stderr.split(`
+`).filter(Boolean).pop() || "unknown npm error";
+    throw new Error(`${pkg} is missing and the on-demand install failed (${String(reason).slice(0, 160)}) — ` + `install it manually: cd "${dir}" && npm install ${pkg}@${version}`);
+  }
+  return import(pathToFileURL(createRequire(path6.join(dir, "package.json")).resolve(pkg)).href);
+}
+function loadRuntimeDep(pkg) {
+  if (!inflight.has(pkg)) {
+    inflight.set(pkg, load(pkg).finally(() => inflight.delete(pkg)));
+  }
+  return inflight.get(pkg);
+}
+
+// service/core/services/opencodeTlsClient.js
+var OPENCODE_CIPHER_LIST = [
+  "TLS_AES_128_GCM_SHA256",
+  "TLS_AES_256_GCM_SHA384",
+  "TLS_CHACHA20_POLY1305_SHA256",
+  "ECDHE-ECDSA-AES128-GCM-SHA256",
+  "ECDHE-RSA-AES128-GCM-SHA256",
+  "ECDHE-ECDSA-AES256-GCM-SHA384",
+  "ECDHE-RSA-AES256-GCM-SHA384",
+  "ECDHE-ECDSA-CHACHA20-POLY1305",
+  "ECDHE-RSA-CHACHA20-POLY1305",
+  "ECDHE-ECDSA-AES128-SHA",
+  "ECDHE-RSA-AES128-SHA",
+  "ECDHE-ECDSA-AES256-SHA",
+  "ECDHE-RSA-AES256-SHA",
+  "AES128-GCM-SHA256",
+  "AES256-GCM-SHA384",
+  "AES128-SHA",
+  "AES256-SHA"
+].join(":");
+var DEFAULT_TIMEOUT_MS = 120000;
+var sessionPromise = null;
+
+class OpencodeTlsUnavailableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "OpencodeTlsUnavailableError";
+  }
+}
+async function loadSession() {
+  if (!sessionPromise) {
+    sessionPromise = (async () => {
+      const wreq = await loadRuntimeDep("wreq-js");
+      if (typeof wreq.createSession !== "function") {
+        throw new Error("wreq-js runtime is missing createSession");
+      }
+      return wreq.createSession({
+        emulation: { tlsOptions: { cipherList: OPENCODE_CIPHER_LIST } }
+      });
+    })().catch((error) => {
+      sessionPromise = null;
+      throw error;
+    });
+  }
+  return sessionPromise;
+}
+async function opencodeTlsFetch(url, init = {}, { signal, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  let session;
+  try {
+    session = await loadSession();
+  } catch (error) {
+    throw new OpencodeTlsUnavailableError(`wreq-js unavailable (${error instanceof Error ? error.message : "unknown"}) — install the optional wreq-js dependency to reach the OpenCode free tier`);
+  }
+  const options = {
+    method: init.method || "GET",
+    headers: init.headers,
+    redirect: "follow",
+    timeout: timeoutMs
+  };
+  if (init.body !== undefined)
+    options.body = init.body;
+  if (signal)
+    options.signal = signal;
+  const res = await session.fetch(url, options);
+  const headers = {};
+  res.headers?.forEach?.((value, key) => {
+    headers[key] = value;
+  });
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
 
 // service/core/providers/shared.js
 var ANTHROPIC_API_VERSION = "2023-06-01";
@@ -7319,18 +7371,21 @@ class OpenCodeExecutor extends BaseExecutor {
     return injectReasoningContent({ provider: this.provider, model, body });
   }
   async execute(args) {
+    const credentials = this.prepareRequestCredentials(args);
     return super.execute({
       ...args,
-      credentials: this.prepareRequestCredentials(args),
+      credentials,
       directFetch: async (url, options) => {
         try {
-          return await opencodeTlsFetchBR(url, {
+          return await opencodeTlsFetch(url, {
             method: options.method,
             headers: options.headers,
             body: options.body
           }, { signal: options.signal });
         } catch (error) {
-          if (error instanceof OpencodeTlsUnavailableErrorBR) return fetch(url, options);
+          if (error instanceof OpencodeTlsUnavailableError) {
+            return fetch(url, options);
+          }
           throw error;
         }
       }
@@ -8643,13 +8698,7 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       return;
     }
     const target = buildTarget(config, "chat", candidate, nativeUrl);
-    const requestHeaders = {
-      ...isOpenCodeUpstream(config.upstream) ? nativeHeaders : {},
-      ...target.headers,
-      "content-type": "application/json",
-      accept: "text/event-stream",
-      "content-length": String(Buffer.byteLength(upstreamBody))
-    };
+    const requestHeaders = { ...isOpenCodeUpstream(config.upstream) ? nativeHeaders : {}, ...target.headers, "content-type": "application/json", accept: "text/event-stream", "content-length": String(Buffer.byteLength(upstreamBody)) };
     const transport = target.url.protocol === "http:" ? http2 : https2;
     const usesNativeDirectTransport = candidate === null && isOpenCodeUpstream(config.upstream) && typeof nativeDirectFetch === "function";
     const handleAnswer = (answer) => {
@@ -8657,7 +8706,6 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       const retryAfterHeader = answer.headers["retry-after"];
       const retryAfter = typeof retryAfterHeader === "string" ? retryAfterHeader : undefined;
       const isShortDirect429 = status === 429 && candidate === null && retryAfter !== undefined && parseRetryAfterMs(retryAfter) <= 2000;
-
       if (status === 403 && candidate && isOpenCodeUpstream(config.upstream)) {
         const maxInspectableErrorBytes = 256 * 1024;
         const chunks = [];
@@ -8666,7 +8714,8 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
         answer.on("data", (raw) => {
           const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
           if (!inspecting) {
-            if (!response.destroyed && !response.writableEnded) response.write(chunk);
+            if (!response.destroyed && !response.writableEnded)
+              response.write(chunk);
             return;
           }
           chunks.push(chunk);
@@ -8674,14 +8723,19 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
           if (inspectedBytes > maxInspectableErrorBytes) {
             inspecting = false;
             const routeHeaders = routingHeaders(attempt);
-            response.writeHead(status, { ...responseHeaders(answer.headers), ...routeHeaders });
-            for (const buffered of chunks) response.write(buffered);
+            response.writeHead(status, {
+              ...responseHeaders(answer.headers),
+              ...routeHeaders
+            });
+            for (const buffered of chunks)
+              response.write(buffered);
             chunks.length = 0;
           }
         });
         answer.on("end", () => {
           if (!inspecting) {
-            if (!response.destroyed && !response.writableEnded) response.end();
+            if (!response.destroyed && !response.writableEnded)
+              response.end();
             return;
           }
           const bodyBuffer = Buffer.concat(chunks);
@@ -8695,7 +8749,10 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
             }
           }
           const routeHeaders = routingHeaders(attempt);
-          response.writeHead(status, { ...responseHeaders(answer.headers), ...routeHeaders });
+          response.writeHead(status, {
+            ...responseHeaders(answer.headers),
+            ...routeHeaders
+          });
           response.end(bodyBuffer);
         });
         answer.on("error", (error) => {
@@ -8794,8 +8851,7 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
         sendAttempt();
         return;
       }
-      const finalAttempt = attempt;
-      const routeHeaders = routingHeaders(finalAttempt);
+      const routeHeaders = routingHeaders(attempt);
       for (const [name, value] of Object.entries(routeHeaders))
         response.setHeader(name, value);
       writeOpenAiError(response, 502, `The upstream did not answer for ${lastRequestedModel}: ${error.message}`, "upstream_unreachable", routeHeaders);
@@ -8803,14 +8859,9 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
     let upstream = null;
     let directAbort = null;
     if (usesNativeDirectTransport && nativeDirectFetch) {
-      directAbort = new AbortController();
-      void nativeDirectFetch(target.url, {
-        method: "POST",
-        headers: requestHeaders,
-        body: upstreamBody,
-        signal: AbortSignal.any([directAbort.signal, AbortSignal.timeout(120000)])
-      }).then((fetched) => {
-        const body = fetched.body ? ReadableBR.fromWeb(fetched.body) : ReadableBR.from([]);
+      directAbort = new AbortController;
+      nativeDirectFetch(target.url, { method: "POST", headers: requestHeaders, body: upstreamBody, signal: AbortSignal.any([directAbort.signal, AbortSignal.timeout(120000)]) }).then((fetched) => {
+        const body = fetched.body ? Readable.fromWeb(fetched.body) : Readable.from([]);
         const wrapped = body;
         Object.defineProperty(wrapped, "statusCode", { value: fetched.status });
         Object.defineProperty(wrapped, "headers", { value: Object.fromEntries(fetched.headers.entries()) });
@@ -8822,7 +8873,8 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       upstream.end(upstreamBody);
     }
     response.on("close", () => {
-      if (response.writableEnded) return;
+      if (response.writableEnded)
+        return;
       upstream?.destroy();
       directAbort?.abort(new Error("Downstream client disconnected."));
     });
@@ -9642,7 +9694,8 @@ function autoDetectFilter(text) {
   if (SEARCH_LIST_HEADER_RE.test(head))
     return searchList;
   const totalLines = 1 + (text.match(/\n/g)?.length ?? 0);
-  if (totalLines >= SMART_TRUNCATE_MIN_LINES && isLineNumbered(text.split("\n", 100))) {
+  if (totalLines >= SMART_TRUNCATE_MIN_LINES && isLineNumbered(text.split(`
+`, 100))) {
     return readNumbered;
   }
   if (nonEmpty.length >= 5)
@@ -10127,13 +10180,13 @@ var normalizeTestSse = (raw, lane, model, toolNameMap) => {
 };
 var REFRESH_INTERVAL_MS = 10 * 60000;
 var REQUEST_LOG_LIMIT = REQUEST_HISTORY_LIMIT;
-var PACKAGE_ROOT = path5.dirname(path5.dirname(fileURLToPath(import.meta.url)));
+var PACKAGE_ROOT = path7.dirname(path7.dirname(fileURLToPath(import.meta.url)));
 var RELAY_FILES = {
-  http: path5.join("relays", "cloudflare", "worker.js"),
-  cloudflare: path5.join("relays", "cloudflare", "worker.js"),
-  vercel: path5.join("relays", "vercel", "api", "relay.js"),
-  netlify: path5.join("relays", "netlify", "functions", "relay.mjs"),
-  deno: path5.join("relays", "deno", "main.ts")
+  http: path7.join("relays", "cloudflare", "worker.js"),
+  cloudflare: path7.join("relays", "cloudflare", "worker.js"),
+  vercel: path7.join("relays", "vercel", "api", "relay.js"),
+  netlify: path7.join("relays", "netlify", "functions", "relay.mjs"),
+  deno: path7.join("relays", "deno", "main.ts")
 };
 var createRuntime = (store = createConfigStore()) => {
   let config = store.load();
@@ -10352,7 +10405,7 @@ var createRuntime = (store = createConfigStore()) => {
         };
       }
       const file = RELAY_FILES[kind];
-      const code = await readFile(path5.join(PACKAGE_ROOT, file), "utf8");
+      const code = await readFile(path7.join(PACKAGE_ROOT, file), "utf8");
       return { kind, code };
     },
     createProxyPool: async (input) => {
@@ -10481,12 +10534,7 @@ var createRuntime = (store = createConfigStore()) => {
           } else {
             const useNativeTls = isOpenCodeUpstream(config.upstream) && !pool && activePoolCount === 0 && typeof nativeRequest?.directFetch === "function";
             const fetcher = useNativeTls ? nativeRequest.directFetch : fetch;
-            const answer = await fetcher(target.url, {
-              method: "POST",
-              headers: testHeaders,
-              body: outboundBody,
-              signal: AbortSignal.timeout(15000)
-            });
+            const answer = await fetcher(target.url, { method: "POST", headers: testHeaders, body: outboundBody, signal: AbortSignal.timeout(15000) });
             resultText = await answer.text();
             status = answer.status;
             retryAfter = answer.headers.get("retry-after") ?? undefined;
@@ -10504,7 +10552,6 @@ var createRuntime = (store = createConfigStore()) => {
           lastError = `HTTP ${status}: ${resultText.slice(0, 300)}`;
           if (status !== 429)
             break;
-          const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
           if (!pool && activePoolCount === 0) {
             directRateLimitedUntil = Date.now() + parseRetryAfterMs(retryAfter);
             lastError = `HTTP 429: upstream rate-limited; retry after approximately ${Math.ceil((directRateLimitedUntil - Date.now()) / 1000)} seconds.`;
