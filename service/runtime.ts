@@ -480,9 +480,9 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
           const testHeaders: Record<string, string> = {
             ...(isOpenCodeUpstream(config.upstream) ? nativeRequest?.headers ?? {} : {}),
             ...target.headers,
-            'Content-Type': 'application/json',
-            Accept: 'text/event-stream',
-            'Content-Length': String(Buffer.byteLength(outboundBody)),
+            'content-type': 'application/json',
+            accept: 'text/event-stream',
+            'content-length': String(Buffer.byteLength(outboundBody)),
           };
 
           let resultText = '';
