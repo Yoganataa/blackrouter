@@ -70,8 +70,7 @@ this snapshot.
 
 
 
-- [decolua/9router#4988](https://github.com/decolua/9router/pull/4988) was reviewed for replaying a proxied `403 FreeTierError` once over direct egress. It is intentionally not enabled by default in BlackRouter: users can configure a proxy pool specifically to keep their real egress IP private, and silently retrying direct would bypass that network-path choice. Proxy failover remains pool-to-pool; direct-egress retry would need an explicit opt-in setting and tests for that security contract.
-
+- [decolua/9router#4988](https://github.com/decolua/9router/pull/4988) was adapted conservatively: a matching OpenCode `403 FreeTierError` from a configured pool is retried through another eligible configured pool, and the failed pool is skipped for the remainder of the request. BlackRouter intentionally does **not** copy the official PR's automatic direct-egress replay: that could bypass a proxy the user selected to keep their actual egress IP private. If no alternate pool is eligible, the original status, headers, and body are returned.
 - [decolua/9router#5193](https://github.com/decolua/9router/pull/5193) (follow-up to #5149) was reviewed. BlackRouter's **Test Model** is deliberately a real, short inference request through the native executor—not the old synthetic `/zen/v1/models` connection probe. It keeps meaningful upstream error reporting; the catalog refresh remains separate and is tested with the current CLI-form User-Agent. This avoids copying the upstream dashboard's UI-specific “return green without a network call” trade-off into a model-test feature.
 
 ## Narrow integration adapters
