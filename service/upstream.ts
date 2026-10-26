@@ -610,6 +610,7 @@ export const proxyChatCompletion = (
       return;
     }
 
+    const target = buildTarget(config, 'chat', candidate, nativeUrl);
     const requestHeaders = { ...(isOpenCodeUpstream(config.upstream) ? nativeHeaders : {}), ...target.headers, 'content-type': 'application/json', accept: 'text/event-stream', 'content-length': String(Buffer.byteLength(upstreamBody)) };
     const transport = target.url.protocol === 'http:' ? http : https;
     const usesNativeDirectTransport = candidate === null && isOpenCodeUpstream(config.upstream) && typeof nativeDirectFetch === 'function';
