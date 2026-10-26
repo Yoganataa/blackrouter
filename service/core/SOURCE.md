@@ -135,8 +135,8 @@ The RTK source and its separate provenance table are recorded in
 ## Validation additions from #5222
 
 - Added focused Bun tests in `service/zen.test.ts` for the native environment marker, non-duplication, canonical tool fingerprint, and current-time stable session translation.
-- The native executor and fingerprint helper were copied from official PR head `25878ce373e7e4f2b2143aaa72af7e4f20cd6c7a`, which includes the session-freshness follow-up commit `e1add8a0a350e25b58380e8486e5acc491bb61f1`.
-- The upstream fingerprint helper remains byte-for-byte identical to that selected source snapshot. The OpenChamber adapter remains local and is intentionally not replaced by the upstream dashboard/server stack.
+- The native executor and session logic were adapted from official PR head `25878ce373e7e4f2b2143aaa72af7e4f20cd6c7a`, including session-freshness commit `e1add8a0a350e25b58380e8486e5acc491bb61f1`.
+- The fingerprint helper was subsequently refreshed with the newer upstream collision normalizer from `483c10f597120d22295b091dea79fc38febe2b12`; the OpenChamber adapter remains local and is intentionally not replaced by the upstream dashboard/server stack.
 - The checked-in bundle still needs to be regenerated from the source build; this environment does not have Bun available, so bundle parity and live OpenChamber UI/runtime checks are not claimed.
 
 ## Additional official upstream fixes reviewed
