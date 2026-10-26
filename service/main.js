@@ -1,4 +1,5 @@
 import { compressMessages as upstreamCompressMessages } from "./core/rtk/index.js";
+import { prepareProviderRequest, generateSessionId } from "./core/provider-adapter.js";
 // service/main.ts
 import http5 from "node:http";
 
@@ -6219,106 +6220,7 @@ var compressMessages = (body, enabled) => {
 };
 
 // service/zen.ts
-var BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-var FINGERPRINT_TOOLS = ["read", "shell"];
-var FINGERPRINT_TOOL_DEFINITIONS = {
-  read: {
-    name: "read",
-    description: "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.",
-    parameters: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "File or directory to read" },
-        offset: {
-          type: "integer",
-          minimum: 0,
-          description: "The line or directory entry to start reading from (1-based)"
-        },
-        limit: {
-          type: "integer",
-          minimum: 0,
-          description: "The maximum number of lines or directory entries to read (defaults to and capped at 2000)"
-        }
-      },
-      required: ["path"],
-      additionalProperties: false
-    }
-  },
-  shell: {
-    name: "shell",
-    description: "Execute a shell command and return its output. Commands run on Linux using bash. Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.",
-    parameters: {
-      type: "object",
-      properties: {
-        command: { type: "string", description: "Shell command string to execute" },
-        workdir: {
-          type: "string",
-          description: "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead."
-        },
-        timeout: {
-          type: "integer",
-          minimum: 0,
-          description: "Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default."
-        },
-        background: {
-          type: "boolean",
-          description: "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion."
-        }
-      },
-      required: ["command"],
-      additionalProperties: false
-    }
-  }
-};
-var randomTail = () => {
-  const bytes = randomBytes2(14);
-  let out = "";
-  for (let index = 0;index < 14; index += 1)
-    out += BASE62[(bytes[index] ?? 0) % 62];
-  return out;
-};
-var sessionId = (now = Date.now()) => {
-  const prefix = (~(BigInt(now) * 0x1000n + 1n) & (1n << 48n) - 1n).toString(16).padStart(12, "0");
-  return `ses_${prefix}${randomTail()}`;
-};
-var freeTierHeaders = (session) => ({
-  authorization: "Bearer public",
-  "user-agent": "opencode/latest/2.0.26/cli",
-  "x-opencode-client": "cli",
-  "x-opencode-project": "global",
-  "x-opencode-session": session,
-  "x-opencode-session-id": session,
-  "x-session-affinity": session,
-  "x-session-id": session
-});
-var toolNameOf = (tool) => {
-  if (!isJsonObject(tool))
-    return "";
-  const fn = isJsonObject(tool.function) ? tool.function : null;
-  if (typeof tool.name === "string" && tool.name.trim())
-    return tool.name.trim();
-  if (fn && typeof fn.name === "string")
-    return fn.name.trim();
-  return "";
-};
-var ensureFreeTierTools = (body) => {
-  const tools = Array.isArray(body.tools) ? body.tools : [];
-  const present = new Set(tools.map((tool) => toolNameOf(tool)).filter((name) => name.length > 0));
-  for (const name of FINGERPRINT_TOOLS) {
-    if (present.has(name))
-      continue;
-    const def = FINGERPRINT_TOOL_DEFINITIONS[name];
-    tools.push({
-      type: "function",
-      function: {
-        name: def.name,
-        description: def.description,
-        parameters: def.parameters
-      }
-    });
-  }
-  body.tools = tools;
-};
+var sessionId = generateSessionId;
 var prepareChat = (raw, options) => {
   let parsed;
   try {
@@ -6326,39 +6228,21 @@ var prepareChat = (raw, options) => {
   } catch {
     throw new Error("The request body is not JSON.");
   }
-  if (!isJsonObject(parsed)) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("The request body must be a JSON object.");
   }
   const stream = parsed.stream === true;
   const model = typeof parsed.model === "string" ? parsed.model : "";
-  if (!parsed.messages) {
+  if (!Array.isArray(parsed.messages)) {
     throw new Error("The request body has no messages.");
   }
   const effectiveOptions = typeof options === "boolean" ? { rtkEnabled: options } : options ?? {};
-  const openCodeFreeTier = effectiveOptions.openCodeFreeTier ?? true;
-  if (openCodeFreeTier) {
-    ensureFreeTierTools(parsed);
-    if (Array.isArray(parsed.messages)) {
-      for (const msg of parsed.messages) {
-        if (isJsonObject(msg) && msg.role === "assistant") {
-          if (typeof msg.reasoning_content !== "string" || msg.reasoning_content.length === 0) {
-            msg.reasoning_content = " ";
-          }
-        }
-      }
-    }
-  }
-  const rtkEnabled = effectiveOptions.rtkEnabled ?? true;
-  if (rtkEnabled) {
-    compressMessages(parsed, true);
-  }
+  if (effectiveOptions.rtkEnabled ?? true) compressMessages(parsed, true);
   applyTokenSaverStyles(parsed, effectiveOptions.cavemanLevel ?? "off", effectiveOptions.ponytailLevel ?? "off");
   if (parsed.max_completion_tokens !== undefined && parsed.max_tokens === undefined) {
     parsed.max_tokens = parsed.max_completion_tokens;
   }
-  if (parsed.reasoning_effort === "auto") {
-    delete parsed.reasoning_effort;
-  }
+  if (parsed.reasoning_effort === "auto") delete parsed.reasoning_effort;
   parsed.stream = true;
   return { body: JSON.stringify(parsed), stream, model };
 };
@@ -6536,7 +6420,7 @@ var resolveOpencodePath = (call, modelId) => {
     return "/inference/v1/messages";
   return "/inference/v1/chat/completions";
 };
-var buildTarget = (config, call, poolOverride, modelId) => {
+var buildTarget = (config, call, poolOverride, modelId, nativeUrl) => {
   const activePool = poolOverride !== undefined ? poolOverride : (config.proxyPools || []).find((p) => p.isActive && p.proxyUrl.trim()) ?? null;
   const parsed = new URL(config.upstream);
   const isOpenCode = isOpenCodeUpstream(config.upstream);
@@ -6544,8 +6428,10 @@ var buildTarget = (config, call, poolOverride, modelId) => {
   let targetOrigin;
   let targetPath;
   if (isOpenCode) {
-    targetOrigin = "https://opencode.ai";
-    targetPath = resolveOpencodePath(call, modelId);
+    targetOrigin = nativeUrl?.origin ?? "https://opencode.ai";
+    targetPath = call === "models" ? "/zen/v1/models" : nativeUrl
+      ? nativeUrl.pathname + nativeUrl.search
+      : resolveOpencodePath(call, modelId);
   } else {
     targetOrigin = `${parsed.protocol}//${parsed.host}`;
     const basePath = parsed.pathname.replace(/\/+$/, "");
@@ -6766,23 +6652,30 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
     ...attempt.model !== prepared.model ? { "x-blackrouter-fallback-used": "true" } : {},
     ...fallbackReasons.length > 0 ? { "x-blackrouter-fallback-reason": fallbackReasons.join(" -> ") } : {}
   });
-  const modelAwareBody = (model) => {
-    const lane = resolveOpenCodeLane(config.upstream, model);
-    let raw = prepared.body;
+  const modelAwareBody = async (model) => {
+    let parsed;
     try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        parsed.model = model;
-        raw = JSON.stringify(parsed);
-      }
-    } catch {}
-    const isOpenCode = isOpenCodeUpstream(config.upstream);
+      parsed = JSON.parse(prepared.body);
+    } catch {
+      throw new Error("Prepared request body was not valid JSON.");
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Prepared request body must be a JSON object.");
+    }
+    parsed.model = model;
+    if (!isOpenCodeUpstream(config.upstream)) {
+      return { lane: "chat", body: JSON.stringify(parsed) };
+    }
+    const native = await prepareProviderRequest({ model, body: parsed, session });
     return {
-      lane,
-      body: prepareOpenCodeRequestBody(raw, lane, isOpenCode)
+      lane: native.lane,
+      body: native.body,
+      headers: native.headers,
+      url: native.url
     };
   };
-  const sendAttempt = () => {
+  const sendAttempt = async () => {
+
     if (response.destroyed || response.writableEnded)
       return;
     const attempt = attempts[attemptIndex];
@@ -6794,23 +6687,26 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
     const candidate = attempt.pool;
     let lane;
     let upstreamBody;
+    let nativeHeaders = {};
+    let nativeUrl;
     try {
-      const preparedForModel = modelAwareBody(attempt.model);
+      const preparedForModel = await modelAwareBody(attempt.model);
       lane = preparedForModel.lane;
       upstreamBody = preparedForModel.body;
+      nativeHeaders = preparedForModel.headers ?? {};
+      nativeUrl = preparedForModel.url;
     } catch (error) {
-      writeOpenAiError(response, 400, error instanceof Error ? error.message : "Could not convert the OpenCode request body.", "invalid_request");
+      writeOpenAiError(response, 400, error instanceof Error ? error.message : "Could not prepare the native provider request.", "invalid_request");
       return;
     }
-    const target = buildTarget(config, "chat", candidate, attempt.model);
+    const target = buildTarget(config, "chat", candidate, attempt.model, nativeUrl);
     const transport = target.url.protocol === "http:" ? http2 : https2;
     const upstream = transport.request(target.url, {
       method: "POST",
       agent: target.agent,
       headers: {
-        ...isOpenCodeUpstream(config.upstream) ? freeTierHeaders(session) : {},
+        ...isOpenCodeUpstream(config.upstream) ? nativeHeaders : {},
         ...target.headers,
-        ...lane === "messages" ? { "anthropic-version": "2023-06-01" } : {},
         "content-type": "application/json",
         accept: "text/event-stream",
         "content-length": String(Buffer.byteLength(upstreamBody))
@@ -7020,7 +6916,6 @@ var startRouterServer = (deps) => new Promise((resolve, reject) => {
           rtkEnabled: config.rtkEnabled,
           cavemanLevel: config.cavemanLevel,
           ponytailLevel: config.ponytailLevel,
-          openCodeFreeTier: isOpenCodeUpstream(config.upstream)
         });
         const pool = deps.pickPool ? deps.pickPool() : null;
         const tokenUsage = {};
@@ -7386,10 +7281,7 @@ var createRuntime = (store = createConfigStore()) => {
         max_tokens: 8,
         stream: false
       });
-      const prepared = prepareChat(chatPayload, {
-        rtkEnabled: false,
-        openCodeFreeTier: isOpenCodeUpstream(config.upstream)
-      });
+      const prepared = prepareChat(chatPayload, { rtkEnabled: false });
       for (let attempt = 0;attempt < maxAttempts; attempt += 1) {
         const pool = modelTestPoolSelector.pickPool(config, attempted);
         const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
@@ -7405,14 +7297,21 @@ var createRuntime = (store = createConfigStore()) => {
           break;
         if (pool)
           attempted.add(pool.id);
-        const target = buildTarget(config, "chat", pool, modelId);
-        const testHeaders = {
-          ...isOpenCodeUpstream(config.upstream) ? freeTierHeaders(runtimeSession) : {},
-          ...target.headers,
-          "Content-Type": "application/json",
-          Accept: "text/event-stream"
-        };
         try {
+          let nativeRequest = null;
+          if (isOpenCodeUpstream(config.upstream)) {
+            const parsedBody = JSON.parse(prepared.body);
+            nativeRequest = await prepareProviderRequest({ model: modelId, body: parsedBody, session: runtimeSession });
+          }
+          const target = buildTarget(config, "chat", pool, modelId, nativeRequest?.url);
+          const outboundBody = nativeRequest?.body ?? prepared.body;
+          const testHeaders = {
+            ...isOpenCodeUpstream(config.upstream) ? nativeRequest?.headers ?? {} : {},
+            ...target.headers,
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+            "Content-Length": String(Buffer.byteLength(outboundBody))
+          };
           let resultText = "";
           let status = 200;
           let retryAfter;
@@ -7433,7 +7332,7 @@ var createRuntime = (store = createConfigStore()) => {
                 req.destroy();
                 reject(new Error("Test request timed out."));
               });
-              req.end(prepared.body);
+              req.end(outboundBody);
             });
             resultText = answer.text;
             status = answer.status;
@@ -7442,7 +7341,7 @@ var createRuntime = (store = createConfigStore()) => {
             const answer = await fetch(target.url, {
               method: "POST",
               headers: testHeaders,
-              body: prepared.body,
+              body: outboundBody,
               signal: AbortSignal.timeout(15000)
             });
             resultText = await answer.text();
