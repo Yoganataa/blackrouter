@@ -6,7 +6,7 @@
  */
 
 // @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
-import { compressMessages as upstreamCompressMessages } from './core/rtk/index.js';
+import { compressMessages as upstreamCompressMessages, compressText as upstreamCompressText } from './core/rtk/index.js';
 // @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
 import { autoDetectFilter as upstreamAutoDetectFilter } from './core/rtk/autodetect.js';
 // @ts-ignore - upstream JS is copied verbatim to make source updates easy to audit.
@@ -50,6 +50,10 @@ export const compactReadNumbered: TextFilter = readNumbered;
 export const compactSearchList: TextFilter = searchList;
 export const compactTree: TextFilter = tree;
 export const smartTruncate: TextFilter = upstreamSmartTruncate;
+export const compactSmartTruncate: TextFilter = upstreamSmartTruncate;
+
+/** Retain the pre-port text-compression helper for downstream imports. */
+export const compressText = upstreamCompressText;
 
 export const autoDetectFilter = (input: string): TextFilter | null =>
   upstreamAutoDetectFilter(input) as TextFilter | null;
@@ -58,7 +62,7 @@ export const autoDetectFilter = (input: string): TextFilter | null =>
  * Upstream returns stats; older BlackRouter callers expect a boolean.
  * Adapt only the return shape, not the upstream compression implementation.
  */
-export const compressMessages = (body: Record<string, unknown>, enabled: boolean): boolean => {
+export const compressMessages = (body: Record<string, unknown>, enabled = true): boolean => {
   const stats = upstreamCompressMessages(body, enabled) as { hits?: unknown[] } | null;
   return Boolean(stats?.hits?.length);
 };
