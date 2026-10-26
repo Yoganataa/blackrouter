@@ -4023,6 +4023,27 @@ import { homedir } from "node:os";
 import path from "node:path";
 var DEFAULT_PORT = 20128;
 var OPENCODE_ZEN = "https://opencode.ai/zen/v1";
+var redactProxyUrlCredentials = (value) => {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) {
+      url.username = "REDACTED";
+      url.password = "REDACTED";
+    }
+    const sensitiveQueryKey = /^(?:token|secret|password|passwd|auth|api[_-]?key|access[_-]?token|refresh[_-]?token|signature|sig)$/i;
+    for (const key of [...url.searchParams.keys()]) {
+      if (sensitiveQueryKey.test(key))
+        url.searchParams.set(key, "REDACTED");
+    }
+    return url.toString();
+  } catch {
+    return value.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/@]*@/i, "$1REDACTED@");
+  }
+};
+var preserveProxyPoolCredentials = (previous, incoming) => incoming.map((pool) => {
+  const stored = previous.find((candidate) => candidate.id === pool.id);
+  return stored && pool.proxyUrl === redactProxyUrlCredentials(stored.proxyUrl) ? { ...pool, proxyUrl: stored.proxyUrl } : pool;
+});
 var createApiKey = () => `sk-${randomBytes(24).toString("hex")}`;
 var defaultConfig = () => ({
   version: 1,
@@ -10233,7 +10254,14 @@ var createRuntime = (store = createConfigStore()) => {
       running: router !== null,
       routerError,
       endpoint: endpointFor(config),
-      config: { ...config, upstreamApiKey: "" },
+      config: {
+        ...config,
+        upstreamApiKey: "",
+        proxyPools: config.proxyPools.map((pool) => ({
+          ...pool,
+          proxyUrl: redactProxyUrlCredentials(pool.proxyUrl)
+        }))
+      },
       upstreamApiKeyConfigured: Boolean(config.upstreamApiKey?.trim()),
       models,
       modelsFetchedAt,
@@ -10335,7 +10363,7 @@ var createRuntime = (store = createConfigStore()) => {
         selectedModels: (upstreamChanged || upstreamApiKeyChanged) && patch.selectedModels === undefined ? [] : patch.selectedModels ?? previous.selectedModels,
         fallbackModels: patch.fallbackModels ?? previous.fallbackModels,
         modelCombos: patch.modelCombos ?? previous.modelCombos,
-        proxyPools: patch.proxyPools ?? previous.proxyPools,
+        proxyPools: patch.proxyPools !== undefined ? preserveProxyPoolCredentials(previous.proxyPools, patch.proxyPools) : previous.proxyPools,
         proxyStrategy: patch.proxyStrategy ?? previous.proxyStrategy,
         activePoolId: patch.activePoolId !== undefined ? patch.activePoolId : previous.activePoolId,
         stickyLimit: patch.stickyLimit ?? previous.stickyLimit,
