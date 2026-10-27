@@ -31,8 +31,13 @@
 - [S08 — Security and secret-handling audit](sessions/S08-security-secret-handling-audit.md) — prepared; not started.
 - [S09 — Current-head CI and generated-bundle gate](sessions/S09-reproducible-ci-bundle-gate.md) — prepared; not started.
 - [S10 — OpenChamber/OpenCode runtime acceptance](sessions/S10-openchamber-opencode-runtime-acceptance.md) — prepared; not started.
+- [S11 — MUST gate and PR #2 readiness](sessions/S11-must-gate-pr-readiness.md) — prepared; blocked until S01–S10 have recorded results.
+- [S12 — Provider adapter/registry contract](sessions/S12-provider-adapter-registry-contract.md) — prepared; gated by S11.
+- [S13 — CodeBuddy CN access research](sessions/S13-codebuddy-cn-access-research.md) — prepared; gated by S11 and S12.
+- [S14 — CodeBuddy CN adapter](sessions/S14-codebuddy-cn-adapter.md) — prepared; gated by S13 GO decision.
+- [S15 — WorkBuddy/TokenHub access review](sessions/S15-workbuddy-tokenhub-access.md) — prepared; gated by S11 and S12.
 
-Cards beyond S10 will be generated in later batches. Preparing a card does not start or complete that task; only the active task may be executed, and task status changes require evidence.
+Cards beyond S15 will be generated in later batches. Preparing a card does not start or complete that task; only the active task may be executed, and task status changes require evidence.
 
 ## Phase A — PR #2 / MUST baseline
 
