@@ -119,9 +119,9 @@ The required sequence is fixed: **9router-go token-saver behavior → RTK → Ca
 
 | ID | Status | Single-session outcome | Exit evidence |
 |---|---|---|---|
-| S31 | [ ] | Run final security, configuration, documentation and provenance review. | README/changelog only describe verified behavior; known limits and recovery steps are documented. |
-| S32 | [ ] | Run release acceptance matrix across endpoint formats and direct/proxy/relay paths. | Current-head CI and runtime matrix are complete or explicit blockers remain. |
-| S33 | [ ] | Produce release/merge decision with evidence and unresolved-risk list. | Definition of Done checked; no unexplained CI failures, stale bundles, or unsupported provider claims. |
+| [S31](sessions/S31-final-security-config-docs-provenance-review.md) | [ ] | Run final security, configuration, documentation and provenance review. | README/changelog only describe verified behavior; known limits and recovery steps are documented. |
+| [S32](sessions/S32-release-acceptance-endpoint-egress-matrix.md) | [ ] | Run release acceptance matrix across endpoint formats and direct/proxy/relay paths. | Current-head CI and runtime matrix are complete or explicit blockers remain. |
+| [S33](sessions/S33-release-merge-readiness-decision.md) | [ ] | Produce release/merge decision with evidence and unresolved-risk list. | Definition of Done checked; no unexplained CI failures, stale bundles, or unsupported provider claims. |
 
 ## Session completion record template
 
