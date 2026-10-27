@@ -395,3 +395,22 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 **Active implementation task remains S01:** capture the internal CONNECT ClientRequest socket/connect/timeout/error/close lifecycle and compare agent-first versus outer-request-first destruction. Do not switch to token-saver or proxy-pool implementation while MUST gates remain unresolved.
 
 **Validation boundary:** the latest previously recorded code CI remains run 40443707710 on an earlier code commit. This batch is docs-only and has not been validated by a new CI run; live OpenChamber/OpenCode acceptance remains unproven.
+
+
+## Detailed task-card generation — batch 6 (2026-10-27)
+
+**Purpose:** prepare S26–S30 and index them without starting future implementation tasks.
+
+- [x] Created `task/sessions/S26-proxy-pool-regression-coverage.md` — commit `07ea37d3f56421e6b28e5af1bcce4b59d1f76b2f`.
+- [x] Created `task/sessions/S27-proxy-pool-panel-runtime-state.md` — commit `816f2ad6446f5e0bfa7357590af442590879acc3`.
+- [x] Created `task/sessions/S28-panel-responsive-accessibility-validation.md` — commit `ec6566d46c7b8377969fe5ee8d07c98c2d7b4f32`.
+- [x] Created `task/sessions/S29-panel-workflow-state-audit.md` — commit `8a5b71b55ac8565e9ab1db695d2f986bbb400e76`.
+- [x] Created `task/sessions/S30-panel-persistence-secret-bundle-audit.md` — commit `b9d761f51abe99906cd77deaf418410945714df1`.
+- [x] Updated `task/SESSION-PLAN.md` to index S26–S30.
+- [!] Documentation-only batch: no application code, tests, generated bundles or runtime behavior changed; CI was not run.
+- [!] S26–S30 remain not started and gated by S11/dependencies. S26 must follow S25 findings; panel host acceptance must be based on a supported runtime, not inferred from source or unit tests.
+- [!] Preserve generated JavaScript bundles required by the manifest/build process; S30 audits reproducibility and secret handling rather than authorizing speculative file deletion.
+
+**Active implementation task remains S01:** instrument the internal CONNECT ClientRequest lifecycle and compare destruction ordering. Phase A MUST gates remain unresolved; do not execute later SHOULD tasks out of sequence.
+
+**Validation boundary:** latest previously recorded code CI is run 40443707710 on an earlier code commit. This documentation batch has not been validated by a new CI run and does not prove live OpenChamber/OpenCode acceptance.
