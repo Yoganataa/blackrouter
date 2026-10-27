@@ -166,6 +166,46 @@ describe('model fallback request path', () => {
         return;
       }
 
+      if (request.url === '/http-proxy-failure-test') {
+        await readRequestBody(request);
+        const address = server.address();
+        if (!address || typeof address === 'string') {
+          response.writeHead(500);
+          response.end('No listener address');
+          return;
+        }
+        poolAttempts.length = 0;
+        const proxyPool: ProxyPool = {
+          id: 'http-forward-proxy',
+          name: 'HTTP Forward Proxy',
+          type: 'http',
+          proxyUrl: `http://127.0.0.1:${address.port}`,
+          isActive: true,
+        };
+        proxyChatCompletion(
+          {
+            ...configFor(address.port),
+            upstream: 'https://opencode.ai/zen/v1',
+            fallbackModels: [],
+            proxyPools: [proxyPool],
+          },
+          'ses_http_proxy_failure_test',
+          {
+            model: 'big-pickle',
+            stream: true,
+            body: JSON.stringify({
+              model: 'big-pickle',
+              stream: true,
+              messages: [{ role: 'user', content: 'Reply with OK.' }],
+            }),
+          },
+          response,
+          proxyPool,
+          () => {},
+        );
+        return;
+      }
+
       if (request.url === '/pool-gate-test') {
         await readRequestBody(request);
         const address = server.address();
@@ -337,6 +377,11 @@ describe('model fallback request path', () => {
       server.once('error', reject);
       server.listen(0, '127.0.0.1', () => resolve());
     });
+    server.on('connect', (request, socket) => {
+      poolAttempts.push(`connect:${request.url}`);
+      socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+    });
+
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Could not determine test server address.');
     baseUrl = `http://127.0.0.1:${address.port}`;
@@ -403,6 +448,21 @@ describe('model fallback request path', () => {
       'network-b:primary-model',
       'network-b:fallback-model',
     ]);
+  });
+
+  test('does not bypass a failed HTTP forward proxy with direct egress', async () => {
+    poolAttempts.length = 0;
+    const response = await fetch(`${baseUrl}/http-proxy-failure-test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: true }),
+    });
+    const body = await response.text();
+
+    expect(response.status).toBe(502);
+    expect(body).toContain('upstream_unreachable');
+    expect(response.headers.get('x-blackrouter-resolved-pool')).toBe('HTTP Forward Proxy');
+    expect(poolAttempts).toEqual(['connect:opencode.ai:443']);
   });
 
   test('does not bypass configured relay pools after OpenCode rejects every pool', async () => {
