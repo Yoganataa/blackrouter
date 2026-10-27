@@ -19,6 +19,16 @@
 - `[ ]` Not started
 - `[!]` Blocked / decision required
 
+## Detailed task cards
+
+- [S01 — CONNECT ClientRequest lifecycle](sessions/S01-connect-clientrequest-lifecycle.md) — active.
+- [S02 — CONNECT cleanup and timeout fix](sessions/S02-connect-cleanup-timeout-fix.md) — prepared; blocked on S01 evidence.
+- [S03 — Downstream cancellation lifecycle](sessions/S03-downstream-cancellation.md) — prepared; not started.
+- [S04 — Egress policy audit](sessions/S04-egress-policy-audit.md) — prepared; not started.
+- [S05 — Response and streaming contract audit](sessions/S05-response-stream-contract-audit.md) — prepared; not started.
+
+Cards beyond S05 will be generated in later batches. Preparing a card does not start or complete that task; only the active task may be executed, and task status changes require evidence.
+
 ## Phase A — PR #2 / MUST baseline
 
 These tasks block provider implementation and SHOULD work. Complete in order unless a task is explicitly marked as dependent on external runtime access.
