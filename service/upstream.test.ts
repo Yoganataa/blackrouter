@@ -298,7 +298,7 @@ describe('downstream cancellation lifecycle', () => {
       request.on('data', () => {});
       response.on('close', () => upstreamResponseClosedResolve());
       response.writeHead(200, { 'content-type': 'text/event-stream' });
-      response.write('data: first\\n\\n');
+      response.write('data: first\n\n');
       request.resume();
     });
     const up = await startServer(upstream);
