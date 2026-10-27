@@ -11,6 +11,7 @@ The target experience is to route requests from OpenChamber/OpenCode and compati
 - Main repository: [Yoganataa/blackrouter](https://github.com/Yoganataa/blackrouter)
 - Primary behavior and feature reference: [decolua/9router](https://github.com/decolua/9router)
 - Lightweight implementation reference: [luqman-v1/9router-go](https://github.com/luqman-v1/9router-go)
+- Additional comparative reference: [cheaper-inference/OmniRoute](https://github.com/cheaper-inference/OmniRoute)
 
 ## 2. Architecture Rules
 
@@ -30,6 +31,20 @@ The target experience is to route requests from OpenChamber/OpenCode and compati
 **Purpose:** establish a stable, reviewable scope before additional coding. This freeze governs new functionality; it does not prevent fixing defects, adding regression tests, or completing validation for the already-open PR #2.
 
 The MoSCoW classification below is authoritative. A checkbox in the phased roadmap is not, by itself, approval to implement a feature.
+
+### Comparative reference: OmniRoute
+
+[OmniRoute](https://github.com/cheaper-inference/OmniRoute) is an additional **research and comparison source**, not a replacement for official 9router as the primary behavior reference and not an approved implementation dependency. Its current README advertises broad provider coverage, quota-aware routing/fallback, a composable compression pipeline including RTK and Caveman, an OpenAI-compatible API surface, and CLI/MCP/A2A integrations. Treat those as claims/features to verify against the live source, not as requirements to copy wholesale.
+
+Use OmniRoute selectively to inform the feature-gap matrix and future design decisions:
+- Compare provider registry/adapter boundaries and the distinction between genuinely free, account-bound, key-based, and paid access.
+- Compare quota-aware routing, fallback, cooldown and request/session affinity, while preserving BlackRouter's smaller scope and configured egress policy.
+- Compare RTK/Caveman compression pipeline boundaries and regression methodology; do not import savings percentages without reproducing the benchmark.
+- Compare model discovery and diagnostics only where they fit OpenChamber's native extension surface.
+- Review license, provenance, dependencies, source changes and security implications before adapting any implementation.
+
+**Scope freeze remains in force:** adding OmniRoute as a reference does not promote any COULD/WON'T item, authorize copying its dashboard or broad feature set, or change any MUST/SHOULD priority. Any such change must follow the scope-change process below.
+
 
 - **MUST** — required for the first stable BlackRouter baseline; blocks completion if unmet.
 - **SHOULD** — important functional scope, but it must wait until all MUST requirements are complete and must not delay stabilizing the core.
@@ -131,6 +146,8 @@ Do not mark Phase 1 complete until these checks pass and the PR is merged or its
 ## 5. Upstream PR Reference Policy
 
 Check official 9router's current code and PR status before porting a fix. A PR's description is evidence of proposed behavior, not proof that it was merged or remains the preferred implementation.
+
+For comparative architectural research, also inspect [OmniRoute](https://github.com/cheaper-inference/OmniRoute), but do not treat its README claims, feature count, or behavior as independently validated without checking the relevant source, docs, tests, license and current upstream status.
 
 Relevant references reviewed for this roadmap:
 
