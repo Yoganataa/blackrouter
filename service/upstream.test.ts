@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import http from 'node:http';
+import https from 'node:https';
 import { pipeline, Readable, Writable } from 'node:stream';
 
 import type { RouterConfig } from '../contract.ts';
-import { buildTarget, createSseFirstByteKeepAlive, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels, isOpenCodeFreeTierGateResponse } from './upstream.ts';
+import { buildTarget, createSseFirstByteKeepAlive, createTunnelAgent, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels, isOpenCodeFreeTierGateResponse } from './upstream.ts';
 // @ts-ignore - the native provider executor is copied from upstream JavaScript.
 import { prepareProviderRequest } from './core/provider-adapter.js';
 
@@ -240,6 +242,53 @@ describe('where a call goes', () => {
     expect(chat.url.toString()).toBe('https://custom-deno.deno.dev/');
     expect(chat.headers['x-relay-target']).toBe('https://opencode.ai');
   });
+
+
+describe('HTTP CONNECT tunnel lifecycle', () => {
+  test('fails a stalled CONNECT handshake and closes the proxy socket', async () => {
+    let proxySocketClosed = false;
+    const proxy = http.createServer();
+    proxy.on('connect', (_request, socket) => {
+      socket.on('close', () => { proxySocketClosed = true; });
+      // Intentionally do not answer CONNECT: the tunnel handshake must time out.
+    });
+    await new Promise<void>((resolve, reject) => {
+      proxy.once('error', reject);
+      proxy.listen(0, '127.0.0.1', resolve);
+    });
+    const address = proxy.address();
+    if (!address || typeof address === 'string') throw new Error('Could not determine proxy test port.');
+
+    try {
+      const error = await new Promise<Error>((resolve, reject) => {
+        const request = https.request({
+          hostname: 'opencode.ai',
+          port: 443,
+          path: '/zen/v1/models',
+          method: 'GET',
+          agent: createTunnelAgent(`http://127.0.0.1:${address.port}`, 50),
+        });
+        const timer = setTimeout(() => {
+          request.destroy();
+          reject(new Error('CONNECT timeout was not enforced within 1 second.'));
+        }, 1_000);
+        request.once('error', (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        });
+        request.end();
+      });
+      expect(error.message).toContain('Proxy CONNECT timed out after 50ms');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(proxySocketClosed).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => {
+        proxy.close(() => resolve());
+        proxy.closeAllConnections();
+      });
+    }
+  });
+});
 
 describe('SSE first-byte keepalive', () => {
   test('emits comments while idle and preserves subsequent SSE bytes', async () => {
