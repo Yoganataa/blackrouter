@@ -41,8 +41,13 @@
 - [S18 — Cross-provider compatibility and fallback audit](sessions/S18-cross-provider-compatibility-audit.md) — prepared; gated by S11 and the actual status of implemented providers.
 - [S19 — Token-saver source/provenance audit](sessions/S19-token-saver-source-audit.md) — prepared; gated by S11.
 - [S20 — Token-saver stage 1 (9router-go behavior)](sessions/S20-token-saver-stage1.md) — prepared; gated by S19 evidence and S11.
+- [S21 — Token-saver stage 2: RTK](sessions/S21-token-saver-stage2-rtk.md) — prepared; gated by S11, S19 and S20.
+- [S22 — Token-saver stage 3: Caveman](sessions/S22-token-saver-stage3-caveman.md) — prepared; gated by S11 and accepted S19–S21 evidence.
+- [S23 — Token-saver stage 4: I Have ADHD](sessions/S23-token-saver-stage4-i-have-adhd.md) — prepared; gated by S11 and accepted S19–S22 evidence.
+- [S24 — Token-saver combo integration and end-to-end validation](sessions/S24-token-saver-combo-e2e-validation.md) — prepared; gated by S11 and accepted S19–S23 evidence.
+- [S25 — Proxy pool selection, health, cooldown and recovery audit](sessions/S25-proxy-pool-selection-health-cooldown-audit.md) — prepared; Phase D SHOULD work gated by S11, except separately scoped MUST defects.
 
-Cards beyond S20 will be generated in later batches. Preparing a card does not start or complete that task; only the active task may be executed, and task status changes require evidence.
+Cards beyond S25 will be generated in later batches. Preparing a card does not start or complete that task; only the active task may be executed, and task status changes require evidence.
 
 ## Phase A — PR #2 / MUST baseline
 
