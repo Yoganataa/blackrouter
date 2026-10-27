@@ -4793,6 +4793,7 @@ class RouterError extends Error {
 var badRequest = (message) => new RouterError("bad-request", message);
 var configUnreadable = (message) => new RouterError("config-unreadable", message);
 var upstreamError = (message) => new RouterError("upstream", message);
+var redactDiagnosticText = (value) => value.replace(/([a-z][a-z\d+.-]*:\/\/)[^/@\s]+@/gi, "$1[REDACTED]@").replace(/([?&](?:token|secret|password|passwd|auth|api[_-]?key|access[_-]?token|refresh[_-]?token|signature|sig)=)[^&#\s]*/gi, "$1[REDACTED]").replace(/(\bBearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[REDACTED]").replace(/(\bx-api-key\s*[:=]\s*)[^\s,;]+/gi, "$1[REDACTED]");
 
 // service/opencode-config.ts
 import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
@@ -8621,7 +8622,7 @@ var writeJson = (response, status, body, headers = {}) => {
   response.end(JSON.stringify(body));
 };
 var writeOpenAiError = (response, status, message, code, headers = {}) => {
-  writeJson(response, status, { error: { message, type: "invalid_request_error", code } }, headers);
+  writeJson(response, status, { error: { message: redactDiagnosticText(message), type: "invalid_request_error", code } }, headers);
 };
 var AGGREGATE_LIMIT_BYTES = 8 * 1024 * 1024;
 var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimit, onUsage) => {
@@ -10300,7 +10301,11 @@ var createRuntime = (store = createConfigStore()) => {
           persist({ ...config, proxyPools: updatedPools });
         },
         record: (entry) => {
-          requests.unshift(entry);
+          requests.unshift({
+            ...entry,
+            ...typeof entry.poolName === "string" ? { poolName: redactDiagnosticText(entry.poolName) } : {},
+            ...entry.fallbackReason ? { fallbackReason: redactDiagnosticText(entry.fallbackReason) } : {}
+          });
           if (requests.length > REQUEST_LOG_LIMIT)
             requests.length = REQUEST_LOG_LIMIT;
           try {
@@ -10312,7 +10317,7 @@ var createRuntime = (store = createConfigStore()) => {
       });
     } catch (error) {
       router = null;
-      routerError = error instanceof Error ? error.message : String(error);
+      routerError = redactDiagnosticText(error instanceof Error ? error.message : String(error));
     }
   };
   const loadModels = async () => {
@@ -10326,7 +10331,7 @@ var createRuntime = (store = createConfigStore()) => {
         refreshRegistration(false);
       }
     } catch (error) {
-      modelsError = error instanceof Error ? error.message : String(error);
+      modelsError = redactDiagnosticText(error instanceof Error ? error.message : String(error));
     }
   };
   const refreshRegistration = (force = false) => {
@@ -10705,7 +10710,7 @@ var toServiceResponse = (error) => {
       body: { error: { code: error.code, message: error.message } }
     };
   }
-  console.error("[blackrouter] the local service failed:", error);
+  console.error("[blackrouter] the local service failed:", redactDiagnosticText(error.stack ?? error.message));
   return {
     status: 500,
     body: { error: { code: "internal", message: "The local service failed. See its log for the detail." } }
