@@ -247,9 +247,14 @@ describe('where a call goes', () => {
 describe('HTTP CONNECT tunnel lifecycle', () => {
   test('fails a stalled CONNECT handshake and closes the proxy socket', async () => {
     let proxySocketClosed = false;
+    const proxySockets = new Set<import('node:net').Socket>();
     const proxy = http.createServer();
     proxy.on('connect', (_request, socket) => {
-      socket.on('close', () => { proxySocketClosed = true; });
+      proxySockets.add(socket);
+      socket.on('close', () => {
+        proxySocketClosed = true;
+        proxySockets.delete(socket);
+      });
       // Intentionally do not answer CONNECT: the tunnel handshake must time out.
     });
     await new Promise<void>((resolve, reject) => {
@@ -282,6 +287,7 @@ describe('HTTP CONNECT tunnel lifecycle', () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(proxySocketClosed).toBe(true);
     } finally {
+      for (const socket of proxySockets) socket.destroy();
       await new Promise<void>((resolve) => {
         proxy.close(() => resolve());
         proxy.closeAllConnections();
