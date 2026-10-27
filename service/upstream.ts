@@ -36,12 +36,10 @@ export type UpstreamRequest = {
 
 class TunnelAgent extends https.Agent {
   private proxyUrl: URL;
-  private connectTimeoutMs: number;
 
-  constructor(proxyUrlString: string, connectTimeoutMs = 10_000) {
+  constructor(proxyUrlString: string) {
     super({ keepAlive: true });
     this.proxyUrl = new URL(proxyUrlString);
-    this.connectTimeoutMs = Math.max(1, connectTimeoutMs);
   }
 
   override createConnection(
@@ -71,40 +69,11 @@ class TunnelAgent extends https.Agent {
       path: `${targetHost}:${targetPort}`,
       headers: connectHeaders,
     });
-    let settled = false;
-    let proxySocket: Socket | null = null;
-    let connectTimer: ReturnType<typeof setTimeout> | null = null;
-    const startConnectTimer = (): void => {
-      if (settled || connectTimer) return;
-      connectTimer = setTimeout(() => {
-        const error = new Error(`Proxy CONNECT timed out after ${this.connectTimeoutMs}ms`);
-        connectReq.destroy(error);
-        proxySocket?.destroy();
-      }, this.connectTimeoutMs);
-    };
-    connectReq.on('socket', (socket: Socket) => {
-      proxySocket = socket;
-      if (socket.connecting) socket.once('connect', startConnectTimer);
-      else startConnectTimer();
-    });
-    const finish = (error: Error | null, socket: Socket): void => {
-      if (settled) {
-        if (error) socket.destroy();
-        return;
-      }
-      settled = true;
-      if (connectTimer) clearTimeout(connectTimer);
-      callback?.(error, socket);
-    };
-
-    // A proxy that accepts TCP but never answers CONNECT must not leave an
-    // HTTPS request pending indefinitely. The timeout is scoped to the tunnel
-    // handshake; it does not impose a timeout on the established TLS stream.
 
     connectReq.on('connect', (res, socket: Socket) => {
       if (res.statusCode !== 200) {
         socket.destroy();
-        finish(
+        callback?.(
           new Error(`Proxy CONNECT to ${targetHost}:${targetPort} failed with HTTP ${res.statusCode}`),
           socket,
         );
@@ -117,18 +86,18 @@ class TunnelAgent extends https.Agent {
           servername: targetHost,
         },
         () => {
-          finish(null, tlsSocket);
+          callback?.(null, tlsSocket);
         },
       );
 
       tlsSocket.on('error', (err: Error) => {
         socket.destroy();
-        finish(err, socket);
+        callback?.(err, socket);
       });
     });
 
     connectReq.on('error', (err: Error) => {
-      finish(err, null as unknown as Socket);
+      callback?.(err, null as unknown as Socket);
     });
 
     connectReq.end();
@@ -139,7 +108,7 @@ class TunnelAgent extends https.Agent {
 /**
  * Creates an HTTPS Agent that establishes a CONNECT tunnel through an HTTP/HTTPS forward proxy.
  */
-export const createTunnelAgent = (proxyUrlString: string, connectTimeoutMs = 10_000): https.Agent => new TunnelAgent(proxyUrlString, connectTimeoutMs);
+export const createTunnelAgent = (proxyUrlString: string): https.Agent => new TunnelAgent(proxyUrlString);
 
 export const isOpenCodeUpstream = (upstream: string): boolean => {
   try {
