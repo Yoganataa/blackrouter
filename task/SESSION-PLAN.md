@@ -46,8 +46,13 @@
 - [S23 — Token-saver stage 4: I Have ADHD](sessions/S23-token-saver-stage4-i-have-adhd.md) — prepared; gated by S11 and accepted S19–S22 evidence.
 - [S24 — Token-saver combo integration and end-to-end validation](sessions/S24-token-saver-combo-e2e-validation.md) — prepared; gated by S11 and accepted S19–S23 evidence.
 - [S25 — Proxy pool selection, health, cooldown and recovery audit](sessions/S25-proxy-pool-selection-health-cooldown-audit.md) — prepared; Phase D SHOULD work gated by S11, except separately scoped MUST defects.
+- [S26 — Proxy pool failure/cooldown/recovery regression coverage](sessions/S26-proxy-pool-regression-coverage.md) — prepared; gated by S11 and S25 findings.
+- [S27 — Proxy pool panel runtime state](sessions/S27-proxy-pool-panel-runtime-state.md) — prepared; gated by S11 and S25–S26 evidence.
+- [S28 — Panel responsive/accessibility validation](sessions/S28-panel-responsive-accessibility-validation.md) — prepared; gated by S11 and supported-host availability.
+- [S29 — Panel workflow state audit](sessions/S29-panel-workflow-state-audit.md) — prepared; gated by S11.
+- [S30 — Panel persistence, secret masking and bundle reproducibility](sessions/S30-panel-persistence-secret-bundle-audit.md) — prepared; gated by S11 and relevant S28–S29 findings.
 
-Cards beyond S25 will be generated in later batches. Preparing a card does not start or complete that task; only the active task may be executed, and task status changes require evidence.
+Cards beyond S30 will be generated in later batches. Preparing a card does not start or complete that task; only the active task may be executed, and task status changes require evidence.
 
 ## Phase A — PR #2 / MUST baseline
 
