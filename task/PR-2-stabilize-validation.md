@@ -3,9 +3,13 @@
 **Repository:** `Yoganataa/blackrouter`  
 **Working branch:** `feat/port-9router-rtk-upstream`  
 **Pull request:** [#2 — feat: port native core and upstream free-tier fixes](https://github.com/Yoganataa/blackrouter/pull/2)  
-**Latest PR head checked:** `78f3858beab993aa7e46ec2ff18a9cd29e9040cb`  
-**Latest CI evidence:** [run 40443707710](https://github.com/Yoganataa/blackrouter/actions/runs/40443707710) passed after the temporary CONNECT diagnostic test was removed. This validates that post-removal tree's CI gate, not live OpenChamber/provider behavior.  
+**Latest branch head after session-planning docs:** `458f6ea845d6d5d591d6b22114da6800473f4495` (documentation-only commits after the last code CI).  
+**Latest code CI evidence:** [run 40443707710](https://github.com/Yoganataa/blackrouter/actions/runs/40443707710) passed after the temporary CONNECT diagnostic test was removed. This validates the code tree before the session-plan documentation commits, not live OpenChamber/provider behavior.  
 **Latest known bundle-sync commit:** `79d30d8` (service bundle synchronized in earlier CI run; the latest removal was diagnostic-test-only).
+
+## Sessionized execution protocol
+
+The roadmap is now decomposed into single-session tasks in [`task/SESSION-PLAN.md`](SESSION-PLAN.md). One task ID equals one ChatGPT work session. The active task card is [`S01 — CONNECT ClientRequest lifecycle`](sessions/S01-connect-clientrequest-lifecycle.md). Complete only that task in the next session, then record evidence and update this log before moving to S02. The session plan is an execution index; `goals.md` on `main` remains the scope source of truth.
 
 ## Status legend
 
@@ -27,7 +31,7 @@ Work strictly one task at a time and report the result before moving to the next
 - Add/retain regression coverage for the native OpenCode path: required headers/fingerprints, request translation and endpoint selection, session affinity, real inference for Test Model, streaming and non-streaming responses, cancellation/timeouts, and actionable upstream failures.
 - The primary acceptance path is OpenChamber/OpenCode -> loopback BlackRouter -> OpenCode Zen Free -> valid response. Verify with evidence; type-check passing alone does not prove OpenCode works.
 - Verify direct, HTTP proxy, and relay behavior separately. A selected proxy/relay must never silently fall back to direct egress.
-- Keep new feature work out of the MVP until all MUST requirements in `goals.md` / `BR-SCOPE-1.0` pass.
+- Keep new feature work out of the MVP until all MUST requirements in `goals.md` / `BR-SCOPE-1.1` pass.
 
 ## Progress checklist
 
@@ -284,3 +288,11 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 **Validation boundary:** run 40443707710 confirms CI after removal of the temporary diagnostic test. It does not prove CONNECT cancellation/timeout is fixed, nor does it prove live host/provider behavior.
 
 **Next action:** instrument the internal CONNECT request lifecycle as the single next task. Preserve the validated production baseline until a reproducible trace justifies a narrowly scoped change.
+
+
+## Session-plan structure update (2026-10-27)
+
+- [x] Added [`task/SESSION-PLAN.md`](SESSION-PLAN.md) to map the frozen roadmap into single-session task IDs S01–S30, ordered by MUST/SHOULD gates.
+- [x] Added [`S01 — CONNECT ClientRequest lifecycle`](sessions/S01-connect-clientrequest-lifecycle.md) with objective, scope boundaries, acceptance criteria and report template.
+- [x] Clarified that this documentation-only update does not change runtime code or validation status. The latest code CI remains run 40443707710; the new documentation commits have not been represented as a code-validation run.
+- [ ] Execute S01 as the next focused work session; no task is marked complete in advance.
