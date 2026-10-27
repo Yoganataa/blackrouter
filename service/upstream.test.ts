@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import http from 'node:http';
+import net from 'node:net';
 import { pipeline, Readable, Writable } from 'node:stream';
 
 import type { RouterConfig } from '../contract.ts';
@@ -246,15 +247,14 @@ describe('where a call goes', () => {
 describe('HTTP CONNECT tunnel lifecycle', () => {
   test('fails a stalled CONNECT handshake and closes the proxy socket', async () => {
     let proxySocketClosed = false;
-    const proxySockets = new Set<import('node:stream').Duplex>();
-    const proxy = http.createServer();
-    proxy.on('connect', (_request, socket) => {
+    const proxySockets = new Set<net.Socket>();
+    const proxy = net.createServer((socket) => {
       proxySockets.add(socket);
       socket.on('close', () => {
         proxySocketClosed = true;
         proxySockets.delete(socket);
       });
-      // Intentionally do not answer CONNECT: the tunnel handshake must time out.
+      // Accept TCP but intentionally do not answer the HTTP CONNECT request.
     });
     await new Promise<void>((resolve, reject) => {
       proxy.once('error', reject);
