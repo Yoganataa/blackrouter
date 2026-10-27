@@ -3,8 +3,9 @@
 **Repository:** `Yoganataa/blackrouter`  
 **Working branch:** `feat/port-9router-rtk-upstream`  
 **Pull request:** [#2 — feat: port native core and upstream free-tier fixes](https://github.com/Yoganataa/blackrouter/pull/2)  
-**Latest source commit verified by CI:** `25d86f24ace65d5f74e12d6b028d47867e49eba9`  
-**Latest CI-generated bundle commit:** `79d30d8` (service bundle synchronized)
+**Latest PR head checked:** `78f3858beab993aa7e46ec2ff18a9cd29e9040cb`  
+**Latest CI evidence:** [run 40443707710](https://github.com/Yoganataa/blackrouter/actions/runs/40443707710) passed after the temporary CONNECT diagnostic test was removed. This validates that post-removal tree's CI gate, not live OpenChamber/provider behavior.  
+**Latest known bundle-sync commit:** `79d30d8` (service bundle synchronized in earlier CI run; the latest removal was diagnostic-test-only).
 
 ## Status legend
 
@@ -15,7 +16,7 @@
 
 ## Scope and constraints
 
-Use `goals.md` as the project source of truth and follow `BR-SCOPE-1.0`: MUST before SHOULD; COULD only with approval. Preserve the core/provider-translator/OpenChamber-adapter/transport/response-stream boundaries. Default to loopback, redact credentials, and never silently bypass a selected proxy or relay with a direct connection. Do not claim a test/build/provider works without evidence.
+Use [`goals.md` on `main`](https://github.com/Yoganataa/blackrouter/blob/main/goals.md) as the project source of truth and follow current scope `BR-SCOPE-1.1` (baseline 2026-10-27): MUST before SHOULD. The approved additive targets are CodeBuddy CN, WorkBuddy/Tencent TokenHub, and Freebuff under `BR-CHANGE-2026-10-27-PROVIDERS`; they remain blocked until FR-M1–FR-M8 acceptance gates pass and each provider's own terms/auth/security/runtime gates are met. OmniRoute is a research/comparison reference only, not an implementation dependency. Preserve the core/provider-translator/OpenChamber-adapter/transport/response-stream boundaries. Default to loopback, redact credentials, never silently bypass a selected proxy/relay with direct egress, and do not claim a test/build/provider works without evidence. Historical checkpoints below may refer to BR-SCOPE-1.0 as the scope active at that time; current decisions are governed by BR-SCOPE-1.1.
 
 ## Execution priorities and test integrity
 
@@ -262,3 +263,24 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 **Scope and safety:** no production transport changes in this phase; the diagnostic is temporary and must not be left in the branch. FR-M6 remains open; this is not a fix or runtime acceptance.
 
 **Evidence:** [CI run 40443636387](https://github.com/Yoganataa/blackrouter/actions/runs/40443636387), including the `CONNECT_LIFECYCLE_DIAGNOSTIC` trace in the Unit tests step.
+
+
+## Latest session checkpoint (2026-10-27, aligned with goals.md BR-SCOPE-1.1)
+
+**Phase:** Keep PR #2 stabilization as the active task under the updated project scope.
+
+- [x] Read the current `main/goals.md` snapshot dated 2026-10-27; current scope is `BR-SCOPE-1.1`.
+- [x] Record the approved additive provider targets: CodeBuddy CN, WorkBuddy/Tencent TokenHub, and Freebuff under `BR-CHANGE-2026-10-27-PROVIDERS`. These are not yet approved for implementation ahead of the MUST baseline; each requires its own documentation, terms, auth/security, tests, and runtime acceptance.
+- [x] Record OmniRoute as a comparative research source only; it does not replace 9router as the primary behavior reference and does not authorize wholesale feature import.
+- [x] Removed the temporary CONNECT lifecycle diagnostic test after preserving its observed trace in the checkpoint above. Post-removal CI run [40443707710](https://github.com/Yoganataa/blackrouter/actions/runs/40443707710) completed successfully.
+- [x] Checked the current PR head: `78f3858beab993aa7e46ec2ff18a9cd29e9040cb`. The PR remains open and unmerged.
+- [!] FR-M6 remains open. Existing diagnostic evidence showed the proxy-side socket still open 250 ms after the outer request and agent were destroyed; internal CONNECT ClientRequest socket/close/error events have not yet been captured. No accepted production fix exists.
+- [ ] Next: add targeted instrumentation for the internal CONNECT ClientRequest's socket/close/error events and compare agent-first vs. outer-request-first destruction order. Keep instrumentation temporary and remove it after recording the trace.
+- [ ] Only after ownership/event ordering is established, implement a narrow timeout/cancellation cleanup fix and deterministic regression tests. Assert client-side request/socket closure and bounded completion; do not rely on immediate remote server-side TCP `close` after half-close.
+- [ ] Re-run type-check, all tests, build and generated-bundle inspection on the resulting current head.
+- [ ] Keep live OpenChamber extension loading, real OpenCode Zen Free inference, and direct/HTTP-proxy/relay smoke tests unchecked until performed in a suitable runtime.
+- [ ] Re-audit FR-M1–FR-M8. Do not start FR-S4 provider implementation or mark Phase 1 complete until MUST gaps and required acceptance evidence are resolved.
+
+**Validation boundary:** run 40443707710 confirms CI after removal of the temporary diagnostic test. It does not prove CONNECT cancellation/timeout is fixed, nor does it prove live host/provider behavior.
+
+**Next action:** instrument the internal CONNECT request lifecycle as the single next task. Preserve the validated production baseline until a reproducible trace justifies a narrowly scoped change.
