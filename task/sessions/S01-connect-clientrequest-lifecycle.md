@@ -1,7 +1,7 @@
 # Session S01 — Instrument CONNECT ClientRequest Lifecycle
 
 **Status:** Active  
-**Scope source:** `goals.md` on `main`, `BR-SCOPE-1.1`  
+**Scope source:** `goals.md` on `main`, `BR-SCOPE-1.2`  
 **Related requirement:** FR-M6 (failure-safe request lifecycle)  
 **Related tracking log:** `task/PR-2-stabilize-validation.md`
 
