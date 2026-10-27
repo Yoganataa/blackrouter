@@ -36,10 +36,22 @@ export type UpstreamRequest = {
 
 class TunnelAgent extends https.Agent {
   private proxyUrl: URL;
+  private pendingConnectRequests = new Set<http.ClientRequest>();
 
   constructor(proxyUrlString: string) {
     super({ keepAlive: true });
     this.proxyUrl = new URL(proxyUrlString);
+  }
+
+  override destroy(): this {
+    // Pending CONNECT requests are not registered as Agent sockets yet.
+    // Destroy them explicitly so downstream cancellation can close the proxy
+    // socket even when the proxy never sends its CONNECT response.
+    for (const request of this.pendingConnectRequests) {
+      request.destroy(new Error('Proxy tunnel was cancelled.'));
+    }
+    this.pendingConnectRequests.clear();
+    return super.destroy();
   }
 
   override createConnection(
@@ -50,6 +62,15 @@ class TunnelAgent extends https.Agent {
     const proxyHost = this.proxyUrl.hostname;
     const targetHost = options.host || 'opencode.ai';
     const targetPort = options.port || 443;
+    let callbackCalled = false;
+    const finish = (error: Error | null, socket: Socket): void => {
+      if (callbackCalled) {
+        if (error) socket?.destroy();
+        return;
+      }
+      callbackCalled = true;
+      callback?.(error, socket);
+    };
 
     const connectHeaders: Record<string, string> = {
       Host: `${targetHost}:${targetPort}`,
@@ -69,11 +90,17 @@ class TunnelAgent extends https.Agent {
       path: `${targetHost}:${targetPort}`,
       headers: connectHeaders,
     });
+    this.pendingConnectRequests.add(connectReq);
+    connectReq.once('close', () => this.pendingConnectRequests.delete(connectReq));
+    connectReq.setTimeout(15_000, () => {
+      connectReq.destroy(new Error(`Proxy CONNECT to ${targetHost}:${targetPort} timed out`));
+    });
 
     connectReq.on('connect', (res, socket: Socket) => {
+      this.pendingConnectRequests.delete(connectReq);
       if (res.statusCode !== 200) {
         socket.destroy();
-        callback?.(
+        finish(
           new Error(`Proxy CONNECT to ${targetHost}:${targetPort} failed with HTTP ${res.statusCode}`),
           socket,
         );
@@ -86,18 +113,19 @@ class TunnelAgent extends https.Agent {
           servername: targetHost,
         },
         () => {
-          callback?.(null, tlsSocket);
+          finish(null, tlsSocket);
         },
       );
 
       tlsSocket.on('error', (err: Error) => {
         socket.destroy();
-        callback?.(err, socket);
+        finish(err, socket);
       });
     });
 
     connectReq.on('error', (err: Error) => {
-      callback?.(err, null as unknown as Socket);
+      this.pendingConnectRequests.delete(connectReq);
+      finish(err, null as unknown as Socket);
     });
 
     connectReq.end();
@@ -782,6 +810,7 @@ export const proxyChatCompletion = (
         if (protocolTransform) answer.pipe(protocolTransform);
     };
     const handleTransportError = (error: Error): void => {
+      target.agent?.destroy();
       // A transport failure marks this pool unusable for the rest of the
       // request. Otherwise a later model fallback could revisit the same
       // broken relay and waste another attempt before exhausting the chain.
@@ -812,6 +841,7 @@ export const proxyChatCompletion = (
     response.on('close', () => {
       if (response.writableEnded) return;
       upstream?.destroy();
+      target.agent?.destroy();
       directAbort?.abort(new Error('Downstream client disconnected.'));
     });
   };
