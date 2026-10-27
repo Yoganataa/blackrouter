@@ -43,7 +43,7 @@ class TunnelAgent extends https.Agent {
     this.proxyUrl = new URL(proxyUrlString);
   }
 
-  override destroy(): this {
+  override destroy(): void {
     // Pending CONNECT requests are not registered as Agent sockets yet.
     // Destroy them explicitly so downstream cancellation can close the proxy
     // socket even when the proxy never sends its CONNECT response.
