@@ -20,7 +20,7 @@ The roadmap is now decomposed into single-session tasks in [`task/SESSION-PLAN.m
 
 ## Scope and constraints
 
-Use [`goals.md` on `main`](https://github.com/Yoganataa/blackrouter/blob/main/goals.md) as the project source of truth and follow current scope `BR-SCOPE-1.1` (baseline 2026-10-27): MUST before SHOULD. The approved additive targets are CodeBuddy CN, WorkBuddy/Tencent TokenHub, and Freebuff under `BR-CHANGE-2026-10-27-PROVIDERS`; they remain blocked until FR-M1–FR-M8 acceptance gates pass and each provider's own terms/auth/security/runtime gates are met. OmniRoute is a research/comparison reference only, not an implementation dependency. Preserve the core/provider-translator/OpenChamber-adapter/transport/response-stream boundaries. Default to loopback, redact credentials, never silently bypass a selected proxy/relay with direct egress, and do not claim a test/build/provider works without evidence. Historical checkpoints below may refer to BR-SCOPE-1.0 as the scope active at that time; current decisions are governed by BR-SCOPE-1.1.
+Use [`goals.md` on `main`](https://github.com/Yoganataa/blackrouter/blob/main/goals.md) as the project source of truth and follow current scope `BR-SCOPE-1.2` (baseline 2026-10-27): MUST before SHOULD. The approved additive targets are CodeBuddy CN, WorkBuddy/Tencent TokenHub, and Freebuff under `BR-CHANGE-2026-10-27-PROVIDERS`; they remain blocked until FR-M1–FR-M8 acceptance gates pass and each provider's own terms/auth/security/runtime gates are met. OmniRoute is a research/comparison reference only, not an implementation dependency. Preserve the core/provider-translator/OpenChamber-adapter/transport/response-stream boundaries. Default to loopback, redact credentials, never silently bypass a selected proxy/relay with direct egress, and do not claim a test/build/provider works without evidence. Historical checkpoints below may refer to BR-SCOPE-1.0 as the scope active at that time; current decisions are governed by BR-SCOPE-1.2.
 
 ## Execution priorities and test integrity
 
@@ -31,7 +31,7 @@ Work strictly one task at a time and report the result before moving to the next
 - Add/retain regression coverage for the native OpenCode path: required headers/fingerprints, request translation and endpoint selection, session affinity, real inference for Test Model, streaming and non-streaming responses, cancellation/timeouts, and actionable upstream failures.
 - The primary acceptance path is OpenChamber/OpenCode -> loopback BlackRouter -> OpenCode Zen Free -> valid response. Verify with evidence; type-check passing alone does not prove OpenCode works.
 - Verify direct, HTTP proxy, and relay behavior separately. A selected proxy/relay must never silently fall back to direct egress.
-- Keep new feature work out of the MVP until all MUST requirements in `goals.md` / `BR-SCOPE-1.1` pass.
+- Keep new feature work out of the MVP until all MUST requirements in `goals.md` / `BR-SCOPE-1.2` pass.
 
 ## Progress checklist
 
@@ -269,11 +269,11 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 **Evidence:** [CI run 40443636387](https://github.com/Yoganataa/blackrouter/actions/runs/40443636387), including the `CONNECT_LIFECYCLE_DIAGNOSTIC` trace in the Unit tests step.
 
 
-## Latest session checkpoint (2026-10-27, aligned with goals.md BR-SCOPE-1.1)
+## Latest session checkpoint (2026-10-27, aligned with goals.md BR-SCOPE-1.2)
 
 **Phase:** Keep PR #2 stabilization as the active task under the updated project scope.
 
-- [x] Read the current `main/goals.md` snapshot dated 2026-10-27; current scope is `BR-SCOPE-1.1`.
+- [x] Read the current `main/goals.md` snapshot dated 2026-10-27; current scope is `BR-SCOPE-1.2`.
 - [x] Record the approved additive provider targets: CodeBuddy CN, WorkBuddy/Tencent TokenHub, and Freebuff under `BR-CHANGE-2026-10-27-PROVIDERS`. These are not yet approved for implementation ahead of the MUST baseline; each requires its own documentation, terms, auth/security, tests, and runtime acceptance.
 - [x] Record OmniRoute as a comparative research source only; it does not replace 9router as the primary behavior reference and does not authorize wholesale feature import.
 - [x] Removed the temporary CONNECT lifecycle diagnostic test after preserving its observed trace in the checkpoint above. Post-removal CI run [40443707710](https://github.com/Yoganataa/blackrouter/actions/runs/40443707710) completed successfully.
@@ -296,3 +296,13 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - [x] Added [`S01 — CONNECT ClientRequest lifecycle`](sessions/S01-connect-clientrequest-lifecycle.md) with objective, scope boundaries, acceptance criteria and report template.
 - [x] Clarified that this documentation-only update does not change runtime code or validation status. The latest code CI remains run 40443707710; the new documentation commits have not been represented as a code-validation run.
 - [ ] Execute S01 as the next focused work session; no task is marked complete in advance.
+
+
+## Sessionized token-saver scope update (2026-10-27)
+
+- [x] Updated `main/goals.md` to scope `BR-SCOPE-1.2` under change record `BR-CHANGE-2026-10-27-LINEAR-TOKEN-SAVER`.
+- [x] Defined the token-saver as one ordered combo: **9router-go token-saver behavior → RTK → Caveman → I Have ADHD**, with one top-level enable/disable control.
+- [x] Promoted the four-stage combo into FR-S2 (SHOULD), while keeping standalone Caveman and standalone I Have ADHD profiles out of scope.
+- [x] Updated `task/SESSION-PLAN.md` to split source audit, each stage, and end-to-end validation into separate sessions S19–S24; later task IDs shifted to S25–S33.
+- [ ] Do not begin implementation until Phase A MUST gates pass. Each stage requires source/provenance review and regression tests; final acceptance requires repeatable output-quality and token-count measurements.
+- [ ] The scope/documentation change does not constitute implementation or test evidence for the combo.
