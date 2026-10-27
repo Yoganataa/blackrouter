@@ -478,3 +478,5 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - Changes: `service/upstream.ts` now destroys the per-attempt agent on response close and guards transport error handling against a destroyed/ended downstream response. `service/upstream.test.ts` adds local upstream/router integration tests for cancellation while waiting for upstream response, cancellation during active response streaming, and normal completion.
 - Validation: pending current-head CI; no local Bun test/type-check/build claim.
 - Status: ACTIVE until CI verifies type-check, focused tests, full suite and build. Next task remains S03 until exit criteria are evidenced.
+
+- S03 CI run 40597358407 failed after type-check passed and 160 tests passed: the active-stream fixture waited for the request `end` event before writing the first response chunk and timed out. Changed the fixture to begin streaming as soon as the upstream request arrives; the test still requires observed upstream response-socket closure after client cancellation. Retest pending.

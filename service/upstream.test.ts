@@ -295,12 +295,11 @@ describe('downstream cancellation lifecycle', () => {
     let upstreamResponseClosedResolve!: () => void;
     const upstreamResponseClosed = new Promise<void>((resolve) => { upstreamResponseClosedResolve = resolve; });
     const upstream = http.createServer((request, response) => {
+      request.on('data', () => {});
+      response.on('close', () => upstreamResponseClosedResolve());
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.write('data: first\\n\\n');
       request.resume();
-      request.on('end', () => {
-        response.writeHead(200, { 'content-type': 'text/event-stream' });
-        response.write('data: first\\n\\n');
-        response.on('close', () => upstreamResponseClosedResolve());
-      });
     });
     const up = await startServer(upstream);
     const router = http.createServer((_request, response) => proxy(up.url + '/v1', response));
