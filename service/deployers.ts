@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
 
+import { redactDiagnosticText } from './errors.ts';
+
 import type {
   DeployCloudflareInput,
   DeployDenoInput,
@@ -48,7 +50,7 @@ export default {
         headers: response.headers,
       });
     } catch (error) {
-      return new Response(JSON.stringify({ error: error.message }), {
+      return new Response(JSON.stringify({ error: "Relay fetch failed" }), {
         status: 502,
         headers: { "content-type": "application/json" },
       });
@@ -207,7 +209,7 @@ exports.handler = async (event) => {
     return {
       statusCode: 502,
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ error: error.message || "Relay fetch failed" }),
+      body: JSON.stringify({ error: "Relay fetch failed" }),
     };
   }
 };
@@ -251,7 +253,7 @@ export async function testRelay(
       ok: false,
       status: 500,
       elapsedMs: Date.now() - startedAt,
-      error: errorMsg,
+      error: redactDiagnosticText(errorMsg),
     };
   } finally {
     clearTimeout(timer);
@@ -325,7 +327,7 @@ export async function testForwardProxy(
           ok: false,
           status: 502,
           elapsedMs: Date.now() - startedAt,
-          error: err instanceof Error ? err.message : String(err),
+          error: redactDiagnosticText(err instanceof Error ? err.message : String(err)),
         });
       });
 
@@ -338,7 +340,7 @@ export async function testForwardProxy(
         ok: false,
         status: 400,
         elapsedMs: Date.now() - startedAt,
-        error: err instanceof Error ? err.message : String(err),
+        error: redactDiagnosticText(err instanceof Error ? err.message : String(err)),
       });
     }
   });
