@@ -1,8 +1,27 @@
 import { describe, expect, test } from 'bun:test';
 
-import { testRelay, testRelayOrProxy } from './deployers.ts';
+import { CLOUDFLARE_WORKER_CODE, DENO_RELAY_CODE, NETLIFY_RELAY_CODE, testRelay, testRelayOrProxy } from './deployers.ts';
 
 describe('deployers testRelay', () => {
+
+  test('redacts credentials in relay connectivity-test failures', async () => {
+    const mockFetch = async () => {
+      throw new Error('request to https://alice:relay-secret@relay.example/?api_key=relay-key failed');
+    };
+    const result = await testRelay('https://test-relay.workers.dev', 5000, mockFetch as unknown as typeof fetch);
+    expect(result.ok).toBe(false);
+    expect(result.error).not.toContain('alice');
+    expect(result.error).not.toContain('relay-secret');
+    expect(result.error).not.toContain('relay-key');
+  });
+
+  test('generated relay handlers do not return raw exception messages', () => {
+    for (const source of [CLOUDFLARE_WORKER_CODE, DENO_RELAY_CODE, NETLIFY_RELAY_CODE]) {
+      expect(source).not.toContain('error.message');
+      expect(source).toContain('Relay fetch failed');
+    }
+  });
+
   test('returns ok: true when relay responds successfully to test request', async () => {
     let capturedTarget = '';
     let capturedPath = '';
