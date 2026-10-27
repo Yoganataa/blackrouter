@@ -158,3 +158,18 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - [ ] Audit every FR-M1–FR-M8 MUST item against `goals.md` and `BR-SCOPE-1.0`.
 
 **Next action:** proceed to the next single acceptance task: determine whether the OpenChamber host/runtime is available for a live extension-load and Zen Free inference check. Do not mark it complete based on CI alone.
+
+
+## Latest session checkpoint (2026-10-27, host-runtime availability check)
+
+**Phase:** Determine whether this execution environment can perform live OpenChamber/OpenCode acceptance.
+
+- [x] Checked the available working directory: only the uploaded `/mnt/data/goals.md` is present; there is no checked-out BlackRouter repository or OpenChamber project/runtime here.
+- [x] Checked executable availability: `bun`, `opencode`, and `openchamber` are not installed/available in this environment.
+- [!] Live host loading and a real OpenCode Zen Free inference request cannot be honestly verified from this environment. Existing CI evidence covers type-check, automated tests, and bundle build only; it does not prove host loading or a successful live provider response.
+- [ ] Keep host-level acceptance unchecked until it can be run in an environment with OpenChamber and OpenCode available.
+- [ ] Continue with the next repository-verifiable task: audit each FR-M1–FR-M8 MUST against source/tests and record evidence and gaps, without treating static inspection as runtime proof.
+
+**Session changes:** task log only; no source changes and no new test claims.
+
+**Next action:** audit the MUST checklist against the current PR branch. Separately, live acceptance will require a host environment with OpenChamber/OpenCode and network/provider access; if unavailable to the agent, request only the specific command output needed from the user after repository-verifiable work is exhausted.
