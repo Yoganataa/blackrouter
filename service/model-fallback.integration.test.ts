@@ -8,6 +8,8 @@ const requestedModels: string[] = [];
 const poolAttempts: string[] = [];
 let server: http.Server;
 let baseUrl = '';
+let notifyCancelUpstreamStarted: (() => void) | null = null;
+let cancelUpstreamDisconnected = false;
 
 const configFor = (port: number): RouterConfig => ({
   version: 1,
@@ -59,6 +61,33 @@ describe('model fallback request path', () => {
           configFor(address.port),
           'ses_test',
           prepared,
+          response,
+          null,
+          () => {},
+        );
+        return;
+      }
+
+      if (request.url === '/cancel-test') {
+        await readRequestBody(request);
+        const address = server.address();
+        if (!address || typeof address === 'string') {
+          response.writeHead(500);
+          response.end('No listener address');
+          return;
+        }
+        proxyChatCompletion(
+          configFor(address.port),
+          'ses_cancel_test',
+          {
+            model: 'slow-model',
+            stream: true,
+            body: JSON.stringify({
+              model: 'slow-model',
+              stream: true,
+              messages: [{ role: 'user', content: 'Reply with OK.' }],
+            }),
+          },
           response,
           null,
           () => {},
@@ -223,6 +252,18 @@ describe('model fallback request path', () => {
         const body = JSON.parse(await readRequestBody(request)) as { model?: string };
         const model = body.model ?? '';
         requestedModels.push(model);
+        if (model === 'slow-model') {
+          cancelUpstreamDisconnected = false;
+          response.writeHead(200, { 'content-type': 'text/event-stream' });
+          response.write(': upstream waiting\\n\\n');
+          notifyCancelUpstreamStarted?.();
+          const timer = setTimeout(() => response.end('data: [DONE]\\n\\n'), 5000);
+          response.on('close', () => {
+            clearTimeout(timer);
+            cancelUpstreamDisconnected = true;
+          });
+          return;
+        }
         if (model === 'primary-model') {
           response.writeHead(429, { 'content-type': 'application/json', 'retry-after': '1' });
           response.end(JSON.stringify({ error: { message: 'primary model is rate limited' } }));
@@ -277,6 +318,29 @@ describe('model fallback request path', () => {
         server.closeAllConnections();
       });
     }
+  });
+
+  test('cancelling the downstream stream closes the upstream response', async () => {
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+    notifyCancelUpstreamStarted = resolveStarted;
+    cancelUpstreamDisconnected = false;
+    const controller = new AbortController();
+    const downstream = await fetch(`${baseUrl}/cancel-test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: true }),
+      signal: controller.signal,
+    });
+    expect(downstream.status).toBe(200);
+    await started;
+    controller.abort();
+    const deadline = Date.now() + 1500;
+    while (!cancelUpstreamDisconnected && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    notifyCancelUpstreamStarted = null;
+    expect(cancelUpstreamDisconnected).toBe(true);
   });
 
   test('falls back to another model after 429 and reports the resolved model', async () => {
