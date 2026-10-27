@@ -338,3 +338,22 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - [ ] Next implementation work remains S01: capture internal CONNECT ClientRequest socket/connect/timeout/error/close lifecycle and compare destruction order. Do not jump to S06 or S07 before earlier tasks and MUST gates are addressed.
 
 **Latest known code CI:** [run 40443707710](https://github.com/Yoganataa/blackrouter/actions/runs/40443707710), successful on its recorded code commit before these documentation-only changes. It is not a current-head validation and does not prove live runtime acceptance.
+
+
+## Detailed task-card generation — batch 3 (2026-10-27)
+
+**Purpose:** prepare S11–S15 with explicit dependency and MUST-first gates. This batch does not start any task or authorize provider implementation.
+
+- [x] Created `task/sessions/S11-must-gate-pr-readiness.md` — commit `f2f37caf5cb121bf97fe3152182bfe577b122a2d`.
+- [x] Created `task/sessions/S12-provider-adapter-registry-contract.md` — commit `f6a0490787d4dd880b4b1dde197242f416413403`.
+- [x] Created `task/sessions/S13-codebuddy-cn-access-research.md` — commit `da66cf20ea975b1aa8e879e6c6b4f488264a7a4f`.
+- [x] Created `task/sessions/S14-codebuddy-cn-adapter.md` — commit `034e01a1e0ac71182939a6c7b140eb256eb71ec1`.
+- [x] Created `task/sessions/S15-workbuddy-tokenhub-access.md` — commit `e1f418e2ced11be37e91741aee9692806d2aee7e`.
+- [x] Updated `task/SESSION-PLAN.md` to index S11–S15 and retain S01 as the active task.
+- [!] Documentation-only batch: no application code, tests, generated bundles, or runtime behavior changed; CI was not run for this batch.
+- [!] S11 is a gate, not a shortcut: it cannot pass while any required MUST acceptance evidence is missing. S12–S15 remain not started and must not run before their listed dependencies pass.
+- [!] S13 is research/specification only; S14 can implement only a supported CodeBuddy CN path that S13 explicitly approves. S15 treats WorkBuddy international account/OAuth and Tencent TokenHub API-key access as separate lanes and requires separate decisions.
+
+**Active implementation task remains S01:** capture the internal CONNECT ClientRequest socket/connect/timeout/error/close lifecycle and compare agent-first versus outer-request-first destruction. Preserve the validated production baseline until evidence supports a narrow fix.
+
+**Validation boundary:** latest previously known code CI is run 40443707710 on an earlier code commit. It is not current-head validation and does not prove live OpenChamber/OpenCode acceptance.
