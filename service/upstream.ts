@@ -72,22 +72,22 @@ class TunnelAgent extends https.Agent {
       headers: connectHeaders,
     });
     let settled = false;
+    const connectTimer = setTimeout(() => {
+      connectReq.destroy(new Error(`Proxy CONNECT timed out after ${this.connectTimeoutMs}ms`));
+    }, this.connectTimeoutMs);
     const finish = (error: Error | null, socket: Socket): void => {
       if (settled) {
         if (error) socket.destroy();
         return;
       }
       settled = true;
-      connectReq.setTimeout(0);
+      clearTimeout(connectTimer);
       callback?.(error, socket);
     };
 
     // A proxy that accepts TCP but never answers CONNECT must not leave an
     // HTTPS request pending indefinitely. The timeout is scoped to the tunnel
     // handshake; it does not impose a timeout on the established TLS stream.
-    connectReq.setTimeout(this.connectTimeoutMs, () => {
-      connectReq.destroy(new Error(`Proxy CONNECT timed out after ${this.connectTimeoutMs}ms`));
-    });
 
     connectReq.on('connect', (res, socket: Socket) => {
       if (res.statusCode !== 200) {
