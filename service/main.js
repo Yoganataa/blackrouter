@@ -8909,6 +8909,8 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
         answer.pipe(protocolTransform);
     };
     const handleTransportError = (error) => {
+      if (response.destroyed || response.writableEnded)
+        return;
       if (candidate)
         failedPoolIds.add(candidate.id);
       if (!response.headersSent && !response.destroyed && advanceToNextAttempt()) {
@@ -8938,6 +8940,7 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       upstream.end(upstreamBody);
     }
     response.on("close", () => {
+      target.agent?.destroy();
       if (response.writableEnded)
         return;
       upstream?.destroy();
