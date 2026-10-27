@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
 import http from 'node:http';
-import https from 'node:https';
 import { pipeline, Readable, Writable } from 'node:stream';
 
 import type { RouterConfig } from '../contract.ts';
@@ -265,24 +264,16 @@ describe('HTTP CONNECT tunnel lifecycle', () => {
     if (!address || typeof address === 'string') throw new Error('Could not determine proxy test port.');
 
     try {
+      const agent = createTunnelAgent(`http://127.0.0.1:${address.port}`, 50);
       const error = await new Promise<Error>((resolve, reject) => {
-        const request = https.request({
-          hostname: 'opencode.ai',
-          port: 443,
-          path: '/zen/v1/models',
-          method: 'GET',
-          agent: createTunnelAgent(`http://127.0.0.1:${address.port}`, 50),
-        });
-        const timer = setTimeout(() => {
-          request.destroy();
-          reject(new Error('CONNECT timeout was not enforced within 1 second.'));
-        }, 1_000);
-        request.once('error', (value) => {
+        const timer = setTimeout(() => reject(new Error('CONNECT timeout was not enforced within 1 second.')), 1_000);
+        agent.createConnection({ host: 'opencode.ai', port: 443 }, (value) => {
           clearTimeout(timer);
-          resolve(value);
+          if (value) resolve(value);
+          else reject(new Error('Unexpectedly established a CONNECT tunnel.'));
         });
-        request.end();
       });
+      agent.destroy();
       expect(error.message).toContain('Proxy CONNECT timed out after 50ms');
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(proxySocketClosed).toBe(true);
