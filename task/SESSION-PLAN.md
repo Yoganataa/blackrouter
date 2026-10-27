@@ -26,8 +26,13 @@
 - [S03 — Downstream cancellation lifecycle](sessions/S03-downstream-cancellation.md) — prepared; not started.
 - [S04 — Egress policy audit](sessions/S04-egress-policy-audit.md) — prepared; not started.
 - [S05 — Response and streaming contract audit](sessions/S05-response-stream-contract-audit.md) — prepared; not started.
+- [S06 — Native OpenCode behavior and model routing audit](sessions/S06-opencode-native-behavior-audit.md) — prepared; not started.
+- [S07 — Test Model real inference](sessions/S07-test-model-real-inference.md) — prepared; not started.
+- [S08 — Security and secret-handling audit](sessions/S08-security-secret-handling-audit.md) — prepared; not started.
+- [S09 — Current-head CI and generated-bundle gate](sessions/S09-reproducible-ci-bundle-gate.md) — prepared; not started.
+- [S10 — OpenChamber/OpenCode runtime acceptance](sessions/S10-openchamber-opencode-runtime-acceptance.md) — prepared; not started.
 
-Cards beyond S05 will be generated in later batches. Preparing a card does not start or complete that task; only the active task may be executed, and task status changes require evidence.
+Cards beyond S10 will be generated in later batches. Preparing a card does not start or complete that task; only the active task may be executed, and task status changes require evidence.
 
 ## Phase A — PR #2 / MUST baseline
 
