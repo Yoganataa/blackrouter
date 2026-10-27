@@ -454,3 +454,5 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - Status: ACTIVE — implementation prepared; acceptance is pending current-head CI and any required corrections. Do not start S03 until S02 exit criteria are evidenced.
 
 - CI run 40513987493 on commit cff71bb68a1af11e6648ab2e3ab3b8b26a8a74d9 failed at Type check only: the Node HTTP CONNECT fixture types its socket as Duplex, while the test fixture Set was typed as net.Socket. Corrected the fixture Set to Duplex; tests/build were skipped by the workflow after type-check failed. A fresh CI run is required.
+
+- CI run 40514106851 passed on d3df3845038c6d7dab6c242ead777e8990c9b5ad: type-check, all 157 unit tests (including CONNECT timeout and agent-destroy cases), and bundle build. The build workflow generated service/main.js in follow-up commit ad30aa976de1b8085a6692a061da23d9e0cb1c3f; compare against d3df384 shows only service/main.js changed. Added one more regression for explicit proxy CONNECT rejection (HTTP 407) before finalizing S02; a fresh CI run is pending.

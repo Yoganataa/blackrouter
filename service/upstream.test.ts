@@ -244,13 +244,16 @@ describe('where a call goes', () => {
   });
 
 describe('HTTP CONNECT lifecycle', () => {
-  const createStalledProxy = async () => {
+  const createStalledProxy = async (responseStatus?: number) => {
     const sockets = new Set<import('node:stream').Duplex>();
     const server = http.createServer();
     server.on('connect', (_request, socket) => {
       sockets.add(socket);
       socket.once('close', () => sockets.delete(socket));
-      // Deliberately withhold the CONNECT response to reproduce a stuck handshake.
+      if (responseStatus === 407) socket.write('HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n');
+      else {
+        // Deliberately withhold the CONNECT response to reproduce a stuck handshake.
+      }
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
@@ -277,6 +280,26 @@ describe('HTTP CONNECT lifecycle', () => {
         request.end();
       });
       expect(result.message).toContain('Proxy CONNECT handshake timed out');
+      expect(request.destroyed).toBe(true);
+      expect(errorCount).toBe(1);
+    } finally {
+      agent.destroy();
+      await proxy.close();
+    }
+  });
+
+  test('propagates a rejected CONNECT response once and closes the outer request', async () => {
+    const proxy = await createStalledProxy(407);
+    const agent = createTunnelAgent(proxy.url, 500);
+    const request = https.request('https://example.invalid/', { agent });
+    let errorCount = 0;
+    try {
+      const error = await new Promise<Error>((resolve, reject) => {
+        request.once('response', () => reject(new Error('Unexpected HTTPS response after proxy rejected CONNECT.')));
+        request.on('error', (value) => { errorCount += 1; resolve(value); });
+        request.end();
+      });
+      expect(error.message).toContain('failed with HTTP 407');
       expect(request.destroyed).toBe(true);
       expect(errorCount).toBe(1);
     } finally {
