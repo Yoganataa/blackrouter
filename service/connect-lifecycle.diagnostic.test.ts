@@ -9,7 +9,8 @@ test('TEMP diagnostic: CONNECT socket lifecycle trace (remove after collecting C
   const events: string[] = [];
   let proxySocket: Socket | undefined;
   const server = http.createServer();
-  server.on('connect', (_request, socket) => {
+  server.on('connect', (_request, rawSocket) => {
+    const socket = rawSocket as Socket;
     proxySocket = socket;
     events.push('proxy:connect');
     socket.on('end', () => events.push('proxy-socket:end'));
