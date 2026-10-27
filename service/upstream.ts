@@ -37,6 +37,7 @@ export type UpstreamRequest = {
 class TunnelAgent extends https.Agent {
   private proxyUrl: URL;
   private pendingConnectRequests = new Set<http.ClientRequest>();
+  private pendingConnectSockets = new Map<http.ClientRequest, Socket>();
 
   constructor(proxyUrlString: string) {
     super({ keepAlive: true });
@@ -48,13 +49,14 @@ class TunnelAgent extends https.Agent {
     // Destroy them explicitly so downstream cancellation can close the proxy
     // socket even when the proxy never sends its CONNECT response.
     for (const request of this.pendingConnectRequests) {
-      const socket = request.socket;
+      const socket = this.pendingConnectSockets.get(request) ?? request.socket;
       request.destroy(new Error('Proxy tunnel was cancelled.'));
       // ClientRequest.destroy() alone did not close the detached/stalled
       // CONNECT socket in the local lifecycle regression.
       socket?.destroy();
     }
     this.pendingConnectRequests.clear();
+    this.pendingConnectSockets.clear();
     return super.destroy();
   }
 
@@ -95,15 +97,20 @@ class TunnelAgent extends https.Agent {
       headers: connectHeaders,
     });
     this.pendingConnectRequests.add(connectReq);
+    connectReq.on('socket', (socket: Socket) => {
+      this.pendingConnectSockets.set(connectReq, socket);
+    });
     connectReq.setTimeout(15_000, () => {
       const error = new Error(`Proxy CONNECT to ${targetHost}:${targetPort} timed out`);
-      const socket = connectReq.socket;
+      const socket = this.pendingConnectSockets.get(connectReq) ?? connectReq.socket;
       connectReq.destroy(error);
       socket?.destroy();
+      this.pendingConnectSockets.delete(connectReq);
     });
 
     connectReq.on('connect', (res, socket: Socket) => {
       this.pendingConnectRequests.delete(connectReq);
+      this.pendingConnectSockets.delete(connectReq);
       if (res.statusCode !== 200) {
         socket.destroy();
         finish(
@@ -131,6 +138,9 @@ class TunnelAgent extends https.Agent {
 
     connectReq.on('error', (err: Error) => {
       this.pendingConnectRequests.delete(connectReq);
+      const socket = this.pendingConnectSockets.get(connectReq);
+      this.pendingConnectSockets.delete(connectReq);
+      socket?.destroy();
       finish(err, null as unknown as Socket);
     });
 
