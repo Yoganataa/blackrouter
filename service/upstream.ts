@@ -48,7 +48,11 @@ class TunnelAgent extends https.Agent {
     // Destroy them explicitly so downstream cancellation can close the proxy
     // socket even when the proxy never sends its CONNECT response.
     for (const request of this.pendingConnectRequests) {
+      const socket = request.socket;
       request.destroy(new Error('Proxy tunnel was cancelled.'));
+      // ClientRequest.destroy() alone did not close the detached/stalled
+      // CONNECT socket in the local lifecycle regression.
+      socket?.destroy();
     }
     this.pendingConnectRequests.clear();
     return super.destroy();
@@ -93,7 +97,10 @@ class TunnelAgent extends https.Agent {
     this.pendingConnectRequests.add(connectReq);
     connectReq.once('close', () => this.pendingConnectRequests.delete(connectReq));
     connectReq.setTimeout(15_000, () => {
-      connectReq.destroy(new Error(`Proxy CONNECT to ${targetHost}:${targetPort} timed out`));
+      const error = new Error(`Proxy CONNECT to ${targetHost}:${targetPort} timed out`);
+      const socket = connectReq.socket;
+      connectReq.destroy(error);
+      socket?.destroy();
     });
 
     connectReq.on('connect', (res, socket: Socket) => {
