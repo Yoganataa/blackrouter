@@ -8874,6 +8874,8 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
         answer.pipe(protocolTransform);
     };
     const handleTransportError = (error) => {
+      if (candidate)
+        failedPoolIds.add(candidate.id);
       if (!response.headersSent && !response.destroyed && advanceToNextAttempt()) {
         fallbackReasons.push(`network error on ${lastRequestedModel}`);
         sendAttempt();
