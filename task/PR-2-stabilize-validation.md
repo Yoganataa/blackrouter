@@ -3,8 +3,8 @@
 **Repository:** `Yoganataa/blackrouter`  
 **Working branch:** `feat/port-9router-rtk-upstream`  
 **Pull request:** [#2 — feat: port native core and upstream free-tier fixes](https://github.com/Yoganataa/blackrouter/pull/2)  
-**Latest source commit verified by CI:** `ea344fa8b8a71febdeacf468f3f130ae5d90d37c`  
-**Latest CI-generated bundle commit:** `af1ef29` (service bundle synchronized)
+**Latest source commit verified by CI:** `ecfe57b16aa5534a57a74823f0a5319ebeb0f466`  
+**Latest CI-generated bundle commit:** `e2152ed` (service bundle synchronized)
 
 ## Status legend
 
@@ -47,7 +47,8 @@ Work strictly one task at a time and report the result before moving to the next
 - [x] Verify both listeners bind to `127.0.0.1` by code inspection (`service/main.ts`, `service/router-server.ts`).
 - [x] Redact proxy URL userinfo and sensitive query values in panel state; preserve stored credentials when the panel posts an unchanged redacted pool URL. Unit tests and CI verify this behavior.
 - [x] Add common credential redaction to local service errors/log output, gateway error responses, runtime model/router diagnostics, and persisted request-history pool/fallback labels; regression-tested in CI.
-- [ ] Review remaining non-user-facing logs and deployment-provider error surfaces for unusual credential formats or secrets not covered by common redaction.
+- [x] Audit deployment relay templates and connectivity-test errors: generated Cloudflare, Deno, and Netlify relay handlers now return generic transport errors rather than raw exception messages; proxy/relay connectivity-test diagnostics pass through common redaction.
+- [ ] Review unusual credential formats and remaining non-user-facing logs for secrets not covered by common redaction.
 - [ ] Verify that selecting a proxy/relay never silently falls back to a direct upstream connection.
 - [ ] Check every MUST requirement in `goals.md` / `BR-SCOPE-1.0` against code or test evidence.
 - [x] Recheck CI after the credential-redaction fix; run `40377741429` passed on source commit `e61f195394ccd34d7783126862309b26af258189`.
@@ -86,27 +87,25 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 
 ## Latest session checkpoint (2026-10-27)
 
-**Phase:** Credential leakage audit — common diagnostic and error-response paths hardened and CI-verified. Remaining edge-case log/deployer audit and live MVP acceptance are still open.
+**Phase:** Deployment/relay diagnostic credential leakage — fixed and CI-verified. Transport lifecycle validation remains open.
 
-- [x] Added `redactDiagnosticText()` to redact URL userinfo, sensitive query parameters, Bearer tokens, and `x-api-key` values in diagnostic text.
-- [x] Applied redaction to local service errors and error logging (`service/server/respond.ts`).
-- [x] Applied redaction centrally to OpenAI-compatible gateway error responses (`service/upstream.ts`).
-- [x] Applied redaction to runtime `routerError`/`modelsError` and persisted request-history pool/fallback labels (`service/runtime.ts`).
-- [x] Added a regression test for URL credentials, query secrets, Bearer tokens, and API-key values.
-- [x] CI run [40426596375](https://github.com/Yoganataa/blackrouter/actions/runs/40426596375) passed on source commit `ea344fa8b8a71febdeacf468f3f130ae5d90d37c`: type-check passed, **151 tests passed / 0 failed across 15 files**, and build passed.
-- [x] CI generated and committed updated `service/main.js` as `af1ef29`.
-- [ ] Review remaining non-user-facing logs and deployment-provider error surfaces for unusual credential formats or secrets not covered by common redaction.
+- [x] Proxy and relay connectivity-test errors are passed through `redactDiagnosticText()`.
+- [x] Cloudflare, Deno, and Netlify generated relay handlers return generic `Relay fetch failed` errors instead of raw exception messages that could leak credential-bearing URLs.
+- [x] Added tests proving relay connectivity errors redact URL username/password/query secrets and generated relay code does not expose `error.message`.
+- [x] CI run [40426966515](https://github.com/Yoganataa/blackrouter/actions/runs/40426966515) passed on source commit `ecfe57b16aa5534a57a74823f0a5319ebeb0f466`: type-check passed, **153 tests passed / 0 failed across 15 files**, and build passed.
+- [x] CI confirmed generated bundles are already synchronized; the workflow recorded bundle commit `e2152ed`.
+- [ ] Review unusual credential formats and remaining non-user-facing logs for secrets not covered by common redaction.
+- [ ] Audit direct/proxy/relay request transport, especially cancellation/timeouts and whether route failures can trigger direct egress.
 - [ ] Validate live OpenChamber host loading and a real OpenCode Zen Free inference response.
-- [ ] Verify direct, HTTP proxy, and relay routes independently in a running environment, including cancellation/timeouts and streaming/non-streaming.
 - [ ] Check every MUST in `goals.md` / `BR-SCOPE-1.0` against evidence.
 
-**Changed files:** `service/errors.ts`, `service/server/respond.ts`, `service/upstream.ts`, `service/runtime.ts`, `service/config.test.ts`, generated `service/main.js`, and this task log.
+**Changed files:** `service/deployers.ts`, `service/deployers.test.ts`, generated bundle verification, and this task log.
 
-**Next action:** inspect the remaining deployment/test error surfaces and transport lifecycle for credential exposure and route bypass; keep live host/provider acceptance unchecked until a valid runtime response is observed.
+**Next action:** continue transport lifecycle audit in `service/upstream.ts`; verify that cancellation, timeout, and failed relay paths never bypass configured egress. Keep host-level/live provider acceptance unchecked until an actual successful runtime response is observed.
 ## Session handoff
 
-**Current state:** Latest CI run `40426596375` passed type-check, 151 tests, and build. Panel state, common gateway/local error responses, runtime diagnostics, and request-history pool/fallback labels now redact common credential-bearing fragments. Egress regression coverage confirms configured relay pools are not bypassed after OpenCode rejects them. MVP host-level/live provider acceptance remains incomplete.
+**Current state:** Latest CI run `40426966515` passed type-check, 153 tests, and build. Panel state, gateway/local errors, runtime diagnostics, request-history labels, and relay/proxy connectivity diagnostics redact common credential-bearing fragments; generated relay handlers avoid returning raw exception messages. Egress regression coverage confirms configured relay pools are not bypassed after OpenCode rejects them. MVP host-level/live provider acceptance remains incomplete.
 
-**Next action:** Review remaining deployment-provider error surfaces and transport lifecycle; then run OpenChamber host-level and live OpenCode Zen Free smoke tests where an executable environment is available. The repository CI does not by itself prove the upstream provider currently responds or that the extension loads in the host application.
+**Next action:** Audit `service/upstream.ts` transport cancellation/timeouts and prove failed relay/proxy routes cannot silently switch to direct egress; then run OpenChamber host-level and live OpenCode Zen Free smoke tests where an executable environment is available. The repository CI does not by itself prove the upstream provider currently responds or that the extension loads in the host application.
 
 **Update protocol:** After each work session, update this file with actual status, changed files/commit SHA, commands or CI evidence, remaining blockers, and the next concrete action. Only check an item after verifying it.
