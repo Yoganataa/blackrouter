@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import http from 'node:http';
+import https from 'node:https';
 import { pipeline, Readable, Writable } from 'node:stream';
 
 import type { RouterConfig } from '../contract.ts';
-import { buildTarget, createSseFirstByteKeepAlive, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels, isOpenCodeFreeTierGateResponse } from './upstream.ts';
+import { buildTarget, createTunnelAgent, createSseFirstByteKeepAlive, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels, isOpenCodeFreeTierGateResponse } from './upstream.ts';
 // @ts-ignore - the native provider executor is copied from upstream JavaScript.
 import { prepareProviderRequest } from './core/provider-adapter.js';
 
@@ -240,6 +242,76 @@ describe('where a call goes', () => {
     expect(chat.url.toString()).toBe('https://custom-deno.deno.dev/');
     expect(chat.headers['x-relay-target']).toBe('https://opencode.ai');
   });
+
+describe('HTTP CONNECT lifecycle', () => {
+  const createStalledProxy = async () => {
+    const sockets = new Set<import('node:net').Socket>();
+    const server = http.createServer();
+    server.on('connect', (_request, socket) => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+      // Deliberately withhold the CONNECT response to reproduce a stuck handshake.
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Proxy fixture did not bind a TCP port.');
+    return {
+      url: `http://127.0.0.1:${address.port}`,
+      sockets,
+      close: async () => {
+        for (const socket of sockets) socket.destroy();
+        await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      },
+    };
+  };
+
+  test('times out a stalled CONNECT handshake and closes the outer request', async () => {
+    const proxy = await createStalledProxy();
+    const agent = createTunnelAgent(proxy.url, 30);
+    const request = https.request('https://example.invalid/', { agent });
+    let errorCount = 0;
+    try {
+      const result = await new Promise<Error>((resolve, reject) => {
+        request.once('response', () => reject(new Error('Unexpected HTTPS response from stalled proxy.')));
+        request.on('error', (error) => { errorCount += 1; resolve(error); });
+        request.end();
+      });
+      expect(result.message).toContain('Proxy CONNECT handshake timed out');
+      expect(request.destroyed).toBe(true);
+      expect(errorCount).toBe(1);
+    } finally {
+      agent.destroy();
+      await proxy.close();
+    }
+  });
+
+  test('destroying the agent cancels a pending CONNECT exactly once', async () => {
+    const proxy = await createStalledProxy();
+    const agent = createTunnelAgent(proxy.url, 2_000);
+    const request = https.request('https://example.invalid/', { agent });
+    let errorCount = 0;
+    try {
+      const failed = new Promise<Error>((resolve, reject) => {
+        request.once('response', () => reject(new Error('Unexpected HTTPS response from stalled proxy.')));
+        request.on('error', (error) => { errorCount += 1; resolve(error); });
+        request.end();
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      agent.destroy();
+      const error = await Promise.race([
+        failed,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Agent destruction did not cancel CONNECT in time.')), 250)),
+      ]);
+      expect(error.message).toContain('tunnel agent was destroyed');
+      expect(request.destroyed).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(errorCount).toBe(1);
+    } finally {
+      agent.destroy();
+      await proxy.close();
+    }
+  });
+});
 
 describe('SSE first-byte keepalive', () => {
   test('emits comments while idle and preserves subsequent SSE bytes', async () => {

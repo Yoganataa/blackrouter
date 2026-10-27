@@ -1,6 +1,6 @@
 # Session S02 — CONNECT Cleanup and Timeout Fix
 
-**Status:** Not started  
+**Status:** Active  
 **Scope source:** `goals.md` on `main`, `BR-SCOPE-1.2`  
 **Related requirement:** FR-M6  
 **Dependency:** S01 must establish the relevant CONNECT request/socket event ordering first.  
@@ -42,4 +42,4 @@ Implement the smallest production change justified by S01 evidence so a pending 
 
 ## Session report
 
-Not started. Do not mark complete until the criteria above have evidence.
+Implementation added on 2026-10-27; focused regression tests and current-head CI are pending. Do not mark complete until the criteria above have evidence.

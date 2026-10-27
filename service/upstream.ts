@@ -34,72 +34,87 @@ export type UpstreamRequest = {
 };
 
 
+const CONNECT_HANDSHAKE_TIMEOUT_MS = 12_000;
+
+type PendingConnect = {
+  callback?: (err: Error | null, socket: Socket) => void;
+  socket?: Socket;
+  tlsSocket?: Socket;
+  settled: boolean;
+  timeout?: ReturnType<typeof setTimeout>;
+};
+
 class TunnelAgent extends https.Agent {
   private proxyUrl: URL;
+  private pendingConnects = new Map<http.ClientRequest, PendingConnect>();
 
-  constructor(proxyUrlString: string) {
+  constructor(proxyUrlString: string, private connectTimeoutMs = CONNECT_HANDSHAKE_TIMEOUT_MS) {
     super({ keepAlive: true });
     this.proxyUrl = new URL(proxyUrlString);
   }
 
-  override createConnection(
-    options: { host?: string; port?: number },
-    callback?: (err: Error | null, socket: Socket) => void,
-  ): Socket {
+  private finishPending(request: http.ClientRequest, pending: PendingConnect, error: Error | null, socket?: Socket): void {
+    if (pending.settled) return;
+    pending.settled = true;
+    if (pending.timeout) clearTimeout(pending.timeout);
+    this.pendingConnects.delete(request);
+    if (error) {
+      pending.callback?.(error, null as unknown as Socket);
+      request.destroy();
+      pending.tlsSocket?.destroy();
+      pending.socket?.destroy();
+      return;
+    }
+    pending.callback?.(null, socket!);
+  }
+
+  override destroy(): void {
+    const error = new Error('Proxy CONNECT cancelled because the tunnel agent was destroyed.');
+    for (const [request, pending] of [...this.pendingConnects]) this.finishPending(request, pending, error);
+    super.destroy();
+  }
+
+  override createConnection(options: { host?: string; port?: number }, callback?: (err: Error | null, socket: Socket) => void): Socket {
     const proxyPort = Number(this.proxyUrl.port) || (this.proxyUrl.protocol === 'https:' ? 443 : 80);
     const proxyHost = this.proxyUrl.hostname;
     const targetHost = options.host || 'opencode.ai';
     const targetPort = options.port || 443;
-
     const connectHeaders: Record<string, string> = {
       Host: `${targetHost}:${targetPort}`,
       'User-Agent': 'BlackRouter',
     };
     if (this.proxyUrl.username || this.proxyUrl.password) {
-      connectHeaders['Proxy-Authorization'] = `Basic ${Buffer.from(
-        `${decodeURIComponent(this.proxyUrl.username)}:${decodeURIComponent(this.proxyUrl.password)}`,
-      ).toString('base64')}`;
+      connectHeaders['Proxy-Authorization'] = `Basic ${Buffer.from(`${decodeURIComponent(this.proxyUrl.username)}:${decodeURIComponent(this.proxyUrl.password)}`).toString('base64')}`;
     }
-
     const proxyTransport = this.proxyUrl.protocol === 'https:' ? https : http;
     const connectReq = proxyTransport.request({
-      host: proxyHost,
-      port: proxyPort,
-      method: 'CONNECT',
-      path: `${targetHost}:${targetPort}`,
-      headers: connectHeaders,
+      host: proxyHost, port: proxyPort, method: 'CONNECT',
+      path: `${targetHost}:${targetPort}`, headers: connectHeaders,
     });
+    const pending: PendingConnect = { callback, settled: false };
+    this.pendingConnects.set(connectReq, pending);
+    pending.timeout = setTimeout(() => {
+      this.finishPending(connectReq, pending, new Error(`Proxy CONNECT handshake timed out after ${this.connectTimeoutMs} ms.`));
+    }, this.connectTimeoutMs);
+    pending.timeout.unref?.();
 
     connectReq.on('connect', (res, socket: Socket) => {
+      pending.socket = socket;
+      if (pending.settled) { socket.destroy(); return; }
       if (res.statusCode !== 200) {
-        socket.destroy();
-        callback?.(
-          new Error(`Proxy CONNECT to ${targetHost}:${targetPort} failed with HTTP ${res.statusCode}`),
-          socket,
-        );
+        this.finishPending(connectReq, pending, new Error(`Proxy CONNECT to ${targetHost}:${targetPort} failed with HTTP ${res.statusCode}`));
         return;
       }
-
-      const tlsSocket = tls.connect(
-        {
-          socket,
-          servername: targetHost,
-        },
-        () => {
-          callback?.(null, tlsSocket);
-        },
-      );
-
-      tlsSocket.on('error', (err: Error) => {
-        socket.destroy();
-        callback?.(err, socket);
+      const tlsSocket = tls.connect({ socket, servername: targetHost }, () => {
+        this.finishPending(connectReq, pending, null, tlsSocket);
+      });
+      pending.tlsSocket = tlsSocket;
+      tlsSocket.once('error', (err: Error) => {
+        if (!pending.settled) this.finishPending(connectReq, pending, err);
+        else socket.destroy();
       });
     });
-
-    connectReq.on('error', (err: Error) => {
-      callback?.(err, null as unknown as Socket);
-    });
-
+    connectReq.on('error', (err: Error) => this.finishPending(connectReq, pending, err));
     connectReq.end();
     return null as unknown as Socket;
   }
@@ -108,7 +123,7 @@ class TunnelAgent extends https.Agent {
 /**
  * Creates an HTTPS Agent that establishes a CONNECT tunnel through an HTTP/HTTPS forward proxy.
  */
-export const createTunnelAgent = (proxyUrlString: string): https.Agent => new TunnelAgent(proxyUrlString);
+export const createTunnelAgent = (proxyUrlString: string, connectTimeoutMs = CONNECT_HANDSHAKE_TIMEOUT_MS): https.Agent => new TunnelAgent(proxyUrlString, connectTimeoutMs);
 
 export const isOpenCodeUpstream = (upstream: string): boolean => {
   try {

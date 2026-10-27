@@ -442,3 +442,13 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - **Result:** **COMPLETE — S01 diagnosis only.** The lifecycle gap is isolated for the current pending-CONNECT path: the internal request/socket is not owned by the agent/outer request and neither destruction order closes it. This is not a production fix and does not make FR-M6 PASS.
 - **Risks:** no committed permanent regression test yet; no local Bun validation; no live OpenChamber/OpenCode provider acceptance. FR-M6 cancellation, CONNECT timeout, and socket cleanup remain open. PR base metadata differs from current `main`.
 - **Next permitted task:** **S02 — CONNECT cleanup and timeout fix**, limited to implementing a fix justified by this evidence and adding a deterministic regression test. S02 was not executed in this session; do not start S03 or SHOULD work.
+
+
+## S02 session checkpoint — 2026-10-27
+
+- Task/scope: S02 — CONNECT cleanup and timeout fix; FR-M6; BR-SCOPE-1.2.
+- Repository state before changes: branch feat/port-9router-rtk-upstream, HEAD a176db0ceed68ebb067348622b5152ab985161ef; PR #2 open/unmerged.
+- S01 evidence used: pending internal CONNECT request was not retained by the agent and remained open after either outer-request-first or agent-first destruction; see S01 record and card.
+- Changes in this commit: service/upstream.ts tracks pending CONNECT ClientRequests and raw/TLS sockets, enforces a bounded 12-second default setup timeout (factory timeout parameter is exposed for deterministic tests), settles callbacks once, and cleans up on timeout, request error, TLS setup error, or agent destruction. service/upstream.test.ts adds stalled local-proxy tests for timeout and agent cancellation. service/main.js is synchronized manually; it is not yet proven to be a reproducible Bun-generated bundle.
+- Validation status: focused tests, type-check, and build have not yet been run in this editing environment. A CI run on this commit is required before S02 can be marked complete. Generated-bundle equivalence remains unverified until bun run build and bundle diff review.
+- Status: ACTIVE — implementation prepared; acceptance is pending current-head CI and any required corrections. Do not start S03 until S02 exit criteria are evidenced.
