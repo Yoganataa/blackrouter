@@ -1,8 +1,11 @@
 import { describe, expect, test } from 'bun:test';
+import http from 'node:http';
+import https from 'node:https';
+import type { Socket } from 'node:net';
 import { pipeline, Readable, Writable } from 'node:stream';
 
 import type { RouterConfig } from '../contract.ts';
-import { buildTarget, createSseFirstByteKeepAlive, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels, isOpenCodeFreeTierGateResponse } from './upstream.ts';
+import { buildTarget, createTunnelAgent, createSseFirstByteKeepAlive, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels, isOpenCodeFreeTierGateResponse } from './upstream.ts';
 // @ts-ignore - the native provider executor is copied from upstream JavaScript.
 import { prepareProviderRequest } from './core/provider-adapter.js';
 
@@ -240,6 +243,61 @@ describe('where a call goes', () => {
     expect(chat.url.toString()).toBe('https://custom-deno.deno.dev/');
     expect(chat.headers['x-relay-target']).toBe('https://opencode.ai');
   });
+
+describe('HTTP forward proxy tunnel lifecycle', () => {
+  test('destroying a tunnel agent closes a stalled CONNECT socket', async () => {
+    let proxySocket: Socket | undefined;
+    let signalConnected!: () => void;
+    const connected = new Promise<void>((resolve) => {
+      signalConnected = resolve;
+    });
+    const proxy = http.createServer();
+    proxy.on('connect', (_request, socket) => {
+      proxySocket = socket;
+      signalConnected();
+      // Deliberately leave CONNECT unanswered to simulate a stalled proxy.
+    });
+    await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve));
+    const address = proxy.address();
+    if (!address || typeof address === 'string') throw new Error('Test proxy did not bind a TCP port');
+
+    const agent = createTunnelAgent(`http://127.0.0.1:${address.port}`);
+    const upstreamRequest = https.request({
+      hostname: 'opencode.ai',
+      port: 443,
+      path: '/',
+      agent,
+    });
+    upstreamRequest.on('error', () => {
+      // The expected cancellation rejects the pending HTTPS request.
+    });
+    upstreamRequest.end();
+
+    try {
+      await Promise.race([
+        connected,
+        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('Proxy did not receive CONNECT')), 1_000)),
+      ]);
+      const socket = proxySocket;
+      if (!socket) throw new Error('Proxy CONNECT socket was not captured');
+      const socketClosed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
+
+      agent.destroy();
+      upstreamRequest.destroy();
+
+      await Promise.race([
+        socketClosed,
+        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('Proxy socket stayed open after tunnel agent destruction')), 1_000)),
+      ]);
+      expect(socket.destroyed).toBe(true);
+    } finally {
+      agent.destroy();
+      upstreamRequest.destroy();
+      proxySocket?.destroy();
+      await new Promise<void>((resolve) => proxy.close(() => resolve()));
+    }
+  });
+});
 
 describe('SSE first-byte keepalive', () => {
   test('emits comments while idle and preserves subsequent SSE bytes', async () => {
