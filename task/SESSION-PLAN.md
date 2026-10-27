@@ -36,8 +36,13 @@
 - [S13 — CodeBuddy CN access research](sessions/S13-codebuddy-cn-access-research.md) — prepared; gated by S11 and S12.
 - [S14 — CodeBuddy CN adapter](sessions/S14-codebuddy-cn-adapter.md) — prepared; gated by S13 GO decision.
 - [S15 — WorkBuddy/TokenHub access review](sessions/S15-workbuddy-tokenhub-access.md) — prepared; gated by S11 and S12.
+- [S16 — Freebuff feasibility/security/terms review](sessions/S16-freebuff-feasibility-review.md) — prepared; research only, gated by S11.
+- [S17 — Freebuff adapter](sessions/S17-freebuff-adapter.md) — prepared; gated by a documented S16 GO decision.
+- [S18 — Cross-provider compatibility and fallback audit](sessions/S18-cross-provider-compatibility-audit.md) — prepared; gated by S11 and the actual status of implemented providers.
+- [S19 — Token-saver source/provenance audit](sessions/S19-token-saver-source-audit.md) — prepared; gated by S11.
+- [S20 — Token-saver stage 1 (9router-go behavior)](sessions/S20-token-saver-stage1.md) — prepared; gated by S19 evidence and S11.
 
-Cards beyond S15 will be generated in later batches. Preparing a card does not start or complete that task; only the active task may be executed, and task status changes require evidence.
+Cards beyond S20 will be generated in later batches. Preparing a card does not start or complete that task; only the active task may be executed, and task status changes require evidence.
 
 ## Phase A — PR #2 / MUST baseline
 
