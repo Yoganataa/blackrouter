@@ -110,3 +110,20 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 **Next action:** Fix explicit CONNECT timeout/cleanup in `TunnelAgent` and add deterministic tests for tunnel timeout and cancellation; then verify failed relay/proxy routes and live OpenCode Zen Free inference. The repository CI does not by itself prove the upstream provider currently responds or that the extension loads in the host application.
 
 **Update protocol:** After each work session, update this file with actual status, changed files/commit SHA, commands or CI evidence, remaining blockers, and the next concrete action. Only check an item after verifying it.
+
+
+## Latest session checkpoint (2026-10-27, CONNECT timeout investigation)
+
+**Phase:** CONNECT timeout/cancellation investigation — blocked; unverified changes reverted to the last CI-validated transport baseline.
+
+- [x] Confirmed the previously validated baseline at `25d86f24ace65d5f74e12d6b028d47867e49eba9` has CI evidence from run [40427922793](https://github.com/Yoganataa/blackrouter/actions/runs/40427922793): type-check, 153 tests, and build passed.
+- [x] Attempted an explicit CONNECT handshake timeout and a local stalled-proxy integration test.
+- [!] The new test consistently observed that the proxy-side socket did not close after the timeout; multiple implementation/test variations did not resolve this. Type-check passed on the latest attempt, but the unit-test gate failed, so this is not accepted as complete.
+- [x] Reverted the unverified changes in `service/upstream.ts` and `service/upstream.test.ts` to the validated baseline rather than leaving the PR with a failing CI state.
+- [ ] Investigate CONNECT lifecycle with a reproducible lower-level socket test and establish why the pending proxy socket remains open before reattempting the timeout fix.
+- [ ] Add deterministic cancellation/timeout acceptance only after the socket lifecycle behavior is demonstrated.
+- [ ] Continue with HTTP proxy/relay failure separation, live OpenChamber loading and OpenCode Zen Free inference, then audit all MUST requirements.
+
+**Session changes:** experimental commits were created for CONNECT timeout handling and tests, but their final unverified source/test changes were reverted in follow-up commits. Do not claim CONNECT timeout or cancellation is verified.
+
+**Next action:** keep the last passing baseline intact; isolate and reproduce the pending CONNECT socket lifecycle in a minimal test before changing production transport code again.
