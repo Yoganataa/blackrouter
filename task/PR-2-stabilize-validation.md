@@ -357,3 +357,22 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 **Active implementation task remains S01:** capture the internal CONNECT ClientRequest socket/connect/timeout/error/close lifecycle and compare agent-first versus outer-request-first destruction. Preserve the validated production baseline until evidence supports a narrow fix.
 
 **Validation boundary:** latest previously known code CI is run 40443707710 on an earlier code commit. It is not current-head validation and does not prove live OpenChamber/OpenCode acceptance.
+
+
+## Detailed task-card generation — batch 4 (2026-10-27)
+
+**Purpose:** prepare S16–S20 while preserving all MUST-first and stage-order dependencies. No implementation task was started.
+
+- [x] Created `task/sessions/S16-freebuff-feasibility-review.md` — commit `9e5ca04ff1468c29c24a3fa04fd3332c20240f8d`.
+- [x] Created `task/sessions/S17-freebuff-adapter.md` — commit `728c8dcbe57d686cbdabd564a5e8458b94666c1b`.
+- [x] Created `task/sessions/S18-cross-provider-compatibility-audit.md` — commit `1c55e9d318adeb53fc5d731f08ea0dacfb0b7eac`.
+- [x] Created `task/sessions/S19-token-saver-source-audit.md` — commit `a1fe8ae9e6e2705f3e8f854b22b9c2d26d58e239`.
+- [x] Created `task/sessions/S20-token-saver-stage1.md` — commit `7076fa4969ab041e3123680a7e62a82783175c8e`.
+- [x] Updated `task/SESSION-PLAN.md` to index S16–S20.
+- [!] Documentation-only batch: no application code, tests, generated bundles, or runtime behavior changed; CI was not run.
+- [!] S16 is feasibility research only; S17 requires a documented GO decision. S18 audits only providers actually implemented. S19 must establish provenance/licensing before S20 can implement stage 1.
+- [!] Token-saver sequence remains fixed: 9router-go behavior → RTK → Caveman → I Have ADHD. S20 is stage 1 only, not the full combo, and no savings claims are authorized without repeatable measurements.
+
+**Active implementation task remains S01:** capture the internal CONNECT ClientRequest socket/connect/timeout/error/close lifecycle and compare agent-first vs. outer-request-first destruction. Do not start later SHOULD implementation while MUST gates remain unresolved.
+
+**Validation boundary:** latest previously known code CI is run 40443707710 on an earlier code commit. This documentation batch has no CI run and does not prove runtime acceptance.
