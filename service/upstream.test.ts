@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import http from 'node:http';
 import https from 'node:https';
-import type { Socket } from 'node:net';
 import { pipeline, Readable, Writable } from 'node:stream';
+import type { Duplex } from 'node:stream';
 
 import type { RouterConfig } from '../contract.ts';
 import { buildTarget, createTunnelAgent, createSseFirstByteKeepAlive, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels, isOpenCodeFreeTierGateResponse } from './upstream.ts';
@@ -246,7 +246,7 @@ describe('where a call goes', () => {
 
 describe('HTTP forward proxy tunnel lifecycle', () => {
   test('destroying a tunnel agent closes a stalled CONNECT socket', async () => {
-    let proxySocket: Socket | undefined;
+    let proxySocket: Duplex | undefined;
     let signalConnected!: () => void;
     const connected = new Promise<void>((resolve) => {
       signalConnected = resolve;
