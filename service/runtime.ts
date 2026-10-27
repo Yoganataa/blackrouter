@@ -236,7 +236,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         record: (entry: RequestEntry) => {
           requests.unshift({
             ...entry,
-            poolName: redactDiagnosticText(entry.poolName),
+            ...(typeof entry.poolName === 'string' ? { poolName: redactDiagnosticText(entry.poolName) } : {}),
             ...(entry.fallbackReason ? { fallbackReason: redactDiagnosticText(entry.fallbackReason) } : {}),
           });
           if (requests.length > REQUEST_LOG_LIMIT) requests.length = REQUEST_LOG_LIMIT;
