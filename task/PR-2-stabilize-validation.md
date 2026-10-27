@@ -414,3 +414,16 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 **Active implementation task remains S01:** instrument the internal CONNECT ClientRequest lifecycle and compare destruction ordering. Phase A MUST gates remain unresolved; do not execute later SHOULD tasks out of sequence.
 
 **Validation boundary:** latest previously recorded code CI is run 40443707710 on an earlier code commit. This documentation batch has not been validated by a new CI run and does not prove live OpenChamber/OpenCode acceptance.
+
+
+## Latest session checkpoint — S31–S33 task-card generation (2026-10-27)
+
+- [x] Created `task/sessions/S31-final-security-config-docs-provenance-review.md` — commit `6140972297816e8b73b6ced32f8d5c8a6c7413df`.
+- [x] Created `task/sessions/S32-release-acceptance-endpoint-egress-matrix.md` — commit `76d696a69d3856e18572428b4ee0d73d10508a86`.
+- [x] Created `task/sessions/S33-release-merge-readiness-decision.md` — commit `41e15dc2fac0a5f18b0b11a97a14ed9ac8515243`.
+- [x] Updated `task/SESSION-PLAN.md` to link the S31–S33 detailed cards.
+- [!] This was a documentation-only task-generation batch. No application code, tests, generated bundles, or runtime behavior changed; CI was not run.
+- [!] S31–S33 are prepared, not started or completed. Their acceptance depends on the evidence gathered by the implementation and MUST-gate tasks; release readiness cannot be inferred from these cards.
+- [!] All 33 task IDs now have detailed task cards. The active implementation task remains S01, focused on the pending CONNECT `ClientRequest` lifecycle. S11 MUST gate remains unresolved, so do not begin SHOULD work or claim release readiness.
+
+**Branch-head checkpoint before this log update:** `6c731a9089444292466ea779828e9201d3ec4cc2`. The three card commits and session-plan update are documentation-only; verify the final branch head and all paths before closing this batch.
