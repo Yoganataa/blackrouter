@@ -36,28 +36,10 @@ export type UpstreamRequest = {
 
 class TunnelAgent extends https.Agent {
   private proxyUrl: URL;
-  private pendingConnectRequests = new Set<http.ClientRequest>();
-  private pendingConnectSockets = new Map<http.ClientRequest, Socket>();
 
   constructor(proxyUrlString: string) {
     super({ keepAlive: true });
     this.proxyUrl = new URL(proxyUrlString);
-  }
-
-  override destroy(): void {
-    // Pending CONNECT requests are not registered as Agent sockets yet.
-    // Destroy them explicitly so downstream cancellation can close the proxy
-    // socket even when the proxy never sends its CONNECT response.
-    for (const request of this.pendingConnectRequests) {
-      const socket = this.pendingConnectSockets.get(request) ?? request.socket;
-      request.destroy(new Error('Proxy tunnel was cancelled.'));
-      // ClientRequest.destroy() alone did not close the detached/stalled
-      // CONNECT socket in the local lifecycle regression.
-      socket?.destroy();
-    }
-    this.pendingConnectRequests.clear();
-    this.pendingConnectSockets.clear();
-    return super.destroy();
   }
 
   override createConnection(
@@ -68,15 +50,6 @@ class TunnelAgent extends https.Agent {
     const proxyHost = this.proxyUrl.hostname;
     const targetHost = options.host || 'opencode.ai';
     const targetPort = options.port || 443;
-    let callbackCalled = false;
-    const finish = (error: Error | null, socket: Socket): void => {
-      if (callbackCalled) {
-        if (error) socket?.destroy();
-        return;
-      }
-      callbackCalled = true;
-      callback?.(error, socket);
-    };
 
     const connectHeaders: Record<string, string> = {
       Host: `${targetHost}:${targetPort}`,
@@ -96,24 +69,11 @@ class TunnelAgent extends https.Agent {
       path: `${targetHost}:${targetPort}`,
       headers: connectHeaders,
     });
-    this.pendingConnectRequests.add(connectReq);
-    connectReq.on('socket', (socket: Socket) => {
-      this.pendingConnectSockets.set(connectReq, socket);
-    });
-    connectReq.setTimeout(15_000, () => {
-      const error = new Error(`Proxy CONNECT to ${targetHost}:${targetPort} timed out`);
-      const socket = this.pendingConnectSockets.get(connectReq) ?? connectReq.socket;
-      connectReq.destroy(error);
-      socket?.destroy();
-      this.pendingConnectSockets.delete(connectReq);
-    });
 
     connectReq.on('connect', (res, socket: Socket) => {
-      this.pendingConnectRequests.delete(connectReq);
-      this.pendingConnectSockets.delete(connectReq);
       if (res.statusCode !== 200) {
         socket.destroy();
-        finish(
+        callback?.(
           new Error(`Proxy CONNECT to ${targetHost}:${targetPort} failed with HTTP ${res.statusCode}`),
           socket,
         );
@@ -126,22 +86,18 @@ class TunnelAgent extends https.Agent {
           servername: targetHost,
         },
         () => {
-          finish(null, tlsSocket);
+          callback?.(null, tlsSocket);
         },
       );
 
       tlsSocket.on('error', (err: Error) => {
         socket.destroy();
-        finish(err, socket);
+        callback?.(err, socket);
       });
     });
 
     connectReq.on('error', (err: Error) => {
-      this.pendingConnectRequests.delete(connectReq);
-      const socket = this.pendingConnectSockets.get(connectReq);
-      this.pendingConnectSockets.delete(connectReq);
-      socket?.destroy();
-      finish(err, null as unknown as Socket);
+      callback?.(err, null as unknown as Socket);
     });
 
     connectReq.end();
@@ -826,7 +782,6 @@ export const proxyChatCompletion = (
         if (protocolTransform) answer.pipe(protocolTransform);
     };
     const handleTransportError = (error: Error): void => {
-      target.agent?.destroy();
       // A transport failure marks this pool unusable for the rest of the
       // request. Otherwise a later model fallback could revisit the same
       // broken relay and waste another attempt before exhausting the chain.
@@ -857,7 +812,6 @@ export const proxyChatCompletion = (
     response.on('close', () => {
       if (response.writableEnded) return;
       upstream?.destroy();
-      target.agent?.destroy();
       directAbort?.abort(new Error('Downstream client disconnected.'));
     });
   };
