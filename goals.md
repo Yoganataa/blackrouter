@@ -25,11 +25,11 @@ The target experience is to route requests from OpenChamber/OpenCode and compati
 
 ## Scope Freeze and Change Control
 
-**Scope ID:** `BR-SCOPE-1.1`  
+**Scope ID:** `BR-SCOPE-1.2`  
 **Baseline date:** 2026-10-27  
 **Status:** **FROZEN FOR IMPLEMENTATION**  
-**Change record:** `BR-CHANGE-2026-10-27-PROVIDERS` — user-approved additive scope update for WorkBuddy/Tencent TokenHub, CodeBuddy CN, and Freebuff.  
-**Purpose:** keep the Must-first baseline stable while formally adding three provider integration targets. The approval authorizes evaluation and implementation planning, but provider work must not delay or bypass the FR-M1–FR-M8 acceptance gates. It does not approve undocumented credential extraction, unsafe token handling, or claims that a provider is unlimited/permanently free.
+**Change record:** `BR-CHANGE-2026-10-27-PROVIDERS` — user-approved additive scope update for WorkBuddy/Tencent TokenHub, CodeBuddy CN, and Freebuff; `BR-CHANGE-2026-10-27-LINEAR-TOKEN-SAVER` — user-approved decision to combine 9router-go token saver behavior, RTK, Caveman, and I Have ADHD into one ordered pipeline.  
+**Purpose:** keep the Must-first baseline stable while formally adding three provider integration targets. The provider approval authorizes evaluation and implementation planning, but provider work must not delay or bypass the FR-M1–FR-M8 acceptance gates. The linear token-saver approval defines a single ordered combo and supersedes the prior wishlist status for Caveman and I Have ADHD. Neither approval permits undocumented credential extraction, unsafe token handling, or unsupported performance claims.
 
 The MoSCoW classification below is authoritative. A checkbox in the phased roadmap is not, by itself, approval to implement a feature.
 
@@ -94,7 +94,7 @@ These are approved targets to evaluate and then implement one at a time after th
 #### SHOULD — implement only after MUST is stable
 
 - **FR-S1 — Proxy-pool reliability and operation.** Validate pool selection strategies, health/test status, cooldown/recovery, safe alternate-pool handling, and the corresponding native-panel controls.
-- **FR-S2 — RTK token saver.** Validate tool-output compression with regression cases; preserve errors, exit codes, paths, line numbers, useful diffs and context needed for the next tool call. Keep it independently configurable and substantiate any token-savings claims with repeatable measurements.
+- **FR-S2 — Linear token-saver combo.** Integrate the relevant 9router-go token-saving behavior, RTK tool-output compression, Caveman concise-output transformation, and I Have ADHD scannable-response transformation as one documented, ordered pipeline. Preserve errors, exit codes, paths, line numbers, useful diffs, structured/tool arguments and context needed for the next tool call. The stage order is fixed as: (1) 9router-go token-saver behavior, (2) RTK, (3) Caveman, (4) I Have ADHD. Treat this as one combo with a single top-level enable/disable control; do not expose four unrelated profiles as the primary UX. Each stage must have an explicit input/output contract and regression coverage, and must not corrupt code literals, secrets, tool calls or safety-critical context. Measure token savings with repeatable representative tasks.
 - **FR-S3 — Provider adapter boundary.** Introduce a maintainable provider registry/adapter contract before adding provider-specific branches throughout the gateway. Add providers incrementally, with request/response translation, capabilities, auth requirements, rate-limit behavior and tests.
 - **FR-S4 — Approved provider integrations.** After FR-S3 and after all FR-M1–FR-M8 exit criteria pass, assess and implement CodeBuddy CN, WorkBuddy/Tencent TokenHub, and Freebuff individually under the provider gates above. Use documented authentication and endpoints, distinguish OAuth/account-bound, API-key, limited-free, trial/credit and paid access, and block any integration whose terms, privacy, credential handling or API stability cannot be validated. Do not make a user-supplied API key mandatory for the default OpenCode Zen Free lane.
 - **FR-S5 — Bounded model combos and fallback.** Preserve named model aliases/combos and fallback chains only with explicit limits, cycle protection and useful error reporting.
@@ -104,8 +104,8 @@ These are approved targets to evaluate and then implement one at a time after th
 
 These ideas are intentionally separated from the locked functional requirements. Do not implement them until a future scope-change request promotes them:
 
-- **WL-C1 — Caveman prompt profile**, after checking the exact current official 9router behavior and defining regressions.
-- **WL-C2 — I Have ADHD response profile**, after researching the upstream implementation and semantics. Do not treat it as a rename or assumed equivalent of Ponytail or Caveman.
+- **WL-C1 — Standalone Caveman profile outside the linear combo.** Not included unless a future scope change explicitly requests a separately configurable profile.
+- **WL-C2 — Standalone I Have ADHD profile outside the linear combo.** Not included unless a future scope change explicitly requests a separately configurable profile. Inside FR-S2, these stages are part of the one linear combo and must not be treated as interchangeable.
 - **WL-C3 — Deep 9router UI parity**, decorative/polish work, and additional panel workflows beyond FR-S6.
 - **WL-C4 — Broad provider catalog expansion** beyond the three approved targets, plus unrelated OAuth/account-specific integrations and experimental providers not named in `BR-CHANGE-2026-10-27-PROVIDERS`.
 - **WL-C5 — Convenience automation beyond current core needs**, including extra relay deployment flows and advanced routing controls that are not required by FR-S1.
@@ -188,7 +188,7 @@ When adapting any upstream code, record the upstream commit, source paths, licen
 
 ## 6. Phased Roadmap
 
-Phases are ordered and remain an implementation/backlog guide, subordinate to the scope freeze and MoSCoW classification above. Complete MUST requirements first; begin SHOULD items only after MUST exit criteria pass; COULD/WON'T items are not authorized by this roadmap and require the change-control process.
+Phases are ordered and remain an implementation/backlog guide, subordinate to the scope freeze and MoSCoW classification above. Complete MUST requirements first; begin SHOULD items only after MUST exit criteria pass; COULD/WON'T items are not authorized by this roadmap and require the change-control process. The linear token-saver combo in FR-S2 is an explicit scope decision under BR-SCOPE-1.2.
 
 ### Phase 0 — Audit and Establish a Reproducible Baseline
 
@@ -234,42 +234,34 @@ Phases are ordered and remain an implementation/backlog guide, subordinate to th
 
 **Exit criteria:** each enabled provider has a tested adapter and clear authentication/usage requirements; adding a provider does not destabilize existing providers.
 
-### Phase 3 — Token Saver
+### Phase 3 — Linear Token-Saver Combo (FR-S2, SHOULD)
 
-Priority is governed by MoSCoW: RTK is **SHOULD** (FR-S2). Caveman and I Have ADHD are **COULD wishlist items** (WL-C1 and WL-C2), not committed requirements in the frozen scope. The current project documents RTK and Caveman/Ponytail; do not assume Ponytail and I Have ADHD are equivalent. Researching exact upstream behavior is required before a future change request can promote either profile.
+The four components are one sequential combo, not four unrelated features or four primary UI toggles. Pipeline order is fixed: **9router-go token-saver behavior → RTK → Caveman → I Have ADHD**. The combo has one top-level enable/disable control. Internally, each stage must retain a clear contract and test boundary so failures can be isolated without changing the defined order.
 
-#### 3.1 RTK — tool-output compression
+#### 3.1 Establish source behavior and provenance
 
-- [ ] Validate the existing RTK port against the pinned official source and regression tests.
-- [ ] Test the filters used for git status/diff/log, search, file listing, numbered reads, build output, repeated logs, and large command output.
-- [ ] Preserve errors, exit status, paths, line numbers, meaningful diffs, and details needed by subsequent tool calls.
-- [ ] Preserve compatibility exports and existing call signatures used by BlackRouter.
-- [ ] Measure token savings on representative coding tasks rather than claiming a universal percentage.
-- [ ] Make RTK independently configurable and inspectable for debugging.
+- [ ] Inspect the current 9router-go implementation and identify the specific token-saving behavior to adapt; do not port its entire Go service or dashboard.
+- [ ] Pin upstream revisions, paths, licenses and local modifications for 9router-go, RTK, Caveman and I Have ADHD behavior.
+- [ ] Research exact current official 9router behavior for Caveman and exact I Have ADHD semantics; do not equate I Have ADHD with Ponytail or Caveman.
+- [ ] Define the stage input/output contract and failure behavior before composing the pipeline.
 
-#### 3.2 Caveman — concise output profile
+#### 3.2 Implement the linear stages in order
 
-- [ ] Verify the exact official 9router behavior and prompt placement.
-- [ ] Keep it independent from RTK, configurable, and off by default until validated.
-- [ ] Reduce unnecessary prose without removing required steps, constraints, code, diagnostics, or safety-relevant information.
-- [ ] Test coding, debugging, explanation, and multi-step tasks.
+- [ ] Stage 1 — adapt only the relevant 9router-go token-saver behavior.
+- [ ] Stage 2 — apply RTK tool-output compression, preserving errors, exit status, paths, line numbers, meaningful diffs and downstream-useful context.
+- [ ] Stage 3 — apply Caveman concise-output transformation without removing required steps, constraints, code, diagnostics or safety-relevant information.
+- [ ] Stage 4 — apply I Have ADHD scannable-response transformation, preserving technical completeness and context.
+- [ ] Keep the order deterministic; define whether a stage can no-op safely and how errors are surfaced. Do not silently skip a failed stage if doing so could corrupt or lose required context.
+- [ ] Expose one top-level combo toggle and document the fixed stage order; do not make independent stage toggles the primary configuration model.
 
-#### 3.3 I Have ADHD — scannable response profile
+#### 3.3 Regression and measurement
 
-- [ ] Research the exact current upstream implementation and intended behavior before designing this profile.
-- [ ] Implement as a separate toggle/profile, not as a rename of Ponytail or Caveman.
-- [ ] Prefer concise, clearly prioritized, scannable instructions while preserving technical completeness and context.
-- [ ] Add tests/examples for technical tasks and long multi-step workflows.
+- [ ] Add per-stage and end-to-end regression tests for coding, debugging, long outputs, tool calls, and multi-step workflows.
+- [ ] Preserve code literals, structured arguments, file paths, tool identifiers, secrets, error messages, exit codes, diffs and safety-critical context.
+- [ ] Compare output quality and token counts against the unmodified baseline on repeatable representative tasks.
+- [ ] Report measured results and methodology; do not claim universal savings percentages.
 
-#### Shared acceptance criteria
-
-- [ ] Profiles can be toggled independently.
-- [ ] Processing order and interactions are documented.
-- [ ] Code literals, file paths, tool identifiers, structured arguments, secrets, and safety-critical context are not corrupted.
-- [ ] Before/after regression tests exist.
-- [ ] Claims about savings are supported by repeatable measurements.
-
-**Exit criteria for the current frozen scope:** RTK meets FR-S2 acceptance criteria and its savings claims are evidence-based. Caveman and I Have ADHD remain out of scope unless separately promoted through change control.
+**Exit criteria:** all four stages run in the specified linear order behind one combo control; provenance is recorded; stage and end-to-end tests pass; repeatable measurements show the actual impact without unacceptable loss of context or correctness.
 
 ### Phase 4 — Proxy Pools and Egress Reliability
 
