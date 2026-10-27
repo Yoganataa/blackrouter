@@ -275,7 +275,20 @@ describe('HTTP CONNECT tunnel lifecycle', () => {
       });
       agent.destroy();
       expect(error.message).toContain('Proxy CONNECT timed out after 50ms');
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise<void>((resolve, reject) => {
+        if (proxySocketClosed) {
+          resolve();
+          return;
+        }
+        const timer = setTimeout(() => reject(new Error('Proxy socket remained open after CONNECT timeout.')), 1_000);
+        const poll = setInterval(() => {
+          if (proxySocketClosed) {
+            clearTimeout(timer);
+            clearInterval(poll);
+            resolve();
+          }
+        }, 5);
+      });
       expect(proxySocketClosed).toBe(true);
     } finally {
       for (const socket of proxySockets) socket.destroy();
