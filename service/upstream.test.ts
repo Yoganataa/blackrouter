@@ -247,7 +247,7 @@ describe('where a call goes', () => {
 describe('HTTP CONNECT tunnel lifecycle', () => {
   test('fails a stalled CONNECT handshake and closes the proxy socket', async () => {
     let proxySocketClosed = false;
-    const proxySockets = new Set<import('node:net').Socket>();
+    const proxySockets = new Set<import('node:stream').Duplex>();
     const proxy = http.createServer();
     proxy.on('connect', (_request, socket) => {
       proxySockets.add(socket);
