@@ -43,7 +43,7 @@ export const noModels = (message: string): RouterError => new RouterError('no-mo
  */
 export const redactDiagnosticText = (value: string): string =>
   value
-    .replace(/([a-z][a-z\\d+.-]*:\\/\\/)[^/@\\s]+@/gi, '$1[REDACTED]@')
-    .replace(/([?&](?:token|secret|password|passwd|auth|api[_-]?key|access[_-]?token|refresh[_-]?token|signature|sig)=)[^&#\\s]*/gi, '$1[REDACTED]')
-    .replace(/(\\bBearer\\s+)[A-Za-z0-9._~+\\/-]+=*/gi, '$1[REDACTED]')
-    .replace(/(\\bx-api-key\\s*[:=]\\s*)[^\\s,;]+/gi, '$1[REDACTED]');
+    .replace(/([a-z][a-z\d+.-]*:\/\/)[^/@\s]+@/gi, '$1[REDACTED]@')
+    .replace(/([?&](?:token|secret|password|passwd|auth|api[_-]?key|access[_-]?token|refresh[_-]?token|signature|sig)=)[^&#\s]*/gi, '$1[REDACTED]')
+    .replace(/(\bBearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, '$1[REDACTED]')
+    .replace(/(\bx-api-key\s*[:=]\s*)[^\s,;]+/gi, '$1[REDACTED]');
