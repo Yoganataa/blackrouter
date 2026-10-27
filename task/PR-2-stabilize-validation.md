@@ -230,3 +230,18 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 **Evidence:** restored-test CI run [40436277855](https://github.com/Yoganataa/blackrouter/actions/runs/40436277855) succeeded. The previous failing diagnostic remains [40436208858](https://github.com/Yoganataa/blackrouter/actions/runs/40436208858); it is retained as evidence of the failed experiment, not acceptance.
 
 **Next action:** run the isolated socket-event diagnostic. Keep MUST-first scope and do not start RTK/SHOULD expansion.
+
+## Latest session checkpoint (2026-10-27, CONNECT socket ownership reproduced)
+
+**Phase:** Isolated the pending CONNECT socket ownership behavior without modifying production code.
+
+- [x] Ran a raw Node HTTP CONNECT diagnostic: destroying the standalone CONNECT `ClientRequest` closed the client-side socket and emitted `end` at the proxy-side socket; the proxy-side `close` event was not a reliable assertion because TCP can half-close.
+- [x] Ran a second reproduction using the same essential shape as `TunnelAgent`: an HTTPS target request uses a custom `https.Agent`, whose `createConnection()` creates a separate CONNECT `ClientRequest` and returns the asynchronous `null` placeholder.
+- [x] Confirmed that destroying only the HTTPS target request did **not** close the pending CONNECT socket within the observation window. Destroying the custom tunnel agent did close it and produced CONNECT request `ECONNRESET`/close events. This narrows the issue to ownership/cleanup of the separately-created CONNECT request, rather than proving the prior proxy-side close assertion itself was sound.
+- [x] Kept the repository production implementation unchanged in this diagnostic phase; no test criteria were weakened and no experimental changes were committed.
+- [ ] Next task: make `TunnelAgent` retain and cancel pending CONNECT requests/sockets when the agent is destroyed, and add an explicit CONNECT handshake timeout. The regression should assert client-side socket/request closure and bounded completion, not require the remote server to emit `close` immediately after a TCP half-close.
+- [ ] Verify timeout and downstream cancellation separately in CI before marking FR-M6 complete.
+
+**Diagnostic method:** local Node v22.16.0 scripts using a loopback HTTP proxy that accepts CONNECT but does not answer. The scripts were run in `/tmp` and are not repository files.
+
+**Next action:** implement a narrowly scoped `TunnelAgent` lifecycle fix and deterministic regression tests. If the test fails, retain the failure as evidence and revert unverified production changes rather than relaxing assertions.
