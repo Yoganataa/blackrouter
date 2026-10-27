@@ -4138,6 +4138,22 @@ var createConfigStore = (file = defaultConfigPath()) => ({
 import { createHash } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
+
+// service/errors.ts
+class RouterError extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "RouterError";
+    this.code = code;
+  }
+}
+var badRequest = (message) => new RouterError("bad-request", message);
+var configUnreadable = (message) => new RouterError("config-unreadable", message);
+var upstreamError = (message) => new RouterError("upstream", message);
+var redactDiagnosticText = (value) => value.replace(/([a-z][a-z\d+.-]*:\/\/)[^/@\s]+@/gi, "$1[REDACTED]@").replace(/([?&](?:token|secret|password|passwd|auth|api[_-]?key|access[_-]?token|refresh[_-]?token|signature|sig)=)[^&#\s]*/gi, "$1[REDACTED]").replace(/(\bBearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[REDACTED]").replace(/(\bx-api-key\s*[:=]\s*)[^\s,;]+/gi, "$1[REDACTED]");
+
+// service/deployers.ts
 var CLOUDFLARE_WORKER_CODE = `
 export default {
   async fetch(request, env, ctx) {
@@ -4173,7 +4189,7 @@ export default {
         headers: response.headers,
       });
     } catch (error) {
-      return new Response(JSON.stringify({ error: error.message }), {
+      return new Response(JSON.stringify({ error: "Relay fetch failed" }), {
         status: 502,
         headers: { "content-type": "application/json" },
       });
@@ -4215,7 +4231,7 @@ export default async function handler(req) {
       headers: response.headers,
     });
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(JSON.stringify({ error: "Relay fetch failed" }), {
       status: 502,
       headers: { "content-type": "application/json" },
     });
@@ -4257,7 +4273,7 @@ Deno.serve(async (request) => {
       headers: response.headers,
     });
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(JSON.stringify({ error: "Relay fetch failed" }), {
       status: 502,
       headers: { "content-type": "application/json" },
     });
@@ -4329,7 +4345,7 @@ exports.handler = async (event) => {
     return {
       statusCode: 502,
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ error: error.message || "Relay fetch failed" }),
+      body: JSON.stringify({ error: "Relay fetch failed" }),
     };
   }
 };
@@ -4360,7 +4376,7 @@ async function testRelay(relayUrl, timeoutMs = 1e4, fetchImpl = fetch) {
       ok: false,
       status: 500,
       elapsedMs: Date.now() - startedAt,
-      error: errorMsg
+      error: redactDiagnosticText(errorMsg)
     };
   } finally {
     clearTimeout(timer);
@@ -4424,7 +4440,7 @@ async function testForwardProxy(proxyUrlString, targetHost = "opencode.ai", targ
           ok: false,
           status: 502,
           elapsedMs: Date.now() - startedAt,
-          error: err instanceof Error ? err.message : String(err)
+          error: redactDiagnosticText(err instanceof Error ? err.message : String(err))
         });
       });
       req.end();
@@ -4437,7 +4453,7 @@ async function testForwardProxy(proxyUrlString, targetHost = "opencode.ai", targ
         ok: false,
         status: 400,
         elapsedMs: Date.now() - startedAt,
-        error: err instanceof Error ? err.message : String(err)
+        error: redactDiagnosticText(err instanceof Error ? err.message : String(err))
       });
     }
   });
@@ -4780,20 +4796,6 @@ async function deployNetlify(input, fetchImpl = fetch, maxPollMs = 120000) {
     proxyUrl: relayUrl
   };
 }
-
-// service/errors.ts
-class RouterError extends Error {
-  code;
-  constructor(code, message) {
-    super(message);
-    this.name = "RouterError";
-    this.code = code;
-  }
-}
-var badRequest = (message) => new RouterError("bad-request", message);
-var configUnreadable = (message) => new RouterError("config-unreadable", message);
-var upstreamError = (message) => new RouterError("upstream", message);
-var redactDiagnosticText = (value) => value.replace(/([a-z][a-z\d+.-]*:\/\/)[^/@\s]+@/gi, "$1[REDACTED]@").replace(/([?&](?:token|secret|password|passwd|auth|api[_-]?key|access[_-]?token|refresh[_-]?token|signature|sig)=)[^&#\s]*/gi, "$1[REDACTED]").replace(/(\bBearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[REDACTED]").replace(/(\bx-api-key\s*[:=]\s*)[^\s,;]+/gi, "$1[REDACTED]");
 
 // service/opencode-config.ts
 import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
