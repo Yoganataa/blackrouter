@@ -306,3 +306,18 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - [x] Updated `task/SESSION-PLAN.md` to split source audit, each stage, and end-to-end validation into separate sessions S19–S24; later task IDs shifted to S25–S33.
 - [ ] Do not begin implementation until Phase A MUST gates pass. Each stage requires source/provenance review and regression tests; final acceptance requires repeatable output-quality and token-count measurements.
 - [ ] The scope/documentation change does not constitute implementation or test evidence for the combo.
+
+
+## Detailed task-card generation — batch 1 (2026-10-27)
+
+**Purpose:** prepare the next Phase A cards without starting future tasks or changing implementation status.
+
+- [x] Created `task/sessions/S02-connect-cleanup-timeout-fix.md` — commit `ed8d76dc36e4c59192b450edd867bba5baede652`.
+- [x] Created `task/sessions/S03-downstream-cancellation.md` — commit `9447029b93a94b4b267dec17b3b5f162391df553`.
+- [x] Created `task/sessions/S04-egress-policy-audit.md` — commit `27abb63a974d61fbc92890adf81b3609c1464650`.
+- [x] Created `task/sessions/S05-response-stream-contract-audit.md` — commit `759a7e07c855ec83e5e10d008889096a9df08924`.
+- [x] Updated `task/SESSION-PLAN.md` to index these cards while preserving S01 as the active task.
+- [!] No code changes, tests, or runtime validations were performed in this documentation-only batch. The latest referenced code CI remains [40443707710](https://github.com/Yoganataa/blackrouter/actions/runs/40443707710), which predates these documentation commits and is not validation of the current documentation head.
+- [ ] S01 remains the only active task. S02 is dependent on S01 evidence; S03–S05 remain not started. Do not execute them out of order.
+
+**Next task:** continue S01 diagnostic work. Generate the next card batch after this batch is reviewed or as the user requests.
