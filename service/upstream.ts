@@ -72,18 +72,26 @@ class TunnelAgent extends https.Agent {
       headers: connectHeaders,
     });
     let settled = false;
-    const connectTimer = setTimeout(() => {
-      const error = new Error(`Proxy CONNECT timed out after ${this.connectTimeoutMs}ms`);
-      connectReq.socket?.destroy(error);
-      connectReq.destroy(error);
-    }, this.connectTimeoutMs);
+    let connectTimer: ReturnType<typeof setTimeout> | null = null;
+    const startConnectTimer = (): void => {
+      if (settled || connectTimer) return;
+      connectTimer = setTimeout(() => {
+        const error = new Error(`Proxy CONNECT timed out after ${this.connectTimeoutMs}ms`);
+        connectReq.socket?.destroy(error);
+        connectReq.destroy(error);
+      }, this.connectTimeoutMs);
+    };
+    connectReq.on('socket', (socket) => {
+      if (socket.connecting) socket.once('connect', startConnectTimer);
+      else startConnectTimer();
+    });
     const finish = (error: Error | null, socket: Socket): void => {
       if (settled) {
         if (error) socket.destroy();
         return;
       }
       settled = true;
-      clearTimeout(connectTimer);
+      if (connectTimer) clearTimeout(connectTimer);
       callback?.(error, socket);
     };
 
