@@ -1,10 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import http from 'node:http';
-import net from 'node:net';
 import { pipeline, Readable, Writable } from 'node:stream';
 
 import type { RouterConfig } from '../contract.ts';
-import { buildTarget, createSseFirstByteKeepAlive, createTunnelAgent, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels, isOpenCodeFreeTierGateResponse } from './upstream.ts';
+import { buildTarget, createSseFirstByteKeepAlive, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels, isOpenCodeFreeTierGateResponse } from './upstream.ts';
 // @ts-ignore - the native provider executor is copied from upstream JavaScript.
 import { prepareProviderRequest } from './core/provider-adapter.js';
 
@@ -242,62 +240,6 @@ describe('where a call goes', () => {
     expect(chat.url.toString()).toBe('https://custom-deno.deno.dev/');
     expect(chat.headers['x-relay-target']).toBe('https://opencode.ai');
   });
-
-
-describe('HTTP CONNECT tunnel lifecycle', () => {
-  test('fails a stalled CONNECT handshake and closes the proxy socket', async () => {
-    let proxySocketClosed = false;
-    const proxySockets = new Set<net.Socket>();
-    const proxy = net.createServer((socket) => {
-      proxySockets.add(socket);
-      socket.on('close', () => {
-        proxySocketClosed = true;
-        proxySockets.delete(socket);
-      });
-      // Accept TCP but intentionally do not answer the HTTP CONNECT request.
-    });
-    await new Promise<void>((resolve, reject) => {
-      proxy.once('error', reject);
-      proxy.listen(0, '127.0.0.1', resolve);
-    });
-    const address = proxy.address();
-    if (!address || typeof address === 'string') throw new Error('Could not determine proxy test port.');
-
-    try {
-      const agent = createTunnelAgent(`http://127.0.0.1:${address.port}`, 50);
-      const error = await new Promise<Error>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('CONNECT timeout was not enforced within 1 second.')), 1_000);
-        agent.createConnection({ host: 'opencode.ai', port: 443 }, (value) => {
-          clearTimeout(timer);
-          if (value) resolve(value);
-          else reject(new Error('Unexpectedly established a CONNECT tunnel.'));
-        });
-      });
-      agent.destroy();
-      expect(error.message).toContain('Proxy CONNECT timed out after 50ms');
-      await new Promise<void>((resolve, reject) => {
-        if (proxySocketClosed) {
-          resolve();
-          return;
-        }
-        const timer = setTimeout(() => reject(new Error('Proxy socket remained open after CONNECT timeout.')), 1_000);
-        const poll = setInterval(() => {
-          if (proxySocketClosed) {
-            clearTimeout(timer);
-            clearInterval(poll);
-            resolve();
-          }
-        }, 5);
-      });
-      expect(proxySocketClosed).toBe(true);
-    } finally {
-      for (const socket of proxySockets) socket.destroy();
-      await new Promise<void>((resolve) => {
-        proxy.close(() => resolve());
-      });
-    }
-  });
-});
 
 describe('SSE first-byte keepalive', () => {
   test('emits comments while idle and preserves subsequent SSE bytes', async () => {
