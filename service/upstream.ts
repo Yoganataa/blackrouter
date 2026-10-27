@@ -797,6 +797,8 @@ export const proxyChatCompletion = (
         if (protocolTransform) answer.pipe(protocolTransform);
     };
     const handleTransportError = (error: Error): void => {
+      // A downstream disconnect owns cancellation; never advance fallback or write an error then.
+      if (response.destroyed || response.writableEnded) return;
       // A transport failure marks this pool unusable for the rest of the
       // request. Otherwise a later model fallback could revisit the same
       // broken relay and waste another attempt before exhausting the chain.
@@ -825,6 +827,9 @@ export const proxyChatCompletion = (
       upstream.end(upstreamBody);
     }
     response.on('close', () => {
+      // buildTarget creates a per-attempt tunnel agent; cancellation must reach its
+      // pending CONNECT ClientRequest as well as the outer HTTP request.
+      target.agent?.destroy();
       if (response.writableEnded) return;
       upstream?.destroy();
       directAbort?.abort(new Error('Downstream client disconnected.'));

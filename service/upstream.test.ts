@@ -4,7 +4,7 @@ import https from 'node:https';
 import { pipeline, Readable, Writable } from 'node:stream';
 
 import type { RouterConfig } from '../contract.ts';
-import { buildTarget, createTunnelAgent, createSseFirstByteKeepAlive, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels, isOpenCodeFreeTierGateResponse } from './upstream.ts';
+import { buildTarget, createTunnelAgent, createSseFirstByteKeepAlive, proxyChatCompletion, fetchModelIds, freeModelIds, hasSameUpstreamOrigin, humanizeModelId, isFreeModel, isOpenCodeUpstream, toModels, isOpenCodeFreeTierGateResponse } from './upstream.ts';
 // @ts-ignore - the native provider executor is copied from upstream JavaScript.
 import { prepareProviderRequest } from './core/provider-adapter.js';
 
@@ -242,6 +242,119 @@ describe('where a call goes', () => {
     expect(chat.url.toString()).toBe('https://custom-deno.deno.dev/');
     expect(chat.headers['x-relay-target']).toBe('https://opencode.ai');
   });
+
+describe('downstream cancellation lifecycle', () => {
+  const startServer = async (server: http.Server): Promise<{ url: string; close: () => Promise<void> }> => {
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Fixture server did not bind a TCP port.');
+    return {
+      url: `http://127.0.0.1:${address.port}`,
+      close: async () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
+    };
+  };
+
+  const proxy = (upstreamUrl: string, response: http.ServerResponse) => proxyChatCompletion(
+    config({ upstream: upstreamUrl }),
+    's03-test-session',
+    { body: JSON.stringify({ model: 'fixture-model', messages: [{ role: 'user', content: 'hello' }] }), stream: true, model: 'fixture-model' },
+    response,
+  );
+
+  test('cancels an upstream request while waiting for the upstream response', async () => {
+    let upstreamRequestClosedResolve!: () => void;
+    const upstreamRequestClosed = new Promise<void>((resolve) => { upstreamRequestClosedResolve = resolve; });
+    let receivedResolve!: () => void;
+    const received = new Promise<void>((resolve) => { receivedResolve = resolve; });
+    const upstream = http.createServer((request) => {
+      request.on('close', () => upstreamRequestClosedResolve());
+      request.on('data', () => {});
+      request.on('end', () => receivedResolve());
+      // Do not answer: the client should cancel while this response is pending.
+    });
+    const up = await startServer(upstream);
+    const router = http.createServer((_request, response) => proxy(up.url + '/v1', response));
+    const rt = await startServer(router);
+    const client = http.request(rt.url + '/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' } });
+    client.on('error', () => {});
+    try {
+      client.end(JSON.stringify({ model: 'fixture-model', messages: [{ role: 'user', content: 'hello' }], stream: true }));
+      await Promise.race([received, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Upstream did not receive the request in time.')), 500))]);
+      client.destroy();
+      await Promise.race([upstreamRequestClosed, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Upstream request was not closed after downstream cancellation.')), 500))]);
+      expect(client.destroyed).toBe(true);
+    } finally {
+      client.destroy();
+      router.closeAllConnections();
+      upstream.closeAllConnections();
+      await Promise.all([rt.close(), up.close()]);
+    }
+  });
+
+  test('cancels an active upstream response stream when the downstream disconnects', async () => {
+    let upstreamResponseClosedResolve!: () => void;
+    const upstreamResponseClosed = new Promise<void>((resolve) => { upstreamResponseClosedResolve = resolve; });
+    const upstream = http.createServer((request, response) => {
+      request.resume();
+      request.on('end', () => {
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        response.write('data: first\\n\\n');
+        response.on('close', () => upstreamResponseClosedResolve());
+      });
+    });
+    const up = await startServer(upstream);
+    const router = http.createServer((_request, response) => proxy(up.url + '/v1', response));
+    const rt = await startServer(router);
+    const client = http.request(rt.url + '/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' } });
+    client.on('error', () => {});
+    try {
+      const firstChunk = new Promise<void>((resolve, reject) => {
+        client.on('response', (response) => {
+          response.on('data', () => resolve());
+          response.on('error', reject);
+        });
+      });
+      client.end(JSON.stringify({ model: 'fixture-model', messages: [{ role: 'user', content: 'hello' }], stream: true }));
+      await Promise.race([firstChunk, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('No first upstream stream chunk arrived.')), 500))]);
+      client.destroy();
+      await Promise.race([upstreamResponseClosed, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Upstream response stream remained open after downstream cancellation.')), 500))]);
+      expect(client.destroyed).toBe(true);
+    } finally {
+      client.destroy();
+      router.closeAllConnections();
+      upstream.closeAllConnections();
+      await Promise.all([rt.close(), up.close()]);
+    }
+  });
+
+  test('preserves normal completion when no cancellation occurs', async () => {
+    const upstream = http.createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ id: 'fixture', choices: [] }));
+    });
+    const up = await startServer(upstream);
+    const router = http.createServer((_request, response) => proxy(up.url + '/v1', response));
+    const rt = await startServer(router);
+    try {
+      const result = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const request = http.request(rt.url + '/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' } }, (response) => {
+          let body = '';
+          response.setEncoding('utf8');
+          response.on('data', (chunk) => { body += chunk; });
+          response.on('end', () => resolve({ status: response.statusCode ?? 0, body }));
+        });
+        request.on('error', reject);
+        request.end(JSON.stringify({ model: 'fixture-model', messages: [{ role: 'user', content: 'hello' }], stream: true }));
+      });
+      expect(result.status).toBe(200);
+      expect(JSON.parse(result.body).id).toBe('fixture');
+    } finally {
+      router.closeAllConnections();
+      upstream.closeAllConnections();
+      await Promise.all([rt.close(), up.close()]);
+    }
+  });
+});
 
 describe('HTTP CONNECT lifecycle', () => {
   const createStalledProxy = async (responseStatus?: number) => {

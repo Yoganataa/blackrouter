@@ -468,3 +468,13 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - **First CI attempt:** run 40513987493 failed only type-check due a fixture typing mismatch (HTTP CONNECT event socket is Duplex); corrected by d3df3845038c6d7dab6c242ead777e8990c9b5ad. Run 40514106851 then passed with 157 tests; added HTTP 407 coverage afterward and final run 40514257385 passed 158 tests.
 - **Residual risk:** no dedicated successful TLS-through-proxy end-to-end integration test; successful handoff is covered by the shared once-only settlement/cleanup implementation but only code-reviewed. No live OpenChamber host loading or real OpenCode Zen inference is claimed. S02 completion does not mean FR-M6 or PR #2's full MUST gate is complete.
 - **Next permitted task:** S03 — downstream cancellation lifecycle, as a separate session. Do not start SHOULD work before S11.
+
+
+## S03 session checkpoint — 2026-10-28
+
+- Task/scope: S03 — Downstream cancellation lifecycle; FR-M6; BR-SCOPE-1.2. S02 was complete before this session.
+- Starting branch HEAD: bb223b85bdf4ad9ed7cc45dcae641a884172b2f1 (PR #2 open/unmerged).
+- Source finding: proxyChatCompletion already destroyed the outer upstream request and aborted native direct fetch when the downstream response closed prematurely, but it did not destroy the per-attempt `target.agent`. Because buildTarget creates a new HTTP CONNECT TunnelAgent for each HTTP proxy attempt, a pending CONNECT ClientRequest could outlive downstream cancellation. The transport error handler could also enter fallback handling after the response was already destroyed.
+- Changes: `service/upstream.ts` now destroys the per-attempt agent on response close and guards transport error handling against a destroyed/ended downstream response. `service/upstream.test.ts` adds local upstream/router integration tests for cancellation while waiting for upstream response, cancellation during active response streaming, and normal completion.
+- Validation: pending current-head CI; no local Bun test/type-check/build claim.
+- Status: ACTIVE until CI verifies type-check, focused tests, full suite and build. Next task remains S03 until exit criteria are evidenced.

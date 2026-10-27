@@ -1,6 +1,6 @@
 # Session S03 — Downstream Cancellation Lifecycle
 
-**Status:** Not started  
+**Status:** Active  
 **Scope source:** `goals.md` on `main`, `BR-SCOPE-1.2`  
 **Related requirement:** FR-M6  
 **Dependency:** S02 must be completed or its remaining limitation explicitly documented.  
@@ -40,4 +40,4 @@ Verify that cancellation or disconnect of the downstream client reaches the upst
 
 ## Session report
 
-Not started. Do not mark complete until the criteria above have evidence.
+Implementation and local regression tests added; current-head CI is pending. Do not mark complete until the criteria above have evidence.
