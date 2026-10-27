@@ -195,3 +195,21 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 **Session changes:** task log only; no source changes and no tests rerun in this static-audit phase.
 
 **Next action:** investigate the remaining FR-M6 gap with a minimal lower-level CONNECT socket-lifecycle reproduction, keeping the production transport baseline unchanged until the reproduction reliably demonstrates the failure and a fix can be regression-tested.
+
+
+## Latest session checkpoint (2026-10-27, stalled CONNECT socket lifecycle reproduction)
+
+**Phase:** Investigate FR-M6 pending CONNECT cancellation without weakening acceptance criteria.
+
+- [x] Added a local HTTP proxy fixture that accepts CONNECT and deliberately never responds; the test waits for the proxy-side socket to close after destroying the tunnel agent and upstream request.
+- [x] The reproduction is deterministic in CI: the socket-close assertion timed out after 1 second. Type-check passed; the run reached 155 passing tests and 1 failing lifecycle test. This is evidence of the unresolved socket lifecycle, not a passing acceptance result.
+- [x] Tried tracking pending CONNECT requests and sockets, explicitly destroying the CONNECT request/socket, and retaining the request until CONNECT completion. The proxy-side socket assertion still failed.
+- [x] Reverted the unverified production transport changes and temporary lifecycle test to the last CI-validated baseline. The failing experimental code is not left on the branch.
+- [!] Root cause remains unresolved. The current evidence does not establish whether the problem is request/socket ownership, the proxy fixture's socket observation, or another Node HTTP CONNECT lifecycle behavior. Do not claim timeout/cancellation fixed.
+- [ ] Next: create a minimal raw TCP/HTTP CONNECT diagnostic that records client-side socket assignment, server-side socket close/end, and request/agent lifecycle events separately. Establish which exact socket remains open before changing production code again.
+
+**Changes in this phase:** experimental source/test changes were reverted. Task log only is retained as the session checkpoint; the validated transport implementation remains unchanged.
+
+**Evidence:** failed diagnostic run [40436208858](https://github.com/Yoganataa/blackrouter/actions/runs/40436208858). Earlier validated baseline run [40432289509](https://github.com/Yoganataa/blackrouter/actions/runs/40432289509) remains the last known passing CI run for the restored implementation; a fresh CI run is expected after the reverts.
+
+**Next action:** isolate raw TCP socket events and ownership; do not begin SHOULD work or mark FR-M6 complete until a regression test proves socket cleanup.
