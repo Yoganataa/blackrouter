@@ -134,6 +134,38 @@ describe('model fallback request path', () => {
         return;
       }
 
+      if (request.url === '/pool-network-failure-test') {
+        await readRequestBody(request);
+        const address = server.address();
+        if (!address || typeof address === 'string') {
+          response.writeHead(500);
+          response.end('No listener address');
+          return;
+        }
+        poolAttempts.length = 0;
+        const pools: ProxyPool[] = [
+          { id: 'network-a', name: 'Network A', type: 'cloudflare', proxyUrl: `http://127.0.0.1:${address.port}/network-a`, isActive: true },
+          { id: 'network-b', name: 'Network B', type: 'cloudflare', proxyUrl: `http://127.0.0.1:${address.port}/network-b`, isActive: true },
+        ];
+        proxyChatCompletion(
+          { ...configFor(address.port), proxyPools: pools },
+          'ses_network_failure_test',
+          {
+            model: 'primary-model',
+            stream: true,
+            body: JSON.stringify({
+              model: 'primary-model',
+              stream: true,
+              messages: [{ role: 'user', content: 'Reply with OK.' }],
+            }),
+          },
+          response,
+          pools[0],
+          () => {},
+        );
+        return;
+      }
+
       if (request.url === '/pool-gate-test') {
         await readRequestBody(request);
         const address = server.address();
@@ -163,6 +195,46 @@ describe('model fallback request path', () => {
           pools[0],
           () => {},
         );
+        return;
+      }
+
+      if (request.url === '/network-a') {
+        poolAttempts.push('network-a');
+        // Simulate a relay whose TCP connection is accepted but then drops.
+        request.socket.destroy();
+        return;
+      }
+
+      if (request.url === '/network-b') {
+        const body = JSON.parse(await readRequestBody(request)) as { model?: string };
+        const model = body.model ?? '';
+        poolAttempts.push(`network-b:${model}`);
+        if (model === 'primary-model') {
+          response.writeHead(503, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ error: { message: 'Network B temporarily unavailable for primary model' } }));
+          return;
+        }
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        response.end([
+          'data: ' + JSON.stringify({
+            id: 'chatcmpl-network-fallback',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model,
+            choices: [{ index: 0, delta: { content: 'OK' }, finish_reason: null }],
+          }),
+          '',
+          'data: ' + JSON.stringify({
+            id: 'chatcmpl-network-fallback',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model,
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          }),
+          '',
+          'data: [DONE]',
+          '',
+        ].join('\\n'));
         return;
       }
 
@@ -311,6 +383,26 @@ describe('model fallback request path', () => {
     expect(response.headers.get('x-blackrouter-fallback-used')).toBe('true');
     expect(body).toContain('OK');
     expect(requestedModels).toEqual(['primary-model', 'fallback-model']);
+  });
+
+  test('does not revisit a relay after a transport failure during model fallback', async () => {
+    poolAttempts.length = 0;
+    const response = await fetch(`${baseUrl}/pool-network-failure-test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: true }),
+    });
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-blackrouter-resolved-pool')).toBe('Network B');
+    expect(response.headers.get('x-blackrouter-resolved-model')).toBe('fallback-model');
+    expect(body).toContain('OK');
+    expect(poolAttempts).toEqual([
+      'network-a',
+      'network-b:primary-model',
+      'network-b:fallback-model',
+    ]);
   });
 
   test('does not bypass configured relay pools after OpenCode rejects every pool', async () => {
