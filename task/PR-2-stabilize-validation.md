@@ -3,8 +3,8 @@
 **Repository:** `Yoganataa/blackrouter`  
 **Working branch:** `feat/port-9router-rtk-upstream`  
 **Pull request:** [#2 — feat: port native core and upstream free-tier fixes](https://github.com/Yoganataa/blackrouter/pull/2)  
-**Latest source commit verified by CI:** `ecfe57b16aa5534a57a74823f0a5319ebeb0f466`  
-**Latest CI-generated bundle commit:** `e2152ed` (service bundle synchronized)
+**Latest source commit verified by CI:** `25d86f24ace65d5f74e12d6b028d47867e49eba9`  
+**Latest CI-generated bundle commit:** `79d30d8` (service bundle synchronized)
 
 ## Status legend
 
@@ -87,25 +87,26 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 
 ## Latest session checkpoint (2026-10-27)
 
-**Phase:** Deployment/relay diagnostic credential leakage — fixed and CI-verified. Transport lifecycle validation remains open.
+**Phase:** Initial transport lifecycle audit — one pre-transport disconnect race fixed; complete lifecycle validation remains open.
 
-- [x] Proxy and relay connectivity-test errors are passed through `redactDiagnosticText()`.
-- [x] Cloudflare, Deno, and Netlify generated relay handlers return generic `Relay fetch failed` errors instead of raw exception messages that could leak credential-bearing URLs.
-- [x] Added tests proving relay connectivity errors redact URL username/password/query secrets and generated relay code does not expose `error.message`.
-- [x] CI run [40426966515](https://github.com/Yoganataa/blackrouter/actions/runs/40426966515) passed on source commit `ecfe57b16aa5534a57a74823f0a5319ebeb0f466`: type-check passed, **153 tests passed / 0 failed across 15 files**, and build passed.
-- [x] CI confirmed generated bundles are already synchronized; the workflow recorded bundle commit `e2152ed`.
-- [ ] Review unusual credential formats and remaining non-user-facing logs for secrets not covered by common redaction.
-- [ ] Audit direct/proxy/relay request transport, especially cancellation/timeouts and whether route failures can trigger direct egress.
+- [x] Audited `proxyChatCompletion()` attempt construction and transport selection: when active proxy pools are configured, attempts are built from those pools; a failed pool can advance to another configured pool but does not append a direct route. Existing regression test asserts rejected relay pools do not bypass to direct egress.
+- [x] Fixed a disconnect race in `service/upstream.ts`: after `await modelAwareBody(...)`, `sendAttempt()` now checks `response.destroyed` / `response.writableEnded` before building or starting upstream transport. The error path also avoids writing a preparation error after the client has disconnected.
+- [x] CI run [40427793326](https://github.com/Yoganataa/blackrouter/actions/runs/40427793326) passed type-check, 153 tests, and build for the transport guard.
+- [x] Latest branch CI run [40427922793](https://github.com/Yoganataa/blackrouter/actions/runs/40427922793) passed type-check, **153 tests / 0 failures across 15 files**, and build. Bundle synchronization produced commit `79d30d8`.
+- [!] A proposed cancellation integration test timed out before reaching its assertion; it was removed rather than weakening or retaining a hanging test. Do not claim cancellation propagation is verified based on that experiment.
+- [ ] Review/fix timeout and cancellation behavior in `TunnelAgent.createConnection()`; CONNECT request currently lacks an explicit timeout in the inspected implementation.
+- [ ] Add a reliable cancellation/timeout integration test that exercises a real local upstream and proves request/response sockets close.
+- [ ] Validate HTTP proxy and relay transport failures separately; confirm no direct egress fallback under any selected-pool failure.
 - [ ] Validate live OpenChamber host loading and a real OpenCode Zen Free inference response.
 - [ ] Check every MUST in `goals.md` / `BR-SCOPE-1.0` against evidence.
 
-**Changed files:** `service/deployers.ts`, `service/deployers.test.ts`, generated bundle verification, and this task log.
+**Changed files:** `service/upstream.ts` (disconnect guard); task log. The temporary cancellation test fixture was removed after timing out; no cancellation test result is claimed.
 
-**Next action:** continue transport lifecycle audit in `service/upstream.ts`; verify that cancellation, timeout, and failed relay paths never bypass configured egress. Keep host-level/live provider acceptance unchecked until an actual successful runtime response is observed.
+**Next action:** fix explicit CONNECT timeout/cleanup in `TunnelAgent` and add deterministic tests for tunnel timeout and cancellation. Keep live provider acceptance unchecked until a valid runtime inference response is observed.
 ## Session handoff
 
-**Current state:** Latest CI run `40426966515` passed type-check, 153 tests, and build. Panel state, gateway/local errors, runtime diagnostics, request-history labels, and relay/proxy connectivity diagnostics redact common credential-bearing fragments; generated relay handlers avoid returning raw exception messages. Egress regression coverage confirms configured relay pools are not bypassed after OpenCode rejects them. MVP host-level/live provider acceptance remains incomplete.
+**Current state:** Latest CI run `40427922793` passed type-check, 153 tests, and build. Panel state, gateway/local errors, runtime diagnostics, request-history labels, and relay/proxy connectivity diagnostics redact common credential-bearing fragments; generated relay handlers avoid returning raw exception messages. The transport audit found and fixed a disconnect-before-egress race. CONNECT timeout handling and deterministic cancellation acceptance remain open. MVP host-level/live provider acceptance remains incomplete.
 
-**Next action:** Audit `service/upstream.ts` transport cancellation/timeouts and prove failed relay/proxy routes cannot silently switch to direct egress; then run OpenChamber host-level and live OpenCode Zen Free smoke tests where an executable environment is available. The repository CI does not by itself prove the upstream provider currently responds or that the extension loads in the host application.
+**Next action:** Fix explicit CONNECT timeout/cleanup in `TunnelAgent` and add deterministic tests for tunnel timeout and cancellation; then verify failed relay/proxy routes and live OpenCode Zen Free inference. The repository CI does not by itself prove the upstream provider currently responds or that the extension loads in the host application.
 
 **Update protocol:** After each work session, update this file with actual status, changed files/commit SHA, commands or CI evidence, remaining blockers, and the next concrete action. Only check an item after verifying it.
