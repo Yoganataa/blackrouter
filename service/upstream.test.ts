@@ -294,7 +294,6 @@ describe('HTTP CONNECT tunnel lifecycle', () => {
       for (const socket of proxySockets) socket.destroy();
       await new Promise<void>((resolve) => {
         proxy.close(() => resolve());
-        proxy.closeAllConnections();
       });
     }
   });
