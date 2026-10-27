@@ -245,7 +245,7 @@ describe('where a call goes', () => {
 
 describe('HTTP CONNECT lifecycle', () => {
   const createStalledProxy = async () => {
-    const sockets = new Set<import('node:net').Socket>();
+    const sockets = new Set<import('node:stream').Duplex>();
     const server = http.createServer();
     server.on('connect', (_request, socket) => {
       sockets.add(socket);
