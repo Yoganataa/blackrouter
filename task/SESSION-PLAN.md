@@ -1,6 +1,6 @@
 # BlackRouter — Session-Based Task Plan
 
-**Source of truth:** `goals.md` on `main` (scope `BR-SCOPE-1.1`, 2026-10-27).  
+**Source of truth:** `goals.md` on `main` (scope `BR-SCOPE-1.2`, 2026-10-27).  
 **Rule:** one task ID equals one ChatGPT work session. Do not start the next task until the current task has a result, evidence, and a task-log update. This plan organizes work; it does not promote COULD/WON'T items or override MUST-first gates.
 
 ## How each session runs
@@ -51,39 +51,42 @@ These tasks block provider implementation and SHOULD work. Complete in order unl
 | S17 | [ ] | Implement Freebuff only if S16 proves a supported and permitted integration path. | Adapter acceptance tests and runtime evidence; otherwise document the blocker and leave unsupported. |
 | S18 | [ ] | Run cross-provider compatibility and fallback regression audit. | Existing OpenCode Zen Free and custom OpenAI-compatible paths remain intact; catalog, streaming, tools where supported, expired auth, limits, cancellation and bounded fallback covered. |
 
-## Phase C — RTK token saver (SHOULD; gated by Phase A)
+## Phase C — Linear Token-Saver Combo (FR-S2; SHOULD; gated by Phase A)
+
+The required sequence is fixed: **9router-go token-saver behavior → RTK → Caveman → I Have ADHD**. It is one combo with a single top-level enable/disable control, not four unrelated primary toggles. Each task below is a separate session; preserve stage boundaries for testing and debugging without changing the sequence.
 
 | ID | Status | Single-session outcome | Exit evidence |
 |---|---|---|---|
-| S19 | [ ] | Audit RTK port against pinned official source and compatibility exports. | Provenance, public API/call signatures, and behavior gaps documented. |
-| S20 | [ ] | Add/repair RTK filter regressions for git/search/files/build/repeated and large output. | Tests preserve exit status, paths, line numbers, meaningful diffs and downstream-useful context. |
-| S21 | [ ] | Measure RTK impact and finalize independent configuration/debuggability. | Repeatable benchmark methodology and results; no unsupported universal savings claim. |
-
-Caveman and I Have ADHD remain wishlist items under the frozen scope. They are not scheduled sessions unless a separate scope change promotes them.
+| S19 | [ ] | Audit the 9router-go token-saving behavior, RTK, Caveman and I Have ADHD sources and record provenance. | Exact upstream revisions/paths/licenses and intended behavior are documented; no wholesale 9router-go service port; I Have ADHD is not conflated with Ponytail. |
+| S20 | [ ] | Specify the linear pipeline contract and implement stage 1: relevant 9router-go token-saver behavior. | Input/output contract, no-op/error semantics, source provenance and focused tests are recorded. |
+| S21 | [ ] | Implement stage 2: RTK in the prescribed position after stage 1. | Filter regressions cover git/search/files/build/repeated/large output and preserve exit status, paths, line numbers, diffs and useful context. |
+| S22 | [ ] | Implement stage 3: Caveman after RTK. | Behavior matches verified upstream intent; coding/debugging/multi-step tests preserve necessary steps, code and diagnostics. |
+| S23 | [ ] | Implement stage 4: I Have ADHD after Caveman. | Scannable response behavior follows verified upstream intent without losing technical completeness or context. |
+| S24 | [ ] | Integrate the four stages behind one combo toggle and validate end-to-end quality/token impact. | Fixed order is tested; safety/tool/code literals are preserved; before/after measurements are repeatable and no unsupported savings claims are made. |
 
 ## Phase D — Proxy pool operations (SHOULD; overlap with Phase A only for MUST defects)
 
 | ID | Status | Single-session outcome | Exit evidence |
 |---|---|---|---|
-| S22 | [ ] | Audit pool-selection strategy, health state, cooldown and recovery behavior. | State transitions and retry eligibility mapped to tests. |
-| S23 | [ ] | Add regression coverage for unavailable relays, invalid proxy config, all pools unhealthy and cooldown expiry. | Failures are bounded/actionable; no egress-policy bypass or infinite retry. |
-| S24 | [ ] | Validate proxy-pool panel controls/status against actual runtime state. | UI states and persistence match service behavior; secrets remain masked. |
+| S25 | [ ] | Audit pool-selection strategy, health state, cooldown and recovery behavior. | State transitions and retry eligibility mapped to tests. |
+| S26 | [ ] | Add regression coverage for unavailable relays, invalid proxy config, all pools unhealthy and cooldown expiry. | Failures are bounded/actionable; no egress-policy bypass or infinite retry. |
+| S27 | [ ] | Validate proxy-pool panel controls/status against actual runtime state. | UI states and persistence match service behavior; secrets remain masked. |
 
 ## Phase E — Native OpenChamber panel (SHOULD; gated by Phase A)
 
 | ID | Status | Single-session outcome | Exit evidence |
 |---|---|---|---|
-| S25 | [ ] | Validate panel redesign in the supported OpenChamber host and audit responsive/accessibility behavior. | Actual host result plus keyboard/focus, theme, reduced-motion and narrow-panel findings. |
-| S26 | [ ] | Audit loading/empty/success/warning/error states and model/router workflows. | State-by-state checklist and tests; no false success or duplicate host settings. |
-| S27 | [ ] | Verify panel persistence, secret masking and source-to-bundle reproducibility. | Reload/persistence evidence and generated bundle diff review. |
+| S28 | [ ] | Validate panel redesign in the supported OpenChamber host and audit responsive/accessibility behavior. | Actual host result plus keyboard/focus, theme, reduced-motion and narrow-panel findings. |
+| S29 | [ ] | Audit loading/empty/success/warning/error states and model/router workflows. | State-by-state checklist and tests; no false success or duplicate host settings. |
+| S30 | [ ] | Verify panel persistence, secret masking and source-to-bundle reproducibility. | Reload/persistence evidence and generated bundle diff review. |
 
 ## Phase F — Release hardening
 
 | ID | Status | Single-session outcome | Exit evidence |
 |---|---|---|---|
-| S28 | [ ] | Run final security, configuration, documentation and provenance review. | README/changelog only describe verified behavior; known limits and recovery steps are documented. |
-| S29 | [ ] | Run release acceptance matrix across endpoint formats and direct/proxy/relay paths. | Current-head CI and runtime matrix are complete or explicit blockers remain. |
-| S30 | [ ] | Produce release/merge decision with evidence and unresolved-risk list. | Definition of Done checked; no unexplained CI failures, stale bundles, or unsupported provider claims. |
+| S31 | [ ] | Run final security, configuration, documentation and provenance review. | README/changelog only describe verified behavior; known limits and recovery steps are documented. |
+| S32 | [ ] | Run release acceptance matrix across endpoint formats and direct/proxy/relay paths. | Current-head CI and runtime matrix are complete or explicit blockers remain. |
+| S33 | [ ] | Produce release/merge decision with evidence and unresolved-risk list. | Definition of Done checked; no unexplained CI failures, stale bundles, or unsupported provider claims. |
 
 ## Session completion record template
 
