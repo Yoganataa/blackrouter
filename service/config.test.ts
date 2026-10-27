@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { DEFAULT_PORT, createApiKey, createConfigStore, defaultConfig, defaultConfigPath, preserveProxyPoolCredentials, redactProxyUrlCredentials } from './config.ts';
+import { redactDiagnosticText } from './errors.ts';
 
 const withDirectory = (run: (directory: string) => void): void => {
   const directory = mkdtempSync(path.join(tmpdir(), 'blackrouter-settings-'));
@@ -44,6 +45,18 @@ describe('the router settings', () => {
     });
   });
 
+
+
+  test('redacts credential-bearing URL, query, bearer, and API-key diagnostics', () => {
+    const diagnostic = 'proxy https://alice:top-secret@proxy.example:8443/tunnel?api_key=query-secret failed; Authorization: Bearer sk-live-secret; x-api-key: local-secret';
+    const redacted = redactDiagnosticText(diagnostic);
+    expect(redacted).not.toContain('alice');
+    expect(redacted).not.toContain('top-secret');
+    expect(redacted).not.toContain('query-secret');
+    expect(redacted).not.toContain('sk-live-secret');
+    expect(redacted).not.toContain('local-secret');
+    expect(redacted).toContain('[REDACTED]');
+  });
 
   test('redacts proxy URL credentials and sensitive query values for panel state', () => {
     const url = 'https://alice:top-secret@proxy.example:8443/relay?api_key=query-secret&region=eu';
