@@ -267,7 +267,7 @@ describe('downstream cancellation lifecycle', () => {
     let receivedResolve!: () => void;
     const received = new Promise<void>((resolve) => { receivedResolve = resolve; });
     const upstream = http.createServer((request) => {
-      request.on('close', () => upstreamRequestClosedResolve());
+      request.socket.once('close', () => upstreamRequestClosedResolve());
       request.on('data', () => {});
       request.on('end', () => receivedResolve());
       // Do not answer: the client should cancel while this response is pending.
