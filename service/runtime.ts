@@ -32,7 +32,7 @@ import {
   deployVercel as executeDeployVercel,
   testRelayOrProxy,
 } from './deployers.ts';
-import { RouterError, badRequest } from './errors.ts';
+import { RouterError, badRequest, redactDiagnosticText } from './errors.ts';
 import {
   readRegistration,
   registerProvider,
@@ -234,7 +234,11 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
           persist({ ...config, proxyPools: updatedPools });
         },
         record: (entry: RequestEntry) => {
-          requests.unshift(entry);
+          requests.unshift({
+            ...entry,
+            poolName: redactDiagnosticText(entry.poolName),
+            ...(entry.fallbackReason ? { fallbackReason: redactDiagnosticText(entry.fallbackReason) } : {}),
+          });
           if (requests.length > REQUEST_LOG_LIMIT) requests.length = REQUEST_LOG_LIMIT;
           try {
             requestHistory.save(requests);
@@ -246,7 +250,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
       });
     } catch (error) {
       router = null;
-      routerError = error instanceof Error ? error.message : String(error);
+      routerError = redactDiagnosticText(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -261,7 +265,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         refreshRegistration(false);
       }
     } catch (error) {
-      modelsError = error instanceof Error ? error.message : String(error);
+      modelsError = redactDiagnosticText(error instanceof Error ? error.message : String(error));
     }
   };
 
