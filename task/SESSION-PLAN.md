@@ -21,8 +21,8 @@
 
 ## Detailed task cards
 
-- [S01 — CONNECT ClientRequest lifecycle](sessions/S01-connect-clientrequest-lifecycle.md) — active.
-- [S02 — CONNECT cleanup and timeout fix](sessions/S02-connect-cleanup-timeout-fix.md) — prepared; blocked on S01 evidence.
+- [S01 — CONNECT ClientRequest lifecycle](sessions/S01-connect-clientrequest-lifecycle.md) — complete (diagnostic; production fix remains in S02).
+- [S02 — CONNECT cleanup and timeout fix](sessions/S02-connect-cleanup-timeout-fix.md) — prepared; S01 ownership evidence recorded; next task, not executed in this session.
 - [S03 — Downstream cancellation lifecycle](sessions/S03-downstream-cancellation.md) — prepared; not started.
 - [S04 — Egress policy audit](sessions/S04-egress-policy-audit.md) — prepared; not started.
 - [S05 — Response and streaming contract audit](sessions/S05-response-stream-contract-audit.md) — prepared; not started.
@@ -60,7 +60,7 @@ These tasks block provider implementation and SHOULD work. Complete in order unl
 
 | ID | Status | Single-session outcome | Exit evidence |
 |---|---|---|---|
-| S01 | [/] | Instrument the internal CONNECT `ClientRequest` lifecycle and determine cleanup ownership/order. | Trace distinguishes agent-first and outer-request-first destruction; diagnostic-only instrumentation is identified for removal. |
+| S01 | [x] | Instrument the internal CONNECT `ClientRequest` lifecycle and determine cleanup ownership/order. | Trace distinguishes agent-first and outer-request-first destruction; diagnostic-only instrumentation is identified for removal. |
 | S02 | [ ] | Implement the smallest CONNECT cleanup/timeout fix supported by S01 evidence. | Deterministic regression tests prove bounded timeout and client-side request/socket cleanup; no unrelated transport changes. |
 | S03 | [ ] | Validate downstream cancellation and request lifecycle independently from CONNECT timeout. | Deterministic local-upstream test proves cancellation reaches the owned upstream resources and completes within a bound. |
 | S04 | [ ] | Audit direct, HTTP forward-proxy, and relay egress behavior. | Separate tests prove selected proxy/relay failures never silently switch to direct egress and preserve actionable status/body when no safe route remains. |

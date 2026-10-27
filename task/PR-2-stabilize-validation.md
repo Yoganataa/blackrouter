@@ -3,13 +3,13 @@
 **Repository:** `Yoganataa/blackrouter`  
 **Working branch:** `feat/port-9router-rtk-upstream`  
 **Pull request:** [#2 — feat: port native core and upstream free-tier fixes](https://github.com/Yoganataa/blackrouter/pull/2)  
-**Branch-head note:** the header's original SHA is historical; see the latest card-generation checkpoint and live PR branch for subsequent documentation-only commits.  
-**Latest code CI evidence:** [run 40443707710](https://github.com/Yoganataa/blackrouter/actions/runs/40443707710) passed after the temporary CONNECT diagnostic test was removed. This validates the code tree before the session-plan documentation commits, not live OpenChamber/provider behavior.  
+**Branch HEAD before S01 session:** `0df85356420a0afd660502ab8a5bdda2c166263e`. See the S01 session record below for repository refs and the documentation commit.  
+**Latest relevant code CI:** [run 40443707710](https://github.com/Yoganataa/blackrouter/actions/runs/40443707710), run #170, passed Type check, Unit tests, and Build OpenChamber bundles on `78f3858beab993aa7e46ec2ff18a9cd29e9040cb`. Comparison to the pre-session branch HEAD shows only task-documentation changes since that code commit; no current-head workflow was triggered for the docs-only delta. This is not live OpenChamber/provider acceptance.  
 **Latest known bundle-sync commit:** `79d30d8` (service bundle synchronized in earlier CI run; the latest removal was diagnostic-test-only).
 
 ## Sessionized execution protocol
 
-The roadmap is now decomposed into single-session tasks in [`task/SESSION-PLAN.md`](SESSION-PLAN.md). One task ID equals one ChatGPT work session. The active task card is [`S01 — CONNECT ClientRequest lifecycle`](sessions/S01-connect-clientrequest-lifecycle.md). Complete only that task in the next session, then record evidence and update this log before moving to S02. The session plan is an execution index; `goals.md` on `main` remains the scope source of truth.
+The roadmap is decomposed into single-session tasks in [`task/SESSION-PLAN.md`](SESSION-PLAN.md). S01's diagnostic acceptance criteria are now recorded as complete; the next eligible task is [`S02 — CONNECT cleanup and timeout fix`](sessions/S02-connect-cleanup-timeout-fix.md). One task ID equals one work session, so S02 was not implemented in the S01 session. The session plan is an execution index; `goals.md` on `main` remains the scope source of truth.
 
 ## Status legend
 
@@ -427,3 +427,17 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - [!] All 33 task IDs now have detailed task cards. The active implementation task remains S01, focused on the pending CONNECT `ClientRequest` lifecycle. S11 MUST gate remains unresolved, so do not begin SHOULD work or claim release readiness.
 
 **Branch-head checkpoint before this log update:** `6c731a9089444292466ea779828e9201d3ec4cc2`. The three card commits and session-plan update are documentation-only; verify the final branch head and all paths before closing this batch.
+
+
+## S01 session record — 2026-10-27
+
+- **Task/scope:** S01 — CONNECT ClientRequest lifecycle; `BR-SCOPE-1.2`; related requirement FR-M6.
+- **Repository state before work:** branch `feat/port-9router-rtk-upstream` HEAD `0df85356420a0afd660502ab8a5bdda2c166263e`; PR #2 open/unmerged. Current `main` HEAD is `bdf29864015d97e2e4e9c91c60cc2d3aa1b2ca0f`, while PR metadata reports base SHA `b2959304552ecd02bebd94be2f15b0dca4e9b3b2`. The base discrepancy is recorded; S01 did not rebase or retarget the PR.
+- **Files updated:** `task/sessions/S01-connect-clientrequest-lifecycle.md`, `task/SESSION-PLAN.md`, and this task log. No production source, test source, or generated bundle was edited.
+- **Source/test inspection:** `service/upstream.ts` blob `04e354181accf6b7aef7cddbca5e4f5a7ce0fc08`; `service/upstream.test.ts` blob `e77ece939f53c25f60b4783786d012bd900aa375`. The CONNECT request is a local variable in `TunnelAgent.createConnection()`; it is not stored on the agent, the outer request, or a cancellation registry. The outer response-close path destroys only the outer request. Existing tests do not assert the pending CONNECT lifecycle.
+- **Reproduction commands/environment:** `node /tmp/s01-connect-lifecycle-repro.mjs` (Node v22.16.0, local HTTP CONNECT fixture); the focused reproduction was repeated 3× per destruction order. It used a temporary instrumented copy of the current method because Bun is unavailable and cloning the repo failed with `Could not resolve host: github.com`. The harness file is outside the repository and is not retained as product instrumentation.
+- **Trace/result:** see S01 card for the timestamped representative traces. In outer-first and agent-first sequences, after ~251–252 ms the outer request was destroyed but the pending CONNECT request remained `destroyed=false/closed=false`; its client TCP socket and the separately observed proxy-side socket remained open/readable/writable. The HTTP CONNECT `connect` event did not occur because the fixture deliberately withheld HTTP 200; no timeout/error/close/end occurred before fixture cleanup. Only explicit fixture `connectReq.destroy()` closed it.
+- **Validation/CI:** CI run #170 / [40443707710](https://github.com/Yoganataa/blackrouter/actions/runs/40443707710) passed Type check, Unit tests, and Build bundles for source commit `78f3858beab993aa7e46ec2ff18a9cd29e9040cb`. Compare `78f3858...0df8535` shows 53 commits, and every changed path is under `task/`; source/test/build inputs are unchanged. Local `bun run type-check`, `bun test`, and `bun run build`: **NOT RUN** (Bun unavailable). No new CI run was triggered by the documentation-only session update.
+- **Result:** **COMPLETE — S01 diagnosis only.** The lifecycle gap is isolated for the current pending-CONNECT path: the internal request/socket is not owned by the agent/outer request and neither destruction order closes it. This is not a production fix and does not make FR-M6 PASS.
+- **Risks:** no committed permanent regression test yet; no local Bun validation; no live OpenChamber/OpenCode provider acceptance. FR-M6 cancellation, CONNECT timeout, and socket cleanup remain open. PR base metadata differs from current `main`.
+- **Next permitted task:** **S02 — CONNECT cleanup and timeout fix**, limited to implementing a fix justified by this evidence and adding a deterministic regression test. S02 was not executed in this session; do not start S03 or SHOULD work.
