@@ -8718,9 +8718,13 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       nativeToolNameMap = preparedForModel.toolNameMap ?? null;
       nativeDirectFetch = preparedForModel.directFetch;
     } catch (error) {
+      if (response.destroyed || response.writableEnded)
+        return;
       writeOpenAiError(response, 400, error instanceof Error ? error.message : "Could not prepare the native provider request.", "invalid_request");
       return;
     }
+    if (response.destroyed || response.writableEnded)
+      return;
     const target = buildTarget(config, "chat", candidate, nativeUrl);
     const requestHeaders = { ...isOpenCodeUpstream(config.upstream) ? nativeHeaders : {}, ...target.headers, "content-type": "application/json", accept: "text/event-stream", "content-length": String(Buffer.byteLength(upstreamBody)) };
     const transport = target.url.protocol === "http:" ? http2 : https2;
