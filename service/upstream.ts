@@ -601,6 +601,7 @@ export const proxyChatCompletion = (
       nativeToolNameMap = preparedForModel.toolNameMap ?? null;
       nativeDirectFetch = preparedForModel.directFetch;
     } catch (error) {
+      if (response.destroyed || response.writableEnded) return;
       writeOpenAiError(
         response,
         400,
@@ -609,6 +610,10 @@ export const proxyChatCompletion = (
       );
       return;
     }
+
+    // Provider preparation is asynchronous. The client may disconnect while
+    // the native request is being translated; never start upstream egress then.
+    if (response.destroyed || response.writableEnded) return;
 
     const target = buildTarget(config, 'chat', candidate, nativeUrl);
     const requestHeaders = { ...(isOpenCodeUpstream(config.upstream) ? nativeHeaders : {}), ...target.headers, 'content-type': 'application/json', accept: 'text/event-stream', 'content-length': String(Buffer.byteLength(upstreamBody)) };
