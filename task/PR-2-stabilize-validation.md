@@ -3,7 +3,7 @@
 **Repository:** `Yoganataa/blackrouter`  
 **Working branch:** `feat/port-9router-rtk-upstream`  
 **Pull request:** [#2 — feat: port native core and upstream free-tier fixes](https://github.com/Yoganataa/blackrouter/pull/2)  
-**Latest branch head after session-planning docs:** `4b30c449ecaf9a0b965152de8fb4152894ba88d7` (refreshed while preparing this task-card batch; see latest branch for subsequent documentation commits). (documentation-only commits after the last code CI).  
+**Branch-head note:** the header's original SHA is historical; see the latest card-generation checkpoint and live PR branch for subsequent documentation-only commits.  
 **Latest code CI evidence:** [run 40443707710](https://github.com/Yoganataa/blackrouter/actions/runs/40443707710) passed after the temporary CONNECT diagnostic test was removed. This validates the code tree before the session-plan documentation commits, not live OpenChamber/provider behavior.  
 **Latest known bundle-sync commit:** `79d30d8` (service bundle synchronized in earlier CI run; the latest removal was diagnostic-test-only).
 
@@ -376,3 +376,22 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 **Active implementation task remains S01:** capture the internal CONNECT ClientRequest socket/connect/timeout/error/close lifecycle and compare agent-first vs. outer-request-first destruction. Do not start later SHOULD implementation while MUST gates remain unresolved.
 
 **Validation boundary:** latest previously known code CI is run 40443707710 on an earlier code commit. This documentation batch has no CI run and does not prove runtime acceptance.
+
+
+## Detailed task-card generation — batch 5 (2026-10-27)
+
+**Purpose:** prepare S21–S25 in the task index while preserving stage order and the Phase A MUST gate. This is documentation-only and does not start implementation.
+
+- [x] Created `task/sessions/S21-token-saver-stage2-rtk.md` — commit `225c83f60a99a090e7f7453b97cc709973375870`.
+- [x] Created `task/sessions/S22-token-saver-stage3-caveman.md` — commit `e1032955eeeef3d3bddc8ca3104ca14a617e44e4`.
+- [x] Created `task/sessions/S23-token-saver-stage4-i-have-adhd.md` — commit `3ac52672deeefd79719d2c8ff3d87ba4580eba60`.
+- [x] Created `task/sessions/S24-token-saver-combo-e2e-validation.md` — commit `b2424a1132379b45f8bc108ded591a57d9fe66b9`.
+- [x] Created `task/sessions/S25-proxy-pool-selection-health-cooldown-audit.md` — commit `2a71c1673796173dc610c5f13a6897413f2509e3`.
+- [x] Updated `task/SESSION-PLAN.md` to index S21–S25.
+- [!] No application code, tests, bundles, or runtime behavior changed. CI was not run for this documentation-only batch.
+- [!] S21–S24 remain gated by S11 and source/stage acceptance dependencies. The fixed sequence remains 9router-go behavior → RTK → Caveman → I Have ADHD, with one top-level combo toggle. No savings claim is supported until repeatable measurement and quality review are complete.
+- [!] S25 is an audit card, not authorization for SHOULD work before S11. Any MUST defect found must be routed into a separately scoped Phase A task.
+
+**Active implementation task remains S01:** capture the internal CONNECT ClientRequest socket/connect/timeout/error/close lifecycle and compare agent-first versus outer-request-first destruction. Do not switch to token-saver or proxy-pool implementation while MUST gates remain unresolved.
+
+**Validation boundary:** the latest previously recorded code CI remains run 40443707710 on an earlier code commit. This batch is docs-only and has not been validated by a new CI run; live OpenChamber/OpenCode acceptance remains unproven.
