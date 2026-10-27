@@ -245,3 +245,20 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 **Diagnostic method:** local Node v22.16.0 scripts using a loopback HTTP proxy that accepts CONNECT but does not answer. The scripts were run in `/tmp` and are not repository files.
 
 **Next action:** implement a narrowly scoped `TunnelAgent` lifecycle fix and deterministic regression tests. If the test fails, retain the failure as evidence and revert unverified production changes rather than relaxing assertions.
+
+
+## Latest session checkpoint (2026-10-27, raw CONNECT socket trace)
+
+**Phase:** Isolate CONNECT socket ownership before another production change.
+
+- [x] Added a temporary CI-only diagnostic test using the production `createTunnelAgent()`, a local HTTP server that accepts CONNECT but does not respond, and event/state capture around upstream-request destruction and agent destruction.
+- [x] CI type-check, all tests, and bundle build passed with the diagnostic test present: run [40443636387](https://github.com/Yoganataa/blackrouter/actions/runs/40443636387).
+- [x] Captured trace: `["proxy:connect","before-destroy:proxySocket=true:destroyed=false","upstream-request:destroy-called","agent:destroy-called","after-destroy:proxySocketDestroyed=false:writable=true:readable=true"]`.
+- [x] This confirms the proxy accepted CONNECT and the server-side socket remained open and both readable/writable 250 ms after the outer HTTPS request and its agent were destroyed. No outer upstream `request:socket-assigned` event was observed, consistent with the asynchronous tunnel not completing and not being attached as an ordinary upstream socket.
+- [!] The trace narrows the failure to the pending CONNECT path but does not yet prove the exact event ordering or which client-side socket object owns the open TCP connection. The diagnostic did not yet log the internal CONNECT ClientRequest's `socket`/ `close` events.
+- [ ] Remove the temporary diagnostic file after retaining this evidence in the task log.
+- [ ] Next: add targeted instrumentation for the internal CONNECT ClientRequest socket and test destruction ordering (agent first versus outer request first). Only then implement cancellation/timeout cleanup and retain a deterministic regression test.
+
+**Scope and safety:** no production transport changes in this phase; the diagnostic is temporary and must not be left in the branch. FR-M6 remains open; this is not a fix or runtime acceptance.
+
+**Evidence:** [CI run 40443636387](https://github.com/Yoganataa/blackrouter/actions/runs/40443636387), including the `CONNECT_LIFECYCLE_DIAGNOSTIC` trace in the Unit tests step.
