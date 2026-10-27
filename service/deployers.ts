@@ -93,7 +93,7 @@ export default async function handler(req) {
       headers: response.headers,
     });
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(JSON.stringify({ error: "Relay fetch failed" }), {
       status: 502,
       headers: { "content-type": "application/json" },
     });
@@ -136,7 +136,7 @@ Deno.serve(async (request) => {
       headers: response.headers,
     });
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(JSON.stringify({ error: "Relay fetch failed" }), {
       status: 502,
       headers: { "content-type": "application/json" },
     });
