@@ -782,6 +782,10 @@ export const proxyChatCompletion = (
         if (protocolTransform) answer.pipe(protocolTransform);
     };
     const handleTransportError = (error: Error): void => {
+      // A transport failure marks this pool unusable for the rest of the
+      // request. Otherwise a later model fallback could revisit the same
+      // broken relay and waste another attempt before exhausting the chain.
+      if (candidate) failedPoolIds.add(candidate.id);
       if (!response.headersSent && !response.destroyed && advanceToNextAttempt()) { fallbackReasons.push(`network error on ${lastRequestedModel}`); sendAttempt(); return; }
       const routeHeaders = routingHeaders(attempt);
       for (const [name, value] of Object.entries(routeHeaders)) response.setHeader(name, value);
