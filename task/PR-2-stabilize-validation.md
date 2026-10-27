@@ -138,8 +138,23 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - [x] Added an integration regression in `service/model-fallback.integration.test.ts`: relay A drops the transport, relay B returns 503 for the primary model, and the fallback model must succeed through relay B without another relay-A attempt.
 - [x] CI passed for source/test commit `a188f59262d9e9c5d1b554cdeec486d32d406613`, run [40430932430](https://github.com/Yoganataa/blackrouter/actions/runs/40430932430): type-check passed, **154 tests passed / 0 failed**, build passed, generated guest bundles synchronized. The workflow subsequently advanced branch head to bundle commit `a8067525904aeb63a0916c70db520480eca10012`.
 - [x] Kept the earlier CONNECT timeout experiment reverted. CONNECT timeout and cancellation remain unverified; this phase does not claim to resolve them.
-- [ ] Add a separate test for an HTTP forward proxy CONNECT failure and verify the returned error is actionable without any direct-egress retry.
+- [x] Added a separate HTTP forward-proxy CONNECT failure regression; CI verifies the selected proxy failure returns 502 and only the configured proxy CONNECT is attempted (no direct retry in the attempt trace).
 - [ ] Verify the live OpenChamber extension loads and complete a real OpenCode Zen Free inference request; CI alone is not runtime acceptance.
 - [ ] Audit every FR-M1–FR-M8 MUST item against `goals.md` and `BR-SCOPE-1.0`.
 
 **Next action:** add/verify an HTTP forward-proxy failure test that demonstrates a selected proxy failure cannot trigger a direct request, then move to host-level OpenChamber and live inference acceptance.
+
+
+## Latest session checkpoint (2026-10-27, HTTP forward-proxy failure)
+
+**Phase:** HTTP forward-proxy CONNECT failure / no direct-egress retry regression — implemented and CI-validated.
+
+- [x] Added `/http-proxy-failure-test` to `service/model-fallback.integration.test.ts`, configuring a single selected `type: 'http'` forward proxy against a local test listener and an OpenCode HTTPS upstream.
+- [x] The local proxy deliberately answers CONNECT with HTTP 502. The test asserts the router returns 502 with `upstream_unreachable`, reports `HTTP Forward Proxy` as the resolved pool, and records exactly one CONNECT attempt to `opencode.ai:443`. This guards against silently switching to direct egress after the selected proxy fails.
+- [x] CI run [40432289509](https://github.com/Yoganataa/blackrouter/actions/runs/40432289509) passed on test commit `4620c54e60970df08e1e85d1e2b6bb2e1ffbf935`: type-check passed, **155 tests passed / 0 failed**, build passed.
+- [x] No production transport behavior was changed in this phase; only integration coverage and this task log changed.
+- [ ] Investigate CONNECT timeout/cancellation separately; prior experimental changes failed socket-closure assertions and remain reverted.
+- [ ] Verify live OpenChamber extension loading and a real OpenCode Zen Free inference response.
+- [ ] Audit every FR-M1–FR-M8 MUST item against `goals.md` and `BR-SCOPE-1.0`.
+
+**Next action:** proceed to the next single acceptance task: determine whether the OpenChamber host/runtime is available for a live extension-load and Zen Free inference check. Do not mark it complete based on CI alone.
