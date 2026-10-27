@@ -1,6 +1,6 @@
 # BlackRouter Goals and Implementation Roadmap
 
-> **Status snapshot: 2026-10-26.** This roadmap reflects the repository's current `main` branch, the open implementation PR, and the upstream references reviewed on this date. Re-check GitHub before treating any status below as current.
+> **Status snapshot: 2026-10-27.** This roadmap records the current scope decisions and the latest reviewed PR #2 validation notes available on this date. CI results and provider terms are time-bound; recheck the linked branch/workflows and official provider documentation before implementation or release.
 
 ## 1. Product Definition
 
@@ -25,10 +25,11 @@ The target experience is to route requests from OpenChamber/OpenCode and compati
 
 ## Scope Freeze and Change Control
 
-**Scope ID:** `BR-SCOPE-1.0`  
-**Baseline date:** 2026-10-26  
+**Scope ID:** `BR-SCOPE-1.1`  
+**Baseline date:** 2026-10-27  
 **Status:** **FROZEN FOR IMPLEMENTATION**  
-**Purpose:** establish a stable, reviewable scope before additional coding. This freeze governs new functionality; it does not prevent fixing defects, adding regression tests, or completing validation for the already-open PR #2.
+**Change record:** `BR-CHANGE-2026-10-27-PROVIDERS` — user-approved additive scope update for WorkBuddy/Tencent TokenHub, CodeBuddy CN, and Freebuff.  
+**Purpose:** keep the Must-first baseline stable while formally adding three provider integration targets. The approval authorizes evaluation and implementation planning, but provider work must not delay or bypass the FR-M1–FR-M8 acceptance gates. It does not approve undocumented credential extraction, unsafe token handling, or claims that a provider is unlimited/permanently free.
 
 The MoSCoW classification below is authoritative. A checkbox in the phased roadmap is not, by itself, approval to implement a feature.
 
@@ -43,7 +44,33 @@ Use OmniRoute selectively to inform the feature-gap matrix and future design dec
 - Compare model discovery and diagnostics only where they fit OpenChamber's native extension surface.
 - Review license, provenance, dependencies, source changes and security implications before adapting any implementation.
 
-**Scope freeze remains in force:** adding OmniRoute as a reference does not promote any COULD/WON'T item, authorize copying its dashboard or broad feature set, or change any MUST/SHOULD priority. Any such change must follow the scope-change process below.
+**Scope freeze remains in force:** adding OmniRoute as a reference does not promote any COULD/WON'T item, authorize copying its dashboard or broad feature set, or change any MUST/SHOULD priority. The three provider targets below are the sole additive scope change approved under `BR-SCOPE-1.1`; all remain subordinate to the Must-first release gate.
+
+### Approved provider integration targets — `BR-CHANGE-2026-10-27-PROVIDERS`
+
+These are approved targets to evaluate and then implement one at a time after the core Must baseline is stable. They are not claims that all three are currently implemented, officially free, or ready to ship.
+
+| Target | Intended integration | Authentication and cost classification | Gate / implementation notes |
+|---|---|---|---|
+| **CodeBuddy CN** | A native provider adapter following the current official 9Router CodeBuddy CN implementation as a behavior reference. | Official 9Router changelog records both OAuth support and API-key authentication/quota tracking for CodeBuddy CN. The actual entitlement depends on the account/plan; do not label it keyless or free without current evidence. | Inspect the current upstream provider source, endpoints, OAuth flow, token refresh, model catalog, quota accounting, license and tests. Port only provider-specific logic required by BlackRouter's adapter contract; do not import 9Router's full dashboard/provider runtime. |
+| **WorkBuddy / Tencent TokenHub** | A provider entry backed by an explicitly supported Tencent model endpoint (for example, the documented TokenHub Chat Completions endpoint), with model and capability metadata. | WorkBuddy is also a desktop AI-agent client that supports custom models. Tencent documentation describes configuring a supported endpoint, model ID and API key; plans may be metered, subscription-based or credit-based. This is not evidence of a free WorkBuddy account API. | Prefer the documented API/TokenHub credential path. Do not reuse or extract WorkBuddy desktop cookies, private session tokens or internal endpoints. Model/plan IDs, regional endpoint, API format, tool-call support and billing/limits must be user-configurable or clearly surfaced. |
+| **Freebuff** | Experimental provider adapter only if an acceptable supported integration path is verified. | Freebuff documents a limited free allowance and model/data-use conditions that can vary by region, session, VPN/proxy state and service policy. It must not be described as unlimited or permanently free. | The OpenAI-compatible `freebuff2api` project is a third-party bridge that describes use of Freebuff account authentication and upstream protocol details. Treat it as research evidence, not an official Freebuff API guarantee. Before shipping a direct integration, verify current Freebuff terms, allowed automation/reuse, official SDK/API availability, privacy implications, auth/token lifecycle and endpoint stability. If acceptance requires undocumented/private endpoints or prohibited account-token reuse, stop and keep it unsupported rather than silently reverse-engineering around the restriction. |
+
+**Shared provider acceptance gate**
+
+- Each provider has a dedicated adapter boundary; provider identity/authentication must not be conflated with the HTTP proxy/relay pool, which controls network egress.
+- Record the official documentation/source URL and review date, endpoint/API format, authentication class, current model catalog, capability flags, quota/rate-limit semantics, and data-use notice.
+- Test model listing where supported, a real short inference, streaming and non-streaming responses, tool calls where advertised, cancellation, timeouts, invalid/expired credentials, rate limits, upstream error propagation and bounded fallback.
+- Redact credentials from logs and UI. Never commit API keys, OAuth tokens, refresh tokens, account cookies or captured session material. Keep provider secrets separate from proxy/relay credentials.
+- Label status truthfully as **free/no-key**, **account/OAuth**, **API-key**, **trial/credits**, or **paid/metered**. Do not infer one class from the product name.
+- A provider is not enabled for release until implementation, tests, current terms review and relevant runtime smoke checks pass. If a provider gate fails, document the specific blocker rather than weakening security or compatibility criteria.
+
+**Current research references:**
+- [9Router changelog — CodeBuddy CN provider and quota-tracking history](https://github.com/decolua/9router/blob/master/CHANGELOG.md)
+- [Tencent WorkBuddy model configuration documentation](https://www.workbuddy.ai/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Model)
+- [Tencent Cloud WorkBuddy / TokenHub configuration guide](https://indonesia.tencentcloud.com/ind/document/product/1300/81046)
+- [Freebuff official repository and current free-access/data-use notes](https://github.com/CodebuffAI/freebuff)
+- [Third-party freebuff2api bridge — research only, not an official API contract](https://github.com/chenjh16/freebuff2api)
 
 
 - **MUST** — required for the first stable BlackRouter baseline; blocks completion if unmet.
@@ -69,7 +96,7 @@ Use OmniRoute selectively to inform the feature-gap matrix and future design dec
 - **FR-S1 — Proxy-pool reliability and operation.** Validate pool selection strategies, health/test status, cooldown/recovery, safe alternate-pool handling, and the corresponding native-panel controls.
 - **FR-S2 — RTK token saver.** Validate tool-output compression with regression cases; preserve errors, exit codes, paths, line numbers, useful diffs and context needed for the next tool call. Keep it independently configurable and substantiate any token-savings claims with repeatable measurements.
 - **FR-S3 — Provider adapter boundary.** Introduce a maintainable provider registry/adapter contract before adding provider-specific branches throughout the gateway. Add providers incrementally, with request/response translation, capabilities, auth requirements, rate-limit behavior and tests.
-- **FR-S4 — Verified free-provider expansion.** After FR-S3, add a small, validated set of providers whose current official terms and behavior support the intended no-user-supplied-key experience. Clearly distinguish free access, account/OAuth access, trial credits, API-key access and paid services.
+- **FR-S4 — Approved provider integrations.** After FR-S3 and after all FR-M1–FR-M8 exit criteria pass, assess and implement CodeBuddy CN, WorkBuddy/Tencent TokenHub, and Freebuff individually under the provider gates above. Use documented authentication and endpoints, distinguish OAuth/account-bound, API-key, limited-free, trial/credit and paid access, and block any integration whose terms, privacy, credential handling or API stability cannot be validated. Do not make a user-supplied API key mandatory for the default OpenCode Zen Free lane.
 - **FR-S5 — Bounded model combos and fallback.** Preserve named model aliases/combos and fallback chains only with explicit limits, cycle protection and useful error reporting.
 - **FR-S6 — Core panel workflows.** Provide clear model/router/proxy-pool configuration and actionable loading, empty, success and failure states within OpenChamber's native extension constraints.
 
@@ -80,7 +107,7 @@ These ideas are intentionally separated from the locked functional requirements.
 - **WL-C1 — Caveman prompt profile**, after checking the exact current official 9router behavior and defining regressions.
 - **WL-C2 — I Have ADHD response profile**, after researching the upstream implementation and semantics. Do not treat it as a rename or assumed equivalent of Ponytail or Caveman.
 - **WL-C3 — Deep 9router UI parity**, decorative/polish work, and additional panel workflows beyond FR-S6.
-- **WL-C4 — Broad provider catalog expansion**, OAuth/account-specific integrations, and experimental providers beyond the small verified set in FR-S4.
+- **WL-C4 — Broad provider catalog expansion** beyond the three approved targets, plus unrelated OAuth/account-specific integrations and experimental providers not named in `BR-CHANGE-2026-10-27-PROVIDERS`.
 - **WL-C5 — Convenience automation beyond current core needs**, including extra relay deployment flows and advanced routing controls that are not required by FR-S1.
 
 The existing code or documentation may mention some wishlist capabilities. Their presence does not change their priority or make them acceptance criteria for this frozen scope.
@@ -92,11 +119,12 @@ The existing code or documentation may mention some wishlist capabilities. Their
 - Porting the closed/unmerged 9router PR #5235 Bun-sidecar design without new evidence and a separately approved design decision.
 - Automatically bypassing a selected proxy/relay by switching to direct egress without explicit policy.
 - Claiming providers are unlimited/permanently free or advertising token-savings percentages without current evidence.
-- Adding unverified providers or making a user-provided API key mandatory for the default OpenCode Free lane.
+- Adding providers beyond the three approved targets without a scope change, or shipping any target before its documentation, terms, auth/security and runtime acceptance gates pass.
+- Harvesting desktop cookies/session credentials or adopting undocumented/private provider endpoints as a workaround for missing supported access.
 
 ### Change-control rule
 
-This is a scope freeze, not a prohibition on defect fixes. Any proposed feature addition, scope expansion, priority promotion from COULD/WON'T, or removal of a MUST requires a separate scope-change proposal that states the user problem, MoSCoW change, implementation/test impact, security and compatibility risks, and reason it cannot fit the current baseline. Do not code the change until that proposal is explicitly approved and the scope version is updated in a separate commit. Preserve this frozen baseline in Git history.
+This is a scope freeze, not a prohibition on defect fixes. The three named provider targets are the only feature expansion explicitly approved in `BR-SCOPE-1.1`; their implementation remains gated behind the Must baseline and the provider-specific acceptance criteria above. Any other feature addition, promotion from COULD/WON'T, or removal of a MUST requires a separate scope-change proposal stating the user problem, MoSCoW change, implementation/test impact, security and compatibility risks, and why it cannot fit the current baseline. Preserve the earlier `BR-SCOPE-1.0` scope in Git history.
 
 ## 3. Current Repository Baseline
 
@@ -124,25 +152,24 @@ The PR intends to:
 
 ### Blocking validation status
 
-The latest inspected PR workflow runs failed at **Type check**. Unit tests and bundle builds were skipped after that failure. The PR description also says Bun tests, type-check, clean build, generated-bundle verification, and live OpenChamber/provider checks have not yet been completed successfully.
+**PR #2 remains open and unmerged.** Its provider-core port is not a reason to start provider expansion yet. The latest available task checkpoint documents a green baseline CI run and a later diagnostic run, but neither is sufficient by itself to close all MUST criteria:
 
-Therefore the immediate priority is not adding more features. First:
-- [ ] Inspect and fix the exact TypeScript errors from the latest failed workflow.
-- [ ] Run `bun run type-check`.
-- [ ] Run `bun test`.
-- [ ] Run `bun run build` to regenerate `service/main.js`, `panel/main.js`, and `status/main.js` from source.
-- [ ] Review the generated diff; do not manually treat an ungenerated bundle as build validation.
-- [ ] Exercise direct, configured HTTP proxy, and relay-pool request paths.
-- [ ] Verify Chat Completions, Responses, and Messages routes, including streaming/cancellation and error paths.
-- [ ] Test the OpenCode Free path in the actual OpenChamber host.
-- [ ] Recheck workflow status and address failures before merging PR #2.
+- [CI run 40432289509](https://github.com/Yoganataa/blackrouter/actions/runs/40432289509) passed type-check, **155 tests**, and build for the then-validated baseline.
+- [CI run 40443636387](https://github.com/Yoganataa/blackrouter/actions/runs/40443636387) passed type-check, tests and bundle build while a temporary CONNECT-lifecycle diagnostic test was present. That test is diagnostic evidence, not acceptance; the branch task log says it must be removed after its evidence is preserved.
+- A deterministic raw-socket reproduction narrowed the unresolved FR-M6 issue to a pending internal HTTP CONNECT request/socket path. The integrated diagnostic observed the proxy-side socket still open 250 ms after the outer request and agent were destroyed. The exact internal CONNECT request event ordering and cleanup owner remain to be instrumented, and there is no accepted production fix yet.
+- The most recent task log also says live OpenChamber extension loading and a real OpenCode Zen Free inference have not been verified in the available execution environment.
 
-Latest inspected workflow runs:
-- [Verify and Bundle — latest inspected run](https://github.com/Yoganataa/blackrouter/actions/runs/40325271651)
-- [Verify and Bundle — preceding run](https://github.com/Yoganataa/blackrouter/actions/runs/40325102171)
+Therefore, before merging PR #2:
+- [ ] Refresh the latest PR head SHA and workflow results; don't assume older green runs represent the current head.
+- [ ] Remove the temporary CI diagnostic test while preserving its findings in [the PR task log](https://github.com/Yoganataa/blackrouter/blob/feat/port-9router-rtk-upstream/task/PR-2-stabilize-validation.md).
+- [ ] Add targeted instrumentation for the internal CONNECT `ClientRequest` socket/close/error events and compare destruction order (agent-first vs. outer-request-first).
+- [ ] Implement a narrowly scoped cleanup/timeout fix only after ownership and lifecycle behavior are reproducible; add deterministic, separate regression tests for downstream cancellation and CONNECT-handshake timeout. Assert client-side request/socket closure and bounded completion, not an unreliable immediate server-side TCP `close` after half-close.
+- [ ] Run `bun run type-check`, `bun test`, and `bun run build` on the resulting current head; inspect generated bundles and remove diagnostic-only instrumentation.
+- [ ] Verify the OpenChamber host loads the extension and perform a real short OpenCode Zen Free inference request.
+- [ ] Exercise direct, configured HTTP-proxy and relay paths, including the guarantee that selected proxy/relay failures do not silently fall back to direct egress.
+- [ ] Re-audit FR-M1–FR-M8 and keep every unverified runtime criterion open.
 
-Do not mark Phase 1 complete until these checks pass and the PR is merged or its changes are otherwise integrated.
-
+Do not mark Phase 1 complete or start FR-S4 provider work until these Must gaps are resolved and the relevant acceptance evidence is recorded.
 ## 5. Upstream PR Reference Policy
 
 Check official 9router's current code and PR status before porting a fix. A PR's description is evidence of proposed behavior, not proof that it was merged or remains the preferred implementation.
@@ -196,10 +223,13 @@ Phases are ordered and remain an implementation/backlog guide, subordinate to th
 
 - [ ] Keep OpenCode Free as the initial supported no-user-API-key path until core reliability is proven.
 - [ ] Design a provider adapter/registry boundary before adding more providers; do not scatter provider-specific conditions through the gateway.
-- [ ] Identify providers that are genuinely free or do not require a user-supplied API key, using current official documentation and live verification.
-- [ ] Distinguish no-key access from OAuth/account-bound access, API-key providers, trial credits, and paid services.
-- [ ] Add providers one at a time with model metadata, auth requirements, request/response translation, capability handling, rate-limit behavior, and tests.
-- [ ] Keep optional custom OpenAI-compatible upstreams supported without making credentials mandatory for the default path.
+- [ ] Implement and validate the provider adapter/registry boundary before target-specific implementation.
+- [ ] Verify the current official access path, terms, regions, account requirements, model catalog and usage limits for CodeBuddy CN, WorkBuddy/Tencent TokenHub and Freebuff.
+- [ ] Implement CodeBuddy CN using current official 9Router behavior as a reference, subject to source/license review and targeted regression tests.
+- [ ] Add WorkBuddy/Tencent TokenHub through documented API endpoints and credential flows; make endpoint region, model ID, capability flags and plan/usage class explicit.
+- [ ] Run a Freebuff feasibility/security/terms spike first. Implement only if a supported and permitted integration path can be established; do not ship a private-endpoint or credential-harvesting workaround.
+- [ ] For each accepted adapter, test catalog, real inference, streaming/non-streaming, tools where supported, expired credentials, rate-limit/quota exhaustion, cancellation, error propagation and bounded fallback.
+- [ ] Keep the optional custom OpenAI-compatible upstream supported without making credentials mandatory for the default OpenCode Zen Free lane.
 - [ ] Never advertise a provider as unlimited or permanently free without explicit, current evidence.
 
 **Exit criteria:** each enabled provider has a tested adapter and clear authentication/usage requirements; adding a provider does not destabilize existing providers.
