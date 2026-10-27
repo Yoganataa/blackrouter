@@ -213,3 +213,20 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 **Evidence:** failed diagnostic run [40436208858](https://github.com/Yoganataa/blackrouter/actions/runs/40436208858). Earlier validated baseline run [40432289509](https://github.com/Yoganataa/blackrouter/actions/runs/40432289509) remains the last known passing CI run for the restored implementation; a fresh CI run is expected after the reverts.
 
 **Next action:** isolate raw TCP socket events and ownership; do not begin SHOULD work or mark FR-M6 complete until a regression test proves socket cleanup.
+
+
+## Latest session checkpoint (2026-10-27, restored baseline and CONNECT ownership review)
+
+**Phase:** Confirm the reverted baseline and narrow the next CONNECT diagnostic.
+
+- [x] Confirmed the test-file revert CI run [40436277855](https://github.com/Yoganataa/blackrouter/actions/runs/40436277855) completed successfully. The adjacent source-only revert run [40436272762](https://github.com/Yoganataa/blackrouter/actions/runs/40436272762) failed because it ran before the temporary failing test was reverted; do not interpret that intermediate run as validation of the final restored tree.
+- [x] Re-inspected the restored `TunnelAgent.createConnection()`: it creates a separate `http.ClientRequest`/ `https.ClientRequest` for CONNECT, but does not retain the request on the agent. It returns `null` as the asynchronous connection placeholder, and the CONNECT request owns the proxy-side connection until the handshake completes.
+- [!] This is a concrete lifecycle ownership concern, not yet a proven root cause. Agent destruction alone may not cancel that independently-created pending request; however, prior experiments did not establish that destroying the request reliably closes the observed server socket. Do not change production code based only on this inspection.
+- [ ] Next: add a narrowly scoped raw TCP/HTTP CONNECT diagnostic that records (1) proxy server socket `connection`/ `end`/ `close`, (2) CONNECT request `socket`/ `close`/ `error`, and (3) agent/upstream request destruction independently. Use the trace to distinguish request cancellation from agent destruction before proposing a fix.
+- [ ] FR-M6 remains open: no passing deterministic CONNECT timeout/cancellation test and no live OpenCode acceptance yet.
+
+**Session changes:** task log only; no runtime code or behavioral tests changed in this phase.
+
+**Evidence:** restored-test CI run [40436277855](https://github.com/Yoganataa/blackrouter/actions/runs/40436277855) succeeded. The previous failing diagnostic remains [40436208858](https://github.com/Yoganataa/blackrouter/actions/runs/40436208858); it is retained as evidence of the failed experiment, not acceptance.
+
+**Next action:** run the isolated socket-event diagnostic. Keep MUST-first scope and do not start RTK/SHOULD expansion.
