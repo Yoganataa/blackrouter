@@ -6,7 +6,7 @@ import { pipeline, Readable, Transform } from 'node:stream';
 import tls from 'node:tls';
 
 import type { ProxyPool, RouterConfig, RouterModel } from '../contract.ts';
-import { upstreamError } from './errors.ts';
+import { redactDiagnosticText, upstreamError } from './errors.ts';
 import { resolveModelMetadata } from './model-metadata.ts';
 import { aggregateStream } from './sse.ts';
 import { createOpenCodeResponseTransform, createToolNameRestoreTransform, type OpenCodeLane } from './opencode-protocol.ts';
@@ -448,7 +448,7 @@ export const writeOpenAiError = (
   code: string,
   headers: Record<string, string> = {},
 ): void => {
-  writeJson(response, status, { error: { message, type: 'invalid_request_error', code } }, headers);
+  writeJson(response, status, { error: { message: redactDiagnosticText(message), type: 'invalid_request_error', code } }, headers);
 };
 
 /** A folded stream stays in memory; this is far more than one answer needs. */
