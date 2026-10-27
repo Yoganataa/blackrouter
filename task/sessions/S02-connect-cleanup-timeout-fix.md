@@ -1,6 +1,6 @@
 # Session S02 — CONNECT Cleanup and Timeout Fix
 
-**Status:** Active  
+**Status:** Complete  
 **Scope source:** `goals.md` on `main`, `BR-SCOPE-1.2`  
 **Related requirement:** FR-M6  
 **Dependency:** S01 must establish the relevant CONNECT request/socket event ordering first.  
@@ -32,14 +32,18 @@ Implement the smallest production change justified by S01 evidence so a pending 
 
 ## Acceptance criteria
 
-- [ ] Fix maps directly to S01 evidence; no speculative ownership assumptions remain.
-- [ ] Timeout produces a bounded, normalized failure and cleans up owned resources.
-- [ ] Agent/outer-request destruction cancels a pending CONNECT request/socket as designed.
-- [ ] Success, timeout, error and destroy paths do not double-call callbacks or leak listeners/resources.
-- [ ] Focused tests plus type-check, full tests and build pass, or exact failures are recorded.
-- [ ] Generated bundles are reviewed if source changes require regeneration.
-- [ ] Task log records changed files, commit SHA, CI run, results and next task S03.
+- [x] Fix maps directly to S01 evidence; no speculative ownership assumptions remain.
+- [x] Timeout produces a bounded, normalized failure and cleans up owned resources.
+- [x] Agent/outer-request destruction cancels a pending CONNECT request/socket as designed.
+- [x] Shared settled guard and cleanup cover success handoff, timeout, error and destroy paths; focused tests exercise timeout, non-200 handshake error, and agent destruction.
+- [x] CI run 40514257385 passed type-check, all 158 tests, and build.
+- [x] CI regenerated/reviewed the service bundle; workflow produced bundle sync commit ad30aa976de1b8085a6692a061da23d9e0cb1c3f. A later build on the final code/test head passed without further bundle changes.
+- [x] Task log records changed files, implementation commits, CI evidence, residual risk, and next task S03.
 
 ## Session report
 
-Implementation added on 2026-10-27; focused regression tests and current-head CI are pending. Do not mark complete until the criteria above have evidence.
+**Result: COMPLETE — S02 implementation and CI gate.** Code commit: cff71bb68a1af11e6648ab2e3ab3b8b26a8a74d9. Test-fixture correction: d3df3845038c6d7dab6c242ead777e8990c9b5ad. Additional HTTP 407 regression: 863357dc28eda0941b50e9f5b0be12e607b11503. CI run 40514257385 passed Type check, 158 unit tests (0 failures), and Build OpenChamber bundles.
+
+**Coverage:** stalled CONNECT timeout, rejected HTTP 407 handshake, and agent destruction each produce one outer-request error and a destroyed outer request. Shared pending-settlement logic removes the pending entry, clears the timer, and destroys owned request/socket resources on failure; successful TLS handoff clears the pending entry and timeout before invoking the callback.
+
+**Residual risk:** there is no dedicated successful end-to-end TLS-through-proxy integration test, and live OpenChamber/OpenCode acceptance remains S10. S02 does not close all FR-M6 or overall PR MUST gates. Do not start S03 until the task log is reviewed; S03 is the next task.
