@@ -3,7 +3,7 @@
 **Repository:** `Yoganataa/blackrouter`  
 **Working branch:** `feat/port-9router-rtk-upstream`  
 **Pull request:** [#2 — feat: port native core and upstream free-tier fixes](https://github.com/Yoganataa/blackrouter/pull/2)  
-**Latest branch head after session-planning docs:** `458f6ea845d6d5d591d6b22114da6800473f4495` (documentation-only commits after the last code CI).  
+**Latest branch head after session-planning docs:** `4b30c449ecaf9a0b965152de8fb4152894ba88d7` (refreshed while preparing this task-card batch; see latest branch for subsequent documentation commits). (documentation-only commits after the last code CI).  
 **Latest code CI evidence:** [run 40443707710](https://github.com/Yoganataa/blackrouter/actions/runs/40443707710) passed after the temporary CONNECT diagnostic test was removed. This validates the code tree before the session-plan documentation commits, not live OpenChamber/provider behavior.  
 **Latest known bundle-sync commit:** `79d30d8` (service bundle synchronized in earlier CI run; the latest removal was diagnostic-test-only).
 
@@ -321,3 +321,20 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - [ ] S01 remains the only active task. S02 is dependent on S01 evidence; S03–S05 remain not started. Do not execute them out of order.
 
 **Next task:** continue S01 diagnostic work. Generate the next card batch after this batch is reviewed or as the user requests.
+
+
+## Detailed task-card generation — batch 2 (2026-10-27)
+
+**Purpose:** prepare S06–S10 with explicit MUST acceptance gates, without starting these tasks or changing the active task.
+
+- [x] Created `task/sessions/S06-opencode-native-behavior-audit.md` — commit `235fdb2d92be3a2ea8d3dfd971e376a4ba0b0f60`.
+- [x] Created `task/sessions/S07-test-model-real-inference.md` — commit `4297fdf43d089e87d9abd091159e933567bb3344`.
+- [x] Created `task/sessions/S08-security-secret-handling-audit.md` — commit `edef74b20fe3f93877d894888c3a7d37720bb30d`.
+- [x] Created `task/sessions/S09-reproducible-ci-bundle-gate.md` — commit `4c1bc7bfec5e302fae0a1cd35dc220015d48b7ba`.
+- [x] Created `task/sessions/S10-openchamber-opencode-runtime-acceptance.md` — commit `4b30c449ecaf9a0b965152de8fb4152894ba88d7`.
+- [x] Updated `task/SESSION-PLAN.md` to index S06–S10.
+- [!] This batch is documentation-only. No application code, tests, generated bundles, or runtime behavior changed. CI was not run for this documentation batch.
+- [!] S01 remains the only active task; S02–S10 are prepared/not started according to their dependencies. S10 cannot be marked passed without actual supported-host and real inference evidence.
+- [ ] Next implementation work remains S01: capture internal CONNECT ClientRequest socket/connect/timeout/error/close lifecycle and compare destruction order. Do not jump to S06 or S07 before earlier tasks and MUST gates are addressed.
+
+**Latest known code CI:** [run 40443707710](https://github.com/Yoganataa/blackrouter/actions/runs/40443707710), successful on its recorded code commit before these documentation-only changes. It is not a current-head validation and does not prove live runtime acceptance.
