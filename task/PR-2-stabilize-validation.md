@@ -480,3 +480,14 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - Status: ACTIVE until CI verifies type-check, focused tests, full suite and build. Next task remains S03 until exit criteria are evidenced.
 
 - S03 CI run 40597358407 failed after type-check passed and 160 tests passed: the active-stream fixture waited for the request `end` event before writing the first response chunk and timed out. Changed the fixture to begin streaming as soon as the upstream request arrives; the test still requires observed upstream response-socket closure after client cancellation. Retest pending.
+
+
+## S03 final result — 2026-10-28
+
+- **Final task status:** COMPLETE — downstream cancellation lifecycle and automated validation. FR-M6 still has broader remaining work and PR #2 MUST gates remain open.
+- **Implementation commit:** 7081572a831814eb97e52bb4917b8594b4044cfb. Follow-up test commits: ca9a7d6abc8fdfc88649480df8494ecfcec2fff9 (assert actual upstream socket close), 40ead3b880db1635aa98d5bf36be243d7ca61afb (deterministic active-stream fixture), and 9b053609d979782e07dddc33d7e9cddf24322abd (correct SSE frame delimiters). Current branch HEAD: 26b2b38c2d69f27ceff8d416d8ed75b7863b573f; PR #2 remains open/unmerged.
+- **Validation:** [CI run 40597547670](https://github.com/Yoganataa/blackrouter/actions/runs/40597547670) passed `bun run type-check`, `bun test` (**161 pass, 0 fail**), and `bun run build`. The workflow generated bundle-sync commit 26b2b38c2d69f27ceff8d416d8ed75b7863b573f; comparison of the generated commit against verified source/test commit 9b053609d979782e07dddc33d7e9cddf24322abd shows only `service/main.js` changed.
+- **Behavior change:** `proxyChatCompletion` now destroys the per-attempt `target.agent` when the downstream response closes. The transport-error handler exits immediately if the downstream response is already destroyed/ended, preventing fallback attempts and error writes after cancellation.
+- **Regression evidence:** local HTTP integration tests prove upstream request socket closure when the downstream client disconnects while awaiting a response, upstream response stream closure when the client disconnects during streaming, and successful normal completion without cancellation. Both cancellation assertions use a 500 ms bound.
+- **Fixture correction history:** run 40597358407 failed the active-stream test because its fixture never emitted a valid SSE frame; run 40597396640 still failed because the fixture delayed writing until request end; run 40597471516 revealed double-escaped frame delimiters. The fixture was corrected and final run 40597547670 passed. These failures were test-fixture issues, not changes to production behavior; no assertion was relaxed.
+- **Next permitted task:** S04 — egress policy audit. Do not start SHOULD work before S11.
