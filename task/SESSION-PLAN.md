@@ -25,7 +25,7 @@
 - [S02 — CONNECT cleanup and timeout fix](sessions/S02-connect-cleanup-timeout-fix.md) — complete; timeout, HTTP 407, and agent-destroy regressions pass in CI.
 - [S03 — Downstream cancellation lifecycle](sessions/S03-downstream-cancellation.md) — complete; upstream socket/stream cancellation and normal completion pass CI.
 - [S04 — Egress policy audit](sessions/S04-egress-policy-audit.md) — complete; transport failure, all-pools-cooling-down, and diagnostic redaction regressions pass CI run 40628998383.
-- [S05 — Response and streaming contract audit](sessions/S05-response-stream-contract-audit.md) — active; requirement-to-test matrix started and two local non-streaming response-contract regressions added; CI pending.
+- [S05 — Response and streaming contract audit](sessions/S05-response-stream-contract-audit.md) — active/incomplete; CI run 40630642428 passed type-check, 166 tests, and build; deterministic upstream-abrupt-close coverage remains open.
 - [S06 — Native OpenCode behavior and model routing audit](sessions/S06-opencode-native-behavior-audit.md) — prepared; not started.
 - [S07 — Test Model real inference](sessions/S07-test-model-real-inference.md) — prepared; not started.
 - [S08 — Security and secret-handling audit](sessions/S08-security-secret-handling-audit.md) — prepared; not started.
@@ -64,7 +64,7 @@ These tasks block provider implementation and SHOULD work. Complete in order unl
 | S02 | [x] | Implement the smallest CONNECT cleanup/timeout fix supported by S01 evidence. | Deterministic regression tests prove bounded timeout and client-side request/socket cleanup; no unrelated transport changes. |
 | S03 | [x] | Validate downstream cancellation and request lifecycle independently from CONNECT timeout. | Deterministic local-upstream test proves cancellation reaches the owned upstream resources and completes within a bound. |
 | S04 | [x] | Audit direct, HTTP forward-proxy, and relay egress behavior. | Route matrix and regression tests prove no silent direct fallback and bounded/redacted no-route errors; CI 40628998383 passed type-check, 163 tests, and build. |
-| S05 | [/] | Audit streaming and non-streaming response contract, errors, first-byte keepalive, and status/body propagation. | Targeted tests cover normal and failure paths; gaps are documented rather than inferred. |
+| S05 | [/] | Audit streaming and non-streaming response contract, errors, first-byte keepalive, and status/body propagation. | CI 40630642428 passed type-check, 166 tests, and build; upstream-abrupt-close after headers remains an explicit unresolved test gap. |
 | S06 | [ ] | Audit model catalog, endpoint selection, native OpenCode headers/fingerprints, and session affinity. | Requirement-to-test matrix maps FR-M2/FR-M4 to concrete evidence; missing coverage is isolated. |
 | S07 | [ ] | Verify Test Model sends a real short inference and reports the real result. | Test path is proven by code/tests and live evidence where runtime credentials/access are available; connectivity-only success is rejected. |
 | S08 | [ ] | Complete security/secret-handling audit. | Loopback default, credential redaction, stored-secret preservation, logs/diagnostics and relay error surfaces reviewed with regression evidence. |
