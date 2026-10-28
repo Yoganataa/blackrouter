@@ -24,7 +24,7 @@ import {
   type TestProxyPoolResult,
   type UpdateProxyPoolInput,
 } from '../contract.ts';
-import { createApiKey, createConfigStore, type ConfigStore } from './config.ts';
+import { createApiKey, createConfigStore, preserveProxyPoolCredentials, redactProxyUrlCredentials, type ConfigStore } from './config.ts';
 import {
   deployCloudflare as executeDeployCloudflare,
   deployDeno as executeDeployDeno,
@@ -32,7 +32,7 @@ import {
   deployVercel as executeDeployVercel,
   testRelayOrProxy,
 } from './deployers.ts';
-import { RouterError, badRequest } from './errors.ts';
+import { RouterError, badRequest, redactDiagnosticText } from './errors.ts';
 import {
   readRegistration,
   registerProvider,
@@ -47,8 +47,36 @@ import { createRequestHistoryStore, REQUEST_HISTORY_LIMIT } from './request-hist
 import { parseRetryAfterMs } from './retry-after.ts';
 import { startRouterServer, type RouterServer } from './router-server.ts';
 import { aggregateStream } from './sse.ts';
+import { createOpenCodeResponseTransform, createToolNameRestoreTransform, type OpenCodeLane } from './opencode-protocol.ts';
 import { buildTarget, fetchModelIds, hasSameUpstreamOrigin, isOpenCodeUpstream, toModels } from './upstream.ts';
-import { freeTierHeaders, prepareChat, sessionId } from './zen.ts';
+import { prepareChat, sessionId } from './zen.ts';
+// @ts-ignore - the selected provider core is copied from upstream JavaScript.
+import { prepareProviderRequest } from './core/provider-adapter.js';
+
+
+const normalizeTestSse = (
+  raw: string,
+  lane: OpenCodeLane | undefined,
+  model: string,
+  toolNameMap?: Map<string, string> | null,
+): Promise<string> => {
+  if (!lane) return Promise.resolve(raw);
+  const transform = lane === 'chat'
+    ? createToolNameRestoreTransform(toolNameMap)
+    : createOpenCodeResponseTransform(lane, model, toolNameMap);
+  if (!transform) return Promise.resolve(raw);
+
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    transform.on('data', (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    transform.on('error', reject);
+    transform.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    transform.end(raw);
+  });
+};
+
 
 /**
  * The state the service keeps while it runs, and the operations every route
@@ -154,7 +182,14 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
       running: router !== null,
       routerError,
       endpoint: endpointFor(config),
-      config: { ...config, upstreamApiKey: '' },
+      config: {
+        ...config,
+        upstreamApiKey: '',
+        proxyPools: config.proxyPools.map((pool) => ({
+          ...pool,
+          proxyUrl: redactProxyUrlCredentials(pool.proxyUrl),
+        })),
+      },
       upstreamApiKeyConfigured: Boolean(config.upstreamApiKey?.trim()),
       models,
       modelsFetchedAt,
@@ -199,7 +234,11 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
           persist({ ...config, proxyPools: updatedPools });
         },
         record: (entry: RequestEntry) => {
-          requests.unshift(entry);
+          requests.unshift({
+            ...entry,
+            ...(typeof entry.poolName === 'string' ? { poolName: redactDiagnosticText(entry.poolName) } : {}),
+            ...(entry.fallbackReason ? { fallbackReason: redactDiagnosticText(entry.fallbackReason) } : {}),
+          });
           if (requests.length > REQUEST_LOG_LIMIT) requests.length = REQUEST_LOG_LIMIT;
           try {
             requestHistory.save(requests);
@@ -211,7 +250,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
       });
     } catch (error) {
       router = null;
-      routerError = error instanceof Error ? error.message : String(error);
+      routerError = redactDiagnosticText(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -226,7 +265,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         refreshRegistration(false);
       }
     } catch (error) {
-      modelsError = error instanceof Error ? error.message : String(error);
+      modelsError = redactDiagnosticText(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -279,7 +318,9 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
           : patch.selectedModels ?? previous.selectedModels,
         fallbackModels: patch.fallbackModels ?? previous.fallbackModels,
         modelCombos: patch.modelCombos ?? previous.modelCombos,
-        proxyPools: patch.proxyPools ?? previous.proxyPools,
+        proxyPools: patch.proxyPools !== undefined
+          ? preserveProxyPoolCredentials(previous.proxyPools, patch.proxyPools)
+          : previous.proxyPools,
         proxyStrategy: patch.proxyStrategy ?? previous.proxyStrategy,
         activePoolId: patch.activePoolId !== undefined ? patch.activePoolId : previous.activePoolId,
         stickyLimit: patch.stickyLimit ?? previous.stickyLimit,
@@ -426,10 +467,7 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         max_tokens: 8,
         stream: false,
       });
-      const prepared = prepareChat(chatPayload, {
-        rtkEnabled: false,
-        openCodeFreeTier: isOpenCodeUpstream(config.upstream),
-      });
+      const prepared = prepareChat(chatPayload, { rtkEnabled: false });
 
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const pool = modelTestPoolSelector.pickPool(config, attempted);
@@ -444,15 +482,22 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
         }
         if (pool && attempted.has(pool.id)) break;
         if (pool) attempted.add(pool.id);
-        const target = buildTarget(config, 'chat', pool, modelId);
-        const testHeaders: Record<string, string> = {
-          ...(isOpenCodeUpstream(config.upstream) ? freeTierHeaders(runtimeSession) : {}),
-          ...target.headers,
-          'Content-Type': 'application/json',
-          Accept: 'text/event-stream',
-        };
-
         try {
+          let nativeRequest: { url?: URL; headers?: Record<string, string>; body?: string; lane?: OpenCodeLane; toolNameMap?: Map<string, string> | null; directFetch?: (url: URL, options: RequestInit) => Promise<Response> } | null = null;
+          if (isOpenCodeUpstream(config.upstream)) {
+            const parsedBody = JSON.parse(prepared.body) as Record<string, unknown>;
+            nativeRequest = await prepareProviderRequest({ model: modelId, body: parsedBody, session: runtimeSession });
+          }
+          const target = buildTarget(config, 'chat', pool, nativeRequest?.url);
+          const outboundBody = nativeRequest?.body ?? prepared.body;
+          const testHeaders: Record<string, string> = {
+            ...(isOpenCodeUpstream(config.upstream) ? nativeRequest?.headers ?? {} : {}),
+            ...target.headers,
+            'content-type': 'application/json',
+            accept: 'text/event-stream',
+            'content-length': String(Buffer.byteLength(outboundBody)),
+          };
+
           let resultText = '';
           let status = 200;
           let retryAfter: string | undefined;
@@ -473,24 +518,29 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
                 req.destroy();
                 reject(new Error('Test request timed out.'));
               });
-              req.end(prepared.body);
+              req.end(outboundBody);
             });
             resultText = answer.text;
             status = answer.status;
             retryAfter = answer.retryAfter;
           } else {
-            const answer = await fetch(target.url, {
-              method: 'POST',
-              headers: testHeaders,
-              body: prepared.body,
-              signal: AbortSignal.timeout(15_000),
-            });
+            const useNativeTls = isOpenCodeUpstream(config.upstream) && !pool && activePoolCount === 0 && typeof nativeRequest?.directFetch === 'function';
+            const fetcher = useNativeTls ? nativeRequest!.directFetch! : fetch;
+            const answer = await fetcher(target.url, { method: 'POST', headers: testHeaders, body: outboundBody, signal: AbortSignal.timeout(15_000) });
             resultText = await answer.text();
             status = answer.status;
             retryAfter = answer.headers.get('retry-after') ?? undefined;
           }
 
           if (status >= 200 && status < 300) {
+            if (nativeRequest) {
+              resultText = await normalizeTestSse(
+                resultText,
+                nativeRequest.lane,
+                modelId,
+                nativeRequest.toolNameMap,
+              );
+            }
             const aggregated = aggregateStream(resultText);
             const choices = Array.isArray(aggregated.choices) ? aggregated.choices : [];
             const firstChoice = choices[0] as { message?: { content?: string } } | undefined;
@@ -500,7 +550,6 @@ export const createRuntime = (store: ConfigStore = createConfigStore()): Runtime
 
           lastError = `HTTP ${status}: ${resultText.slice(0, 300)}`;
           if (status !== 429) break;
-          const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
           if (!pool && activePoolCount === 0) {
             directRateLimitedUntil = Date.now() + parseRetryAfterMs(retryAfter);
             lastError = `HTTP 429: upstream rate-limited; retry after approximately ${Math.ceil((directRateLimitedUntil - Date.now()) / 1000)} seconds.`;

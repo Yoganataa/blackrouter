@@ -17,6 +17,7 @@ https://opencode.ai/inference/v1/chat/completions (OpenCode Free models)
 - **OpenAI Compatible Endpoint**: Binds `http://127.0.0.1:20128/v1` with standard `/v1/models` and `/v1/chat/completions` (streaming SSE & folded JSON).
 - **Upstream Provider**: OpenCode Zen Free remains the default. A configurable OpenAI-compatible API base URL and optional Bearer API key can be used for other chat-completions providers; the key is stored locally and redacted from panel state.
 - **Official OpenCode Free Integration**: Accurately cloaks OpenCode Zen requests with OpenCode CLI v2 client headers, fingerprint tools (`read` and `shell`), and conversation session affinity.
+- **Native Provider Core**: Uses the upstream OpenCode executor and native request translators for Chat Completions, Responses, and Messages. Provider identity, endpoint choice, fingerprint tools, request headers, and model-specific request shaping live in `service/core/`; BlackRouter supplies only the OpenChamber transport boundary and response-stream adapter. The current core scope is OpenCode Free; additional providers are intentionally not included yet. Source revision and adapter boundaries are documented in `service/core/SOURCE.md`.
 - **Dynamic v2 Endpoint Routing**:
   - Chat completions route to `/inference/v1/chat/completions`
   - Muse Spark models route to `/inference/v1/responses`
@@ -29,8 +30,9 @@ https://opencode.ai/inference/v1/chat/completions (OpenCode Free models)
   - One-click deployment from panel via API tokens.
 - **Caveman & Ponytail**: Optional prompt profiles for concise answers and minimal code changes; both default to Off and preserve technical literals and safety checks.
 - **RTK (Repetitive Tool Knowledge) Token Saver**:
-  - Automatically compacts `git diff`, `git status`, `grep`, and large command outputs before upstream forwarding.
-  - Saves 20% to 40% tokens per coding loop without losing vital context.
+  - Uses the upstream RTK implementation to compact `git diff`, `git status`, `git log`, build output, `grep`, `find`, `ls`, `tree`, Cursor search lists, line-numbered reads, duplicate logs, and large unstructured output.
+  - Upstream source revision and per-file blob hashes are recorded in `service/core/rtk/SOURCE.md`; the core implementation stays separate from the OpenChamber transport adapter.
+  - Compression follows the pinned upstream thresholds and filter behavior.
 - **Named Model Combos**: Create up to 20 reusable aliases, each with 2–6 free models in priority order. For example, `blackrouter/combo/fast-coding`; each combo owns its own bounded fallback chain.
 - **Automatic Provider Registration**:
   - One-click register into `~/.config/opencode/opencode.json` with dynamic context limits, capability flags (vision, tools), and reasoning effort variants (`low`, `medium`, `high`, `xhigh`, `max`).

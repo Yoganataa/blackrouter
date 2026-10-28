@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import http4 from "node:http";
 import https3 from "node:https";
-import path4 from "node:path";
+import path7 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // node_modules/zod/v3/helpers/util.js
@@ -4023,6 +4023,27 @@ import { homedir } from "node:os";
 import path from "node:path";
 var DEFAULT_PORT = 20128;
 var OPENCODE_ZEN = "https://opencode.ai/zen/v1";
+var redactProxyUrlCredentials = (value) => {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) {
+      url.username = "REDACTED";
+      url.password = "REDACTED";
+    }
+    const sensitiveQueryKey = /^(?:token|secret|password|passwd|auth|api[_-]?key|access[_-]?token|refresh[_-]?token|signature|sig)$/i;
+    for (const key of [...url.searchParams.keys()]) {
+      if (sensitiveQueryKey.test(key))
+        url.searchParams.set(key, "REDACTED");
+    }
+    return url.toString();
+  } catch {
+    return value.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/@]*@/i, "$1REDACTED@");
+  }
+};
+var preserveProxyPoolCredentials = (previous, incoming) => incoming.map((pool) => {
+  const stored = previous.find((candidate) => candidate.id === pool.id);
+  return stored && pool.proxyUrl === redactProxyUrlCredentials(stored.proxyUrl) ? { ...pool, proxyUrl: stored.proxyUrl } : pool;
+});
 var createApiKey = () => `sk-${randomBytes(24).toString("hex")}`;
 var defaultConfig = () => ({
   version: 1,
@@ -4117,6 +4138,22 @@ var createConfigStore = (file = defaultConfigPath()) => ({
 import { createHash } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
+
+// service/errors.ts
+class RouterError extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "RouterError";
+    this.code = code;
+  }
+}
+var badRequest = (message) => new RouterError("bad-request", message);
+var configUnreadable = (message) => new RouterError("config-unreadable", message);
+var upstreamError = (message) => new RouterError("upstream", message);
+var redactDiagnosticText = (value) => value.replace(/([a-z][a-z\d+.-]*:\/\/)[^/@\s]+@/gi, "$1[REDACTED]@").replace(/([?&](?:token|secret|password|passwd|auth|api[_-]?key|access[_-]?token|refresh[_-]?token|signature|sig)=)[^&#\s]*/gi, "$1[REDACTED]").replace(/(\bBearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[REDACTED]").replace(/(\bx-api-key\s*[:=]\s*)[^\s,;]+/gi, "$1[REDACTED]");
+
+// service/deployers.ts
 var CLOUDFLARE_WORKER_CODE = `
 export default {
   async fetch(request, env, ctx) {
@@ -4152,7 +4189,7 @@ export default {
         headers: response.headers,
       });
     } catch (error) {
-      return new Response(JSON.stringify({ error: error.message }), {
+      return new Response(JSON.stringify({ error: "Relay fetch failed" }), {
         status: 502,
         headers: { "content-type": "application/json" },
       });
@@ -4194,7 +4231,7 @@ export default async function handler(req) {
       headers: response.headers,
     });
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(JSON.stringify({ error: "Relay fetch failed" }), {
       status: 502,
       headers: { "content-type": "application/json" },
     });
@@ -4236,7 +4273,7 @@ Deno.serve(async (request) => {
       headers: response.headers,
     });
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(JSON.stringify({ error: "Relay fetch failed" }), {
       status: 502,
       headers: { "content-type": "application/json" },
     });
@@ -4308,7 +4345,7 @@ exports.handler = async (event) => {
     return {
       statusCode: 502,
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ error: error.message || "Relay fetch failed" }),
+      body: JSON.stringify({ error: "Relay fetch failed" }),
     };
   }
 };
@@ -4339,7 +4376,7 @@ async function testRelay(relayUrl, timeoutMs = 1e4, fetchImpl = fetch) {
       ok: false,
       status: 500,
       elapsedMs: Date.now() - startedAt,
-      error: errorMsg
+      error: redactDiagnosticText(errorMsg)
     };
   } finally {
     clearTimeout(timer);
@@ -4403,7 +4440,7 @@ async function testForwardProxy(proxyUrlString, targetHost = "opencode.ai", targ
           ok: false,
           status: 502,
           elapsedMs: Date.now() - startedAt,
-          error: err instanceof Error ? err.message : String(err)
+          error: redactDiagnosticText(err instanceof Error ? err.message : String(err))
         });
       });
       req.end();
@@ -4416,7 +4453,7 @@ async function testForwardProxy(proxyUrlString, targetHost = "opencode.ai", targ
         ok: false,
         status: 400,
         elapsedMs: Date.now() - startedAt,
-        error: err instanceof Error ? err.message : String(err)
+        error: redactDiagnosticText(err instanceof Error ? err.message : String(err))
       });
     }
   });
@@ -4759,19 +4796,6 @@ async function deployNetlify(input, fetchImpl = fetch, maxPollMs = 120000) {
     proxyUrl: relayUrl
   };
 }
-
-// service/errors.ts
-class RouterError extends Error {
-  code;
-  constructor(code, message) {
-    super(message);
-    this.name = "RouterError";
-    this.code = code;
-  }
-}
-var badRequest = (message) => new RouterError("bad-request", message);
-var configUnreadable = (message) => new RouterError("config-unreadable", message);
-var upstreamError = (message) => new RouterError("upstream", message);
 
 // service/opencode-config.ts
 import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
@@ -5383,7 +5407,7 @@ import http3 from "node:http";
 // service/upstream.ts
 import http2 from "node:http";
 import https2 from "node:https";
-import { pipeline } from "node:stream";
+import { pipeline, Readable, Transform as Transform3 } from "node:stream";
 import tls from "node:tls";
 
 // service/sse.ts
@@ -5481,408 +5505,398 @@ var aggregateStream = (text) => {
 // service/opencode-protocol.ts
 import { Transform } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
+
+// service/core/utils/opencodeFingerprint.js
+import os from "node:os";
+import path4 from "node:path";
+var OPENCODE_FINGERPRINT_TOOLS = ["read", "shell"];
+var READ_DESCRIPTION = "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.";
+var FINGERPRINT_TOOL_PARAMETERS = {
+  read: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "File or directory to read" },
+      offset: { type: "integer", minimum: 0, description: "The line or directory entry to start reading from (1-based)" },
+      limit: { type: "integer", minimum: 0, description: "The maximum number of lines or directory entries to read (defaults to and capped at 2000)" }
+    },
+    required: ["path"],
+    additionalProperties: false
+  },
+  shell: {
+    type: "object",
+    properties: {
+      command: { type: "string", description: "Shell command string to execute" },
+      workdir: { type: "string", description: "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead." },
+      timeout: { type: "integer", minimum: 0, description: "Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default." },
+      background: { type: "boolean", description: "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion." }
+    },
+    required: ["command"],
+    additionalProperties: false
+  }
+};
+var SHELL_DESCRIPTION_HEAD = "Execute a shell command and return its output.";
+var SHELL_DESCRIPTION_TAIL = "Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.";
+var SHELL_PLATFORM_WORDINGS = {
+  linux: "Linux using bash",
+  darwin: "macOS using zsh",
+  win32: "Windows using powershell"
+};
+function shellDescription(platform) {
+  const wording = SHELL_PLATFORM_WORDINGS[platform] ?? SHELL_PLATFORM_WORDINGS.linux;
+  return `${SHELL_DESCRIPTION_HEAD} Commands run on ${wording}. ${SHELL_DESCRIPTION_TAIL}`;
+}
+var ACCEPTED_FINGERPRINT_DESCRIPTIONS = {
+  read: new Set([READ_DESCRIPTION]),
+  shell: new Set(Object.keys(SHELL_PLATFORM_WORDINGS).map((platform) => shellDescription(platform)))
+};
+var HOST_PLATFORM = process.platform || "linux";
+var FINGERPRINT_TOOL_DEFINITIONS = {
+  read: { description: READ_DESCRIPTION, parameters: FINGERPRINT_TOOL_PARAMETERS.read },
+  shell: { description: shellDescription(HOST_PLATFORM), parameters: FINGERPRINT_TOOL_PARAMETERS.shell }
+};
+var renamedToolNames = new WeakMap;
+function fingerprintToolKey(name) {
+  const trimmed = String(name ?? "").trim();
+  return OPENCODE_FINGERPRINT_TOOLS.includes(trimmed) ? trimmed : "";
+}
+function toolNameOf(tool) {
+  if (!tool || typeof tool !== "object" || Array.isArray(tool))
+    return "";
+  if (typeof tool.name === "string" && tool.name.trim())
+    return tool.name.trim();
+  const fn = tool.function;
+  if (fn && typeof fn === "object" && !Array.isArray(fn) && typeof fn.name === "string") {
+    return fn.name.trim();
+  }
+  return "";
+}
+function chatFunctionOf(tool) {
+  const fn = tool?.function;
+  return fn && typeof fn === "object" && !Array.isArray(fn) ? fn : null;
+}
+function isFingerprintDefinition(tool, key) {
+  const def = tool && (chatFunctionOf(tool) || tool);
+  const want = FINGERPRINT_TOOL_DEFINITIONS[key];
+  return !!def && ACCEPTED_FINGERPRINT_DESCRIPTIONS[key].has(def.description) && JSON.stringify(def.parameters) === JSON.stringify(want.parameters);
+}
+function withToolName(tool, name) {
+  const fn = chatFunctionOf(tool);
+  return fn ? { ...tool, function: { ...fn, name } } : { ...tool, name };
+}
+function canNormalizeInPlace(tool, key) {
+  const def = chatFunctionOf(tool) || tool;
+  if (!ACCEPTED_FINGERPRINT_DESCRIPTIONS[key].has(def.description))
+    return false;
+  const actual = def.parameters;
+  const expected = FINGERPRINT_TOOL_PARAMETERS[key];
+  if (!actual || actual.type !== "object" || !actual.properties || typeof actual.properties !== "object")
+    return false;
+  if (!Array.isArray(actual.required) || JSON.stringify(actual.required) !== JSON.stringify(expected.required))
+    return false;
+  for (const [name, property] of Object.entries(actual.properties)) {
+    const nativeProperty = expected.properties[name];
+    if (!nativeProperty || property?.type !== nativeProperty.type)
+      return false;
+  }
+  return true;
+}
+function withFingerprintDefinition(tool, key) {
+  const definition = FINGERPRINT_TOOL_DEFINITIONS[key];
+  const fn = chatFunctionOf(tool);
+  if (fn) {
+    return { ...tool, function: { ...fn, description: definition.description, parameters: definition.parameters } };
+  }
+  return { ...tool, description: definition.description, parameters: definition.parameters, strict: false };
+}
+function concealFingerprintToolNames(tools) {
+  const map = new Map;
+  if (!Array.isArray(tools) || tools.length === 0)
+    return { tools, map };
+  const taken = new Set(tools.map(toolNameOf));
+  const seen = new Set;
+  const out = [];
+  for (const tool of tools) {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
+      out.push(tool);
+      continue;
+    }
+    const key = fingerprintToolKey(toolNameOf(tool));
+    if (!key) {
+      out.push(tool);
+      continue;
+    }
+    if (seen.has(key))
+      continue;
+    seen.add(key);
+    if (isFingerprintDefinition(tool, key)) {
+      out.push(tool);
+      continue;
+    }
+    if (canNormalizeInPlace(tool, key)) {
+      out.push(withFingerprintDefinition(tool, key));
+      continue;
+    }
+    let alias = `${key}_client`;
+    for (let i = 2;taken.has(alias); i++)
+      alias = `${key}_client${i}`;
+    taken.add(alias);
+    map.set(alias, key);
+    out.push(withToolName(tool, alias));
+  }
+  return { tools: out, map };
+}
+function appendMissingFingerprintTools(tools, flat) {
+  const appended = [];
+  if (!Array.isArray(tools))
+    return appended;
+  for (const name of OPENCODE_FINGERPRINT_TOOLS) {
+    if (tools.some((tool) => fingerprintToolKey(toolNameOf(tool)) === name))
+      continue;
+    const { description, parameters } = FINGERPRINT_TOOL_DEFINITIONS[name];
+    tools.push(flat ? { type: "function", name, description, parameters, strict: false } : { type: "function", function: { name, description, parameters } });
+    appended.push(name);
+  }
+  return appended;
+}
+function aliasesByOriginal(map) {
+  return new Map([...map].map(([alias, original]) => [original, alias]));
+}
+function retargetToolChoice(body, map) {
+  if (!body || typeof body !== "object" || !map?.size)
+    return;
+  const choice = body.tool_choice;
+  if (!choice || typeof choice !== "object" || Array.isArray(choice))
+    return;
+  const aliases = aliasesByOriginal(map);
+  if (typeof choice.name === "string") {
+    const alias = aliases.get(choice.name.trim());
+    if (alias)
+      body.tool_choice = { ...choice, name: alias };
+    return;
+  }
+  const fn = choice.function;
+  if (fn && typeof fn === "object" && !Array.isArray(fn) && typeof fn.name === "string") {
+    const alias = aliases.get(fn.name.trim());
+    if (alias)
+      body.tool_choice = { ...choice, function: { ...fn, name: alias } };
+  }
+}
+function aliasHistoryToolCalls(body, map) {
+  if (!body || typeof body !== "object" || !map?.size)
+    return;
+  const aliases = aliasesByOriginal(map);
+  if (Array.isArray(body.input)) {
+    body.input = body.input.map((item) => item?.type === "function_call" && aliases.has(item.name) ? { ...item, name: aliases.get(item.name) } : item);
+  }
+  if (Array.isArray(body.messages)) {
+    body.messages = body.messages.map((msg) => {
+      if (!Array.isArray(msg?.tool_calls))
+        return msg;
+      return {
+        ...msg,
+        tool_calls: msg.tool_calls.map((call) => aliases.has(call?.function?.name) ? { ...call, function: { ...call.function, name: aliases.get(call.function.name) } } : call)
+      };
+    });
+  }
+}
+function noteUnavailableTools(body, flat, names, claude) {
+  const list = names.map((name) => `\`${name}\``).join(" or ");
+  const note = names.length > 1 ? `Do not call the ${list} tools; they are placeholders that do nothing. Use the other tools you have been given instead.` : `Do not call the ${list} tool; it is a placeholder that does nothing. Use the other tools you have been given instead.`;
+  if (flat) {
+    body.instructions = typeof body.instructions === "string" && body.instructions.trim() ? `${body.instructions}
+
+${note}` : note;
+    return;
+  }
+  if (claude) {
+    body.system = appendSystemText(body.system, note);
+    return;
+  }
+  if (body.system !== undefined)
+    return;
+  if (!Array.isArray(body.messages))
+    return;
+  const first = body.messages.find((msg) => msg?.role === "system");
+  if (first?.role === "system" && typeof first.content === "string") {
+    body.messages = body.messages.map((msg) => msg === first ? { ...msg, content: `${msg.content}
+
+${note}` } : msg);
+  } else {
+    body.messages = [{ role: "system", content: note }, ...body.messages];
+  }
+}
+var ENV_TAG = "<env>";
+var ENV_HEADING = "Here is some useful information about the environment you are running in:";
+var ENV_TMP_DIR = path4.join(os.tmpdir(), "opencode");
+var ENV_WORKING_DIR = process.cwd();
+var ENV_FINGERPRINT_PROMPT = [
+  ENV_HEADING,
+  "<env>",
+  `  Working directory: ${ENV_WORKING_DIR}`,
+  `  Workspace root folder: ${ENV_WORKING_DIR}`,
+  "  Is directory a git repo: no",
+  `  Platform: ${HOST_PLATFORM}`,
+  `  Prefer ${ENV_TMP_DIR} over generic system temporary directories such as /tmp; it is pre-created and approved for external access.`,
+  "</env>"
+].join(`
+`);
+function systemCarriesEnv(system) {
+  if (typeof system === "string")
+    return system.includes(ENV_TAG);
+  if (Array.isArray(system)) {
+    return system.some((block) => typeof block?.text === "string" && block.text.includes(ENV_TAG));
+  }
+  return false;
+}
+function appendSystemText(system, text) {
+  if (typeof system === "string") {
+    return system.trim() ? `${system}
+
+${text}` : text;
+  }
+  const blocks = Array.isArray(system) ? [...system] : [];
+  for (let i = blocks.length - 1;i >= 0; i--) {
+    const block = blocks[i];
+    if (typeof block?.text === "string") {
+      const existing = block.text.trim();
+      blocks[i] = { ...block, text: existing ? `${block.text}
+
+${text}` : text };
+      return blocks;
+    }
+  }
+  return [...blocks, { type: "text", text }];
+}
+function appendToSystemField(system) {
+  return appendSystemText(system, ENV_FINGERPRINT_PROMPT);
+}
+function applyEnvFingerprint(body, flat, { claude = false } = {}) {
+  try {
+    if (!body || typeof body !== "object")
+      return false;
+    if (flat) {
+      if (body.instructions !== undefined && typeof body.instructions !== "string")
+        return false;
+      if (systemCarriesEnv(body.instructions))
+        return false;
+      body.instructions = typeof body.instructions === "string" && body.instructions.trim() ? `${body.instructions}
+
+${ENV_FINGERPRINT_PROMPT}` : ENV_FINGERPRINT_PROMPT;
+      return true;
+    }
+    if (claude || body.system !== undefined) {
+      if (systemCarriesEnv(body.system))
+        return false;
+      body.system = appendToSystemField(body.system);
+      return true;
+    }
+    if (Array.isArray(body.messages)) {
+      const idx = body.messages.findIndex((msg) => msg?.role === "system");
+      if (idx >= 0) {
+        const target = body.messages[idx];
+        if (Array.isArray(target.content)) {
+          if (systemCarriesEnv(target.content))
+            return false;
+          body.messages = body.messages.map((msg, i) => i === idx ? { ...msg, content: appendToSystemField(target.content) } : msg);
+          return true;
+        }
+        if (systemCarriesEnv(target.content))
+          return false;
+        const content = appendToSystemField(typeof target.content === "string" ? target.content : "");
+        body.messages = body.messages.map((msg, i) => i === idx ? { ...msg, content } : msg);
+        return true;
+      }
+      body.messages = [{ role: "system", content: ENV_FINGERPRINT_PROMPT }, ...body.messages];
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+function applyFingerprintTools(body, flat, { claude = false } = {}) {
+  if (!body || typeof body !== "object")
+    return new Map;
+  const { tools, map } = concealFingerprintToolNames(body.tools);
+  body.tools = Array.isArray(tools) ? tools : [];
+  const appended = appendMissingFingerprintTools(body.tools, flat);
+  retargetToolChoice(body, map);
+  aliasHistoryToolCalls(body, map);
+  if (appended.length)
+    noteUnavailableTools(body, flat, appended, claude);
+  applyEnvFingerprint(body, flat, { claude });
+  if (!body.tool_choice && flat)
+    body.tool_choice = "auto";
+  recordRenamedToolNames(body, map);
+  return map;
+}
+function recordRenamedToolNames(body, map) {
+  if (!body || typeof body !== "object" || !map?.size)
+    return;
+  renamedToolNames.set(body, map);
+}
+function takeRenamedToolNames(body) {
+  if (!body || typeof body !== "object")
+    return null;
+  return renamedToolNames.get(body) || null;
+}
+function restoreToolNames(payload, map) {
+  if (!map?.size || !payload)
+    return payload;
+  if (Array.isArray(payload))
+    return payload.map((item) => restoreToolNames(item, map));
+  if (typeof payload !== "object")
+    return payload;
+  let out = payload;
+  const put = (key, value) => {
+    if (out === payload)
+      out = { ...payload };
+    out[key] = value;
+  };
+  if (payload.type === "content_block_start") {
+    const block = payload.content_block;
+    if (block?.type === "tool_use" && typeof block.name === "string" && map.has(block.name)) {
+      put("content_block", { ...block, name: map.get(block.name) });
+    }
+  }
+  if (Array.isArray(payload.content)) {
+    put("content", payload.content.map((block) => block?.type === "tool_use" && typeof block.name === "string" && map.has(block.name) ? { ...block, name: map.get(block.name) } : block));
+  }
+  if (Array.isArray(payload.choices)) {
+    put("choices", payload.choices.map((choice) => {
+      let changed = false;
+      const next = { ...choice };
+      for (const holder of ["delta", "message"]) {
+        const value = choice?.[holder];
+        if (!value || !Array.isArray(value.tool_calls) || value.tool_calls.length === 0)
+          continue;
+        const calls = value.tool_calls.map((call) => {
+          const name = call?.function?.name;
+          if (typeof name === "string" && map.has(name)) {
+            changed = true;
+            return { ...call, function: { ...call.function, name: map.get(name) } };
+          }
+          return call;
+        });
+        next[holder] = { ...value, tool_calls: calls };
+      }
+      return changed ? next : choice;
+    }));
+  }
+  if (Array.isArray(payload.output)) {
+    put("output", payload.output.map((item) => item?.type === "function_call" && typeof item.name === "string" && map.has(item.name) ? { ...item, name: map.get(item.name) } : item));
+  }
+  const item = payload.item;
+  if (item?.type === "function_call" && typeof item.name === "string" && map.has(item.name)) {
+    put("item", { ...item, name: map.get(item.name) });
+  }
+  return out;
+}
+
+// service/opencode-protocol.ts
 var cleanModelId = (modelId) => {
   const clean = modelId.replace(/\([^()]+\)\s*$/, "").trim();
   return clean.startsWith("blackrouter/") ? clean.slice("blackrouter/".length) : clean;
-};
-var resolveOpenCodeLane = (upstream, modelId) => {
-  let isOpenCode = false;
-  try {
-    const hostname = new URL(upstream).hostname.toLowerCase();
-    isOpenCode = hostname === "opencode.ai" || hostname.endsWith(".opencode.ai");
-  } catch {
-    return "chat";
-  }
-  if (!isOpenCode)
-    return "chat";
-  const base = cleanModelId(modelId).split("/").pop()?.toLowerCase() ?? "";
-  if (/^muse[-_]?spark(?:$|[-_:.\s])/.test(base))
-    return "responses";
-  if (/^union[-_]?alpha(?:$|[-_:.\s])/.test(base))
-    return "messages";
-  return "chat";
-};
-var parseArgs = (value) => {
-  if (value && typeof value === "object" && !Array.isArray(value))
-    return value;
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-  return {};
-};
-var textOf = (value) => {
-  if (typeof value === "string")
-    return value;
-  if (Array.isArray(value)) {
-    return value.map((part) => {
-      if (!part || typeof part !== "object")
-        return "";
-      const block = part;
-      if (typeof block.text === "string")
-        return block.text;
-      if (typeof block.content === "string")
-        return block.content;
-      return "";
-    }).join("");
-  }
-  if (value === null || value === undefined)
-    return "";
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-};
-var textBlocks = (value, role) => {
-  if (typeof value === "string") {
-    return value ? [{ type: role === "assistant" ? "output_text" : "input_text", [role === "assistant" ? "text" : "text"]: value }] : [];
-  }
-  if (!Array.isArray(value))
-    return [];
-  const blocks = [];
-  for (const part of value) {
-    if (!part || typeof part !== "object")
-      continue;
-    const block = part;
-    if (block.type === "text" && typeof block.text === "string") {
-      blocks.push({ type: role === "assistant" ? "output_text" : "input_text", text: block.text });
-    } else if (role === "user" && block.type === "image_url") {
-      const imageUrl = typeof block.image_url === "string" ? block.image_url : block.image_url?.url;
-      if (typeof imageUrl === "string" && imageUrl) {
-        blocks.push({ type: "input_image", image_url: imageUrl, detail: block.image_url?.detail || "auto" });
-      }
-    } else if (role === "user" && (block.type === "input_image" || block.type === "image")) {
-      const imageUrl = block.image_url || block.url || block.file_id;
-      if (typeof imageUrl === "string" && imageUrl) {
-        blocks.push({ type: "input_image", image_url: imageUrl, detail: block.detail || "auto" });
-      }
-    }
-  }
-  return blocks;
-};
-var maxTokensFrom = (body) => {
-  for (const key of ["max_output_tokens", "max_completion_tokens", "max_tokens"]) {
-    const value = body[key];
-    if (typeof value === "number" && Number.isFinite(value) && value > 0)
-      return Math.max(16, Math.floor(value));
-  }
-  return;
-};
-var responseFormatToText = (responseFormat) => {
-  if (!responseFormat || typeof responseFormat !== "object")
-    return;
-  const rf = responseFormat;
-  if (rf.type === "json_object")
-    return { format: { type: "json_object" } };
-  if (rf.type === "json_schema" && rf.json_schema && typeof rf.json_schema === "object") {
-    const schema = rf.json_schema;
-    if (!schema.schema)
-      return;
-    return {
-      format: {
-        type: "json_schema",
-        name: typeof schema.name === "string" && schema.name ? schema.name : "response",
-        schema: schema.schema,
-        ...typeof schema.strict === "boolean" ? { strict: schema.strict } : {}
-      }
-    };
-  }
-  return;
-};
-var responseToolChoice = (choice) => {
-  if (typeof choice === "string")
-    return choice;
-  if (!choice || typeof choice !== "object")
-    return;
-  const value = choice;
-  if (value.type === "function" && value.function?.name)
-    return { type: "function", name: value.function.name };
-  return value;
-};
-var chatToResponses = (body) => {
-  const input = [];
-  const instructions = typeof body.instructions === "string" ? [body.instructions] : [];
-  const pendingCallIds = [];
-  const messages = Array.isArray(body.messages) ? body.messages : [];
-  for (const rawMessage of messages) {
-    if (!rawMessage || typeof rawMessage !== "object")
-      continue;
-    const message = rawMessage;
-    const role = typeof message.role === "string" ? message.role : "user";
-    if (role === "system" || role === "developer") {
-      const text = textOf(message.content);
-      if (text.trim())
-        instructions.push(text);
-      continue;
-    }
-    if (role === "tool" || role === "function") {
-      const suppliedId = typeof message.tool_call_id === "string" ? message.tool_call_id : "";
-      let callId = suppliedId;
-      if (callId) {
-        const index = pendingCallIds.indexOf(callId);
-        if (index >= 0)
-          pendingCallIds.splice(index, 1);
-      } else if (pendingCallIds.length > 0) {
-        callId = pendingCallIds.shift();
-      } else {
-        callId = `call_tool_${input.length}`;
-      }
-      input.push({ type: "function_call_output", call_id: callId.slice(0, 64), output: textOf(message.content) });
-      continue;
-    }
-    if (role === "user" || role === "assistant") {
-      const content = textBlocks(message.content, role);
-      if (content.length > 0)
-        input.push({ type: "message", role, content });
-    }
-    if (role === "assistant" && Array.isArray(message.tool_calls)) {
-      for (const rawCall of message.tool_calls) {
-        if (!rawCall || typeof rawCall !== "object")
-          continue;
-        const call = rawCall;
-        const fn = call.function && typeof call.function === "object" ? call.function : {};
-        if (typeof fn.name !== "string" || !fn.name.trim())
-          continue;
-        const callId = (typeof call.id === "string" && call.id ? call.id : `call_${input.length}`).slice(0, 64);
-        pendingCallIds.push(callId);
-        input.push({
-          type: "function_call",
-          call_id: callId,
-          name: fn.name,
-          arguments: typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments ?? {})
-        });
-      }
-    }
-  }
-  if (input.length === 0)
-    input.push({ type: "message", role: "user", content: [{ type: "input_text", text: "..." }] });
-  const result = {
-    model: cleanModelId(typeof body.model === "string" ? body.model : ""),
-    input,
-    stream: true,
-    store: false
-  };
-  if (instructions.length)
-    result.instructions = instructions.join(`
-
-`);
-  const maxTokens = maxTokensFrom(body);
-  if (maxTokens !== undefined)
-    result.max_output_tokens = maxTokens;
-  for (const key of ["temperature", "top_p", "parallel_tool_calls", "metadata", "include"]) {
-    if (body[key] !== undefined)
-      result[key] = body[key];
-  }
-  if (body.reasoning && typeof body.reasoning === "object")
-    result.reasoning = body.reasoning;
-  else if (typeof body.reasoning_effort === "string" && body.reasoning_effort !== "auto") {
-    result.reasoning = { effort: body.reasoning_effort === "max" ? "xhigh" : body.reasoning_effort, summary: "auto" };
-  }
-  const tools = Array.isArray(body.tools) ? body.tools : [];
-  const responseTools = [];
-  for (const rawTool of tools) {
-    if (!rawTool || typeof rawTool !== "object")
-      continue;
-    const tool = rawTool;
-    const fn = tool.function && typeof tool.function === "object" ? tool.function : tool;
-    if (typeof fn.name !== "string" || !fn.name)
-      continue;
-    responseTools.push({
-      type: "function",
-      name: fn.name,
-      ...typeof fn.description === "string" ? { description: fn.description } : {},
-      parameters: fn.parameters && typeof fn.parameters === "object" ? fn.parameters : { type: "object", properties: {} },
-      ...typeof fn.strict === "boolean" ? { strict: fn.strict } : {}
-    });
-  }
-  if (responseTools.length)
-    result.tools = responseTools;
-  const toolChoice = responseToolChoice(body.tool_choice);
-  if (toolChoice !== undefined)
-    result.tool_choice = toolChoice;
-  const text = responseFormatToText(body.response_format);
-  if (text)
-    result.text = text.format;
-  return result;
-};
-var imageBlockToMessages = (part) => {
-  const imageUrl = typeof part.image_url === "string" ? part.image_url : part.image_url?.url;
-  if (typeof imageUrl !== "string" || !imageUrl)
-    return null;
-  const dataMatch = /^data:([^;]+);base64,(.+)$/s.exec(imageUrl);
-  if (dataMatch) {
-    return { type: "image", source: { type: "base64", media_type: dataMatch[1], data: dataMatch[2] } };
-  }
-  return { type: "image", source: { type: "url", url: imageUrl } };
-};
-var contentToMessages = (value) => {
-  if (typeof value === "string")
-    return value ? [{ type: "text", text: value }] : [];
-  if (!Array.isArray(value))
-    return [];
-  const blocks = [];
-  for (const rawPart of value) {
-    if (!rawPart || typeof rawPart !== "object")
-      continue;
-    const part = rawPart;
-    if (part.type === "text" && typeof part.text === "string")
-      blocks.push({ type: "text", text: part.text });
-    else if (part.type === "image_url") {
-      const image = imageBlockToMessages(part);
-      if (image)
-        blocks.push(image);
-    }
-  }
-  return blocks;
-};
-var mergeMessageTurns = (messages) => {
-  const merged = [];
-  for (const message of messages) {
-    const last = merged[merged.length - 1];
-    if (last && last.role === message.role && Array.isArray(last.content) && Array.isArray(message.content)) {
-      last.content.push(...message.content);
-    } else {
-      merged.push({ ...message, content: Array.isArray(message.content) ? [...message.content] : message.content });
-    }
-  }
-  return merged;
-};
-var chatToMessages = (body) => {
-  const messages = [];
-  const systemParts = typeof body.system === "string" ? [body.system] : [];
-  if (typeof body.instructions === "string")
-    systemParts.push(body.instructions);
-  const rawMessages = Array.isArray(body.messages) ? body.messages : [];
-  const pendingToolIds = [];
-  for (const rawMessage of rawMessages) {
-    if (!rawMessage || typeof rawMessage !== "object")
-      continue;
-    const message = rawMessage;
-    const role = typeof message.role === "string" ? message.role : "user";
-    if (role === "system" || role === "developer") {
-      const systemText = textOf(message.content);
-      if (systemText.trim())
-        systemParts.push(systemText);
-      continue;
-    }
-    if (role === "tool" || role === "function") {
-      const suppliedId = typeof message.tool_call_id === "string" ? message.tool_call_id : "";
-      let callId = suppliedId;
-      if (callId) {
-        const index = pendingToolIds.indexOf(callId);
-        if (index >= 0)
-          pendingToolIds.splice(index, 1);
-      } else if (pendingToolIds.length > 0) {
-        callId = pendingToolIds.shift();
-      } else {
-        callId = `call_tool_${messages.length}`;
-      }
-      messages.push({
-        role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: callId,
-          content: textOf(message.content)
-        }]
-      });
-      continue;
-    }
-    const content = contentToMessages(message.content);
-    if (role === "assistant" && Array.isArray(message.tool_calls)) {
-      for (const rawCall of message.tool_calls) {
-        if (!rawCall || typeof rawCall !== "object")
-          continue;
-        const call = rawCall;
-        const fn = call.function && typeof call.function === "object" ? call.function : {};
-        if (typeof fn.name !== "string" || !fn.name.trim())
-          continue;
-        const id = typeof call.id === "string" && call.id ? call.id : `call_${messages.length}_${content.length}`;
-        pendingToolIds.push(id);
-        content.push({ type: "tool_use", id, name: fn.name, input: parseArgs(fn.arguments) });
-      }
-    }
-    if (content.length)
-      messages.push({ role: role === "assistant" ? "assistant" : "user", content });
-  }
-  let tools = [];
-  if (Array.isArray(body.tools)) {
-    tools = body.tools.flatMap((rawTool) => {
-      if (!rawTool || typeof rawTool !== "object")
-        return [];
-      const tool = rawTool;
-      const fn = tool.function && typeof tool.function === "object" ? tool.function : tool;
-      if (typeof fn.name !== "string" || !fn.name)
-        return [];
-      return [{
-        name: fn.name,
-        ...typeof fn.description === "string" ? { description: fn.description } : {},
-        input_schema: fn.parameters && typeof fn.parameters === "object" ? fn.parameters : { type: "object", properties: {} }
-      }];
-    });
-  }
-  const result = {
-    model: cleanModelId(typeof body.model === "string" ? body.model : ""),
-    max_tokens: maxTokensFrom(body) ?? 4096,
-    stream: true,
-    messages: mergeMessageTurns(messages)
-  };
-  if (systemParts.length)
-    result.system = systemParts.join(`
-
-`);
-  if (tools.length)
-    result.tools = tools;
-  if (typeof body.temperature === "number")
-    result.temperature = body.temperature;
-  if (typeof body.top_p === "number")
-    result.top_p = body.top_p;
-  if (Array.isArray(body.stop))
-    result.stop_sequences = body.stop;
-  if (body.metadata && typeof body.metadata === "object")
-    result.metadata = body.metadata;
-  if (body.tool_choice !== undefined) {
-    const choice = body.tool_choice;
-    if (typeof choice === "string") {
-      if (choice === "required")
-        result.tool_choice = { type: "any" };
-      else
-        result.tool_choice = { type: choice === "none" ? "none" : "auto" };
-    } else if (choice && typeof choice === "object") {
-      const rawChoice = choice;
-      if (rawChoice.type === "function" && rawChoice.function?.name)
-        result.tool_choice = { type: "tool", name: rawChoice.function.name };
-      else if (rawChoice.type === "required" || rawChoice.type === "any")
-        result.tool_choice = { type: "any" };
-      else
-        result.tool_choice = { type: "auto" };
-    }
-  }
-  return result;
-};
-var prepareOpenCodeRequestBody = (raw, lane, normalizeChatModelId = false) => {
-  if (lane === "chat" && !normalizeChatModelId)
-    return raw;
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("The prepared upstream request is not JSON.");
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("The prepared upstream request must be a JSON object.");
-  }
-  const body = parsed;
-  if (lane === "chat") {
-    if (typeof body.model === "string")
-      body.model = cleanModelId(body.model);
-    return JSON.stringify(body);
-  }
-  return JSON.stringify(lane === "responses" ? chatToResponses(body) : chatToMessages(body));
 };
 var parseFrame = (frame) => {
   const lines = frame.split(/\r?\n/);
@@ -5901,12 +5915,105 @@ var parseFrame = (frame) => {
   return { event, data: data.join(`
 `) };
 };
+var liftReasoningAliases = (delta) => {
+  if (typeof delta.reasoning_content === "string" && delta.reasoning_content)
+    return delta;
+  if (typeof delta.reasoning === "string" && delta.reasoning) {
+    return { ...delta, reasoning_content: delta.reasoning };
+  }
+  if (Array.isArray(delta.reasoning_details)) {
+    const text = delta.reasoning_details.map((part) => {
+      if (typeof part === "string")
+        return part;
+      if (!part || typeof part !== "object")
+        return "";
+      const value = part;
+      return typeof value.text === "string" && value.text ? value.text : typeof value.content === "string" ? value.content : "";
+    }).join("");
+    if (text)
+      return { ...delta, reasoning_content: text };
+  }
+  return delta;
+};
+var createToolNameRestoreTransform = (toolNameMap) => {
+  const decoder = new StringDecoder("utf8");
+  let buffer = "";
+  const stream = new Transform({
+    transform(chunk, _encoding, callback) {
+      try {
+        buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
+        let separator = /\r?\n\r?\n/.exec(buffer);
+        while (separator && separator.index !== undefined) {
+          const frame = buffer.slice(0, separator.index);
+          buffer = buffer.slice(separator.index + separator[0].length);
+          processFrame(frame);
+          separator = /\r?\n\r?\n/.exec(buffer);
+        }
+        callback();
+      } catch (error) {
+        callback(error instanceof Error ? error : new Error(String(error)));
+      }
+    },
+    flush(callback) {
+      try {
+        buffer += decoder.end();
+        if (buffer.trim())
+          processFrame(buffer);
+        callback();
+      } catch (error) {
+        callback(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+  });
+  const processFrame = (rawFrame) => {
+    const frame = parseFrame(rawFrame);
+    if (!frame || frame.data === "[DONE]") {
+      stream.push(Buffer.from(rawFrame + `
+
+`));
+      return;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(frame.data);
+    } catch {
+      stream.push(Buffer.from(rawFrame + `
+
+`));
+      return;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      stream.push(Buffer.from(rawFrame + `
+
+`));
+      return;
+    }
+    const payload = parsed;
+    if (Array.isArray(payload.choices)) {
+      payload.choices = payload.choices.map((choice) => {
+        if (!choice || typeof choice !== "object")
+          return choice;
+        const item = choice;
+        if (!item.delta || typeof item.delta !== "object" || Array.isArray(item.delta))
+          return item;
+        return { ...item, delta: liftReasoningAliases(item.delta) };
+      });
+    }
+    const restored = restoreToolNames(payload, toolNameMap);
+    const eventLine = frame.event ? `event: ${frame.event}
+` : "";
+    stream.push(Buffer.from(`${eventLine}data: ${JSON.stringify(restored)}
+
+`));
+  };
+  return stream;
+};
 var responseErrorMessage = (payload) => {
   const response = payload.response && typeof payload.response === "object" ? payload.response : {};
   const error = payload.error && typeof payload.error === "object" ? payload.error : response.error && typeof response.error === "object" ? response.error : payload;
   return typeof error.message === "string" ? error.message : JSON.stringify(error);
 };
-var createOpenCodeResponseTransform = (lane, requestedModel) => {
+var createOpenCodeResponseTransform = (lane, requestedModel, toolNameMap) => {
   if (lane === "chat")
     return null;
   const decoder = new StringDecoder("utf8");
@@ -5931,7 +6038,8 @@ var createOpenCodeResponseTransform = (lane, requestedModel) => {
   let messageToolCount = 0;
   let messageStopReason = "end_turn";
   const emitData = (payload) => {
-    stream.push(Buffer.from(`data: ${JSON.stringify(payload)}
+    const restored = toolNameMap?.size ? restoreToolNames(payload, toolNameMap) : payload;
+    stream.push(Buffer.from(`data: ${JSON.stringify(restored)}
 
 `));
   };
@@ -6208,974 +6316,1920 @@ var createOpenCodeResponseTransform = (lane, requestedModel) => {
   return stream;
 };
 
-// service/zen.ts
-import { randomBytes as randomBytes2 } from "node:crypto";
+// service/core/executors/opencode.js
+import crypto2 from "crypto";
 
-// service/rtk.ts
-var MIN_COMPRESS_SIZE = 256;
-var RAW_CAP = 500 * 1024;
-var DETECT_WINDOW = 2048;
-var GIT_DIFF_HUNK_MAX_LINES = 100;
-var GREP_PER_FILE_MAX = 5;
-var STATUS_MAX_FILES = 10;
-var STATUS_MAX_UNTRACKED = 10;
-var SMART_TRUNCATE_MIN_LINES = 80;
-var SMART_TRUNCATE_HEAD = 30;
-var SMART_TRUNCATE_TAIL = 20;
-var GIT_LOG_MAX_LINES = 200;
-var DEDUP_LINE_MAX = 2000;
-var FIND_PER_DIR_MAX = 10;
-var FIND_TOTAL_DIR_MAX = 20;
-var LS_EXT_SUMMARY_TOP = 5;
-var TREE_MAX_LINES = 200;
-var SEARCH_LIST_PER_DIR_MAX = 10;
-var SEARCH_LIST_TOTAL_DIR_MAX = 20;
-var READ_NUMBERED_MIN_HIT_RATIO = 0.7;
-var LS_NOISE_DIRS = new Set([
-  "node_modules",
-  ".git",
-  "target",
-  "__pycache__",
-  ".next",
-  "dist",
-  "build",
-  ".cache",
-  ".turbo",
-  ".vercel",
-  ".pytest_cache",
-  ".mypy_cache",
-  ".tox",
-  ".venv",
-  "venv",
-  "env",
-  "coverage",
-  ".nyc_output",
-  ".idea",
-  ".vscode",
-  ".vs",
-  ".eggs",
-  ".DS_Store",
-  "Thumbs.db"
-]);
-function compactGitDiff(diff) {
-  const result = [];
-  let currentFile = "";
-  let added = 0;
-  let removed = 0;
-  let inHunk = false;
-  let hunkShown = 0;
-  let hunkSkipped = 0;
-  const lines = diff.split(`
-`);
-  for (const line of lines) {
-    if (line.startsWith("diff --git")) {
-      if (hunkSkipped > 0) {
-        result.push(`  ... (${hunkSkipped} lines truncated)`);
-        hunkSkipped = 0;
-      }
-      if (currentFile && (added > 0 || removed > 0)) {
-        result.push(`  +${added} -${removed}`);
-      }
-      const parts = line.split(" b/");
-      currentFile = parts.length > 1 ? parts.slice(1).join(" b/") : "unknown";
-      result.push(`
-${currentFile}`);
-      added = 0;
-      removed = 0;
-      inHunk = false;
-      hunkShown = 0;
-    } else if (line.startsWith("@@")) {
-      if (hunkSkipped > 0) {
-        result.push(`  ... (${hunkSkipped} lines truncated)`);
-        hunkSkipped = 0;
-      }
-      inHunk = true;
-      hunkShown = 0;
-      result.push(`  ${line}`);
-    } else if (inHunk) {
-      if (line.startsWith("+") && !line.startsWith("+++")) {
-        added += 1;
-        if (hunkShown < GIT_DIFF_HUNK_MAX_LINES) {
-          result.push(`  ${line}`);
-          hunkShown += 1;
-        } else {
-          hunkSkipped += 1;
-        }
-      } else if (line.startsWith("-") && !line.startsWith("---")) {
-        removed += 1;
-        if (hunkShown < GIT_DIFF_HUNK_MAX_LINES) {
-          result.push(`  ${line}`);
-          hunkShown += 1;
-        } else {
-          hunkSkipped += 1;
-        }
-      } else if (line.startsWith("\\")) {} else if (hunkShown < GIT_DIFF_HUNK_MAX_LINES) {
-        result.push(`  ${line}`);
-        hunkShown += 1;
-      } else {
-        hunkSkipped += 1;
-      }
-    }
+// service/core/executors/base.js
+class BaseExecutor {
+  constructor(provider, config) {
+    this.provider = provider;
+    this.config = config;
+    this.noAuth = config?.noAuth || false;
   }
-  if (hunkSkipped > 0) {
-    result.push(`  ... (${hunkSkipped} lines truncated)`);
+  transformRequest(_model, body) {
+    return body;
   }
-  if (currentFile && (added > 0 || removed > 0)) {
-    result.push(`  +${added} -${removed}`);
+  buildUrl() {
+    throw new Error(`No URL builder configured for ${this.provider}`);
   }
-  return result.join(`
-`).trim();
-}
-function compactGitStatus(input) {
-  const lines = input.split(`
-`);
-  if (lines.length === 0 || lines.length === 1 && !lines[0]?.trim()) {
-    return "Clean working tree";
+  buildHeaders() {
+    throw new Error(`No header builder configured for ${this.provider}`);
   }
-  let branch = "";
-  const stagedFiles = [];
-  const modifiedFiles = [];
-  const untrackedFiles = [];
-  for (const raw of lines) {
-    if (!raw.trim())
-      continue;
-    const longBranch = raw.match(/^On branch (\S+)/);
-    if (longBranch && longBranch[1]) {
-      branch = longBranch[1];
-      continue;
+  async execute({ model, body, stream = true, credentials = {}, dispatch, ...options }) {
+    if (typeof dispatch !== "function") {
+      throw new Error("A local transport adapter is required.");
     }
-    if (raw.startsWith("##")) {
-      branch = raw.replace(/^##\s*/, "");
-      continue;
-    }
-    if (raw.length >= 3 && /^[ MADRCU?!][ MADRCU?!] /.test(raw)) {
-      const x = raw[0] ?? " ";
-      const y = raw[1] ?? " ";
-      const file = raw.slice(3).trim();
-      if (raw.slice(0, 2) === "??") {
-        untrackedFiles.push(file);
-      } else {
-        if (x !== " " && "MADRCU".includes(x))
-          stagedFiles.push(file);
-        if (y !== " " && "MADRCU".includes(y))
-          modifiedFiles.push(file);
-      }
-    }
+    const transformedBody = this.transformRequest(model, body, stream, credentials);
+    const url = this.buildUrl(model, stream, 0, credentials);
+    const headers = this.buildHeaders(credentials, stream, url, model, transformedBody);
+    const path = new URL(url).pathname;
+    const responseFormat = path.endsWith("/responses") ? "openai-responses" : path.endsWith("/messages") ? "claude" : "openai";
+    const result = await dispatch({
+      url,
+      headers,
+      body: transformedBody,
+      responseFormat,
+      ...options
+    });
+    return { ...result, nativeUrl: url, nativeHeaders: headers, transformedBody, responseFormat: result.responseFormat || responseFormat };
   }
-  const out = [];
-  if (branch)
-    out.push("* " + branch);
-  if (stagedFiles.length > 0) {
-    out.push("+ Staged: " + stagedFiles.length + " files");
-    for (const file of stagedFiles.slice(0, STATUS_MAX_FILES))
-      out.push("  " + file);
-    if (stagedFiles.length > STATUS_MAX_FILES)
-      out.push("  ... +" + (stagedFiles.length - STATUS_MAX_FILES) + " more staged files");
-  }
-  if (modifiedFiles.length > 0) {
-    out.push("~ Modified: " + modifiedFiles.length + " files");
-    for (const file of modifiedFiles.slice(0, STATUS_MAX_FILES))
-      out.push("  " + file);
-    if (modifiedFiles.length > STATUS_MAX_FILES)
-      out.push("  ... +" + (modifiedFiles.length - STATUS_MAX_FILES) + " more modified files");
-  }
-  if (untrackedFiles.length > 0) {
-    out.push("? Untracked: " + untrackedFiles.length + " files");
-    for (const file of untrackedFiles.slice(0, STATUS_MAX_UNTRACKED))
-      out.push("  " + file);
-    if (untrackedFiles.length > STATUS_MAX_UNTRACKED)
-      out.push("  ... +" + (untrackedFiles.length - STATUS_MAX_UNTRACKED) + " more untracked files");
-  }
-  return out.length > 0 ? out.join(`
-`) : input;
-}
-function compactGrep(input) {
-  const byFile = new Map;
-  let total = 0;
-  for (const line of input.split(`
-`)) {
-    const first = line.indexOf(":");
-    if (first === -1)
-      continue;
-    const second = line.indexOf(":", first + 1);
-    if (second === -1)
-      continue;
-    const file = line.slice(0, first);
-    const lineNumStr = line.slice(first + 1, second);
-    const content = line.slice(second + 1);
-    if (!/^\d+$/.test(lineNumStr))
-      continue;
-    total++;
-    let fileMatches = byFile.get(file);
-    if (!fileMatches) {
-      fileMatches = [];
-      byFile.set(file, fileMatches);
-    }
-    fileMatches.push([lineNumStr, content]);
-  }
-  if (total === 0)
-    return input;
-  const files = Array.from(byFile.keys()).sort();
-  let out = `${total} matches across ${files.length} files:
-
-`;
-  for (const file of files) {
-    const matches = byFile.get(file) || [];
-    out += `[${file}] (${matches.length}):
-`;
-    const show = matches.slice(0, GREP_PER_FILE_MAX);
-    for (const [lineNum, content] of show) {
-      out += `  ${lineNum.padStart(4)}: ${content.trim()}
-`;
-    }
-    if (matches.length > GREP_PER_FILE_MAX) {
-      out += `  ... +${matches.length - GREP_PER_FILE_MAX} more
-`;
-    }
-    out += `
-`;
-  }
-  return out.trim();
-}
-function compactGitLog(text, maxLines = GIT_LOG_MAX_LINES) {
-  if (!text)
-    return "";
-  const lines = String(text).split(`
-`);
-  const out = [];
-  let skipped = 0;
-  let inCommit = false;
-  let subjectSeen = false;
-  const pushLine = (line) => {
-    if (out.length < maxLines)
-      out.push(line);
-    else
-      skipped += 1;
-  };
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    const trimmed = line.trim();
-    if (/^commit [0-9a-f]{7,40}$/i.test(trimmed) || /^[*|/\\ ]+commit [0-9a-f]{7,40}/i.test(trimmed)) {
-      inCommit = true;
-      subjectSeen = false;
-      pushLine(line);
-      continue;
-    }
-    if (inCommit) {
-      if (/^(Author|Date):/i.test(trimmed)) {
-        pushLine(trimmed);
-        continue;
-      }
-      if (!trimmed)
-        continue;
-      if (!subjectSeen && /^[*|/\\ ]*    \S/.test(line)) {
-        pushLine("  Subject: " + trimmed);
-        subjectSeen = true;
-        continue;
-      }
-      if (/^\d+ files? changed/.test(trimmed)) {
-        pushLine("  " + trimmed);
-        continue;
-      }
-      if (/^diff --git /.test(trimmed)) {
-        pushLine("  ... diff body omitted");
-        continue;
-      }
-      continue;
-    }
-    const graphMatch = trimmed.match(/^[*|/\\ ]+([0-9a-f]{7,40}\s+.+)/i);
-    if (graphMatch) {
-      pushLine(graphMatch[1]);
-      continue;
-    }
-    if (/^[0-9a-f]{7,40}\s+/.test(trimmed)) {
-      pushLine(trimmed);
-      continue;
-    }
-    if (/^[*|/\\ ]+$/.test(trimmed) && /[*|/\\]/.test(trimmed))
-      continue;
-    pushLine(trimmed);
-  }
-  if (skipped > 0)
-    out.push("... (" + skipped + " more lines)");
-  const result = out.join(`
-`);
-  return !result || result.length > text.length ? text : result;
-}
-function compactBuildOutput(input) {
-  const lines = input.split(`
-`);
-  const errors = [];
-  const warnings = [];
-  const deprecations = [];
-  let summary = "";
-  let compilingCount = 0;
-  let downloadingCount = 0;
-  let inCompilerError = false;
-  const errorContinuation = /^\s*(-->|\\||\d+\s*\\||=)/;
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (inCompilerError) {
-      if (!trimmed) {
-        inCompilerError = false;
-        continue;
-      }
-      if (errorContinuation.test(line)) {
-        errors.push(line);
-        continue;
-      }
-      inCompilerError = false;
-    }
-    if (!trimmed)
-      continue;
-    if (/^npm (ERR!|error)/i.test(trimmed) || /^yarn error/i.test(trimmed)) {
-      errors.push(line);
-      continue;
-    }
-    if (/^npm warn deprecated/i.test(trimmed)) {
-      deprecations.push(line);
-      continue;
-    }
-    if (/^npm warn/i.test(trimmed) || /^yarn warn/i.test(trimmed)) {
-      warnings.push(line);
-      continue;
-    }
-    if (/^error(\[|:)/i.test(trimmed) || trimmed.startsWith("error -->")) {
-      errors.push(line);
-      inCompilerError = true;
-      continue;
-    }
-    if (/^warning(\[|:)/i.test(trimmed) || trimmed.startsWith("warning -->")) {
-      warnings.push(line);
-      inCompilerError = true;
-      continue;
-    }
-    if (/^ERROR:/i.test(trimmed) || /^\[ERROR\]/i.test(trimmed) || /^BUILD FAILED/i.test(trimmed)) {
-      errors.push(line);
-      continue;
-    }
-    if (/^\[WARNING\]/i.test(trimmed)) {
-      warnings.push(line);
-      continue;
-    }
-    if (/^Compiling\s+\S+/i.test(trimmed)) {
-      compilingCount += 1;
-      continue;
-    }
-    if (/^Downloading\s+\S+/i.test(trimmed) || /^Fetching\s+/i.test(trimmed)) {
-      downloadingCount += 1;
-      continue;
-    }
-    if (/^(added|removed|changed|audited|installed)\s+\d+\s+package/i.test(trimmed) || /^Finished\s+/i.test(trimmed) || /^BUILD SUCCESS/i.test(trimmed) || /^\d+\s+(vulnerabilities|packages?|warnings?|errors?)/i.test(trimmed) || /^Successfully (installed|built)/i.test(trimmed) || /^To address .* issues/i.test(trimmed) || /^Run \`npm (audit|fund)\`/i.test(trimmed) || /packages are looking for funding/i.test(trimmed)) {
-      summary = summary ? summary + `
-` + line : line;
-    }
-  }
-  let out = "";
-  for (const line of deprecations.slice(0, 3))
-    out += line + `
-`;
-  if (deprecations.length > 3)
-    out += "... +" + (deprecations.length - 3) + ` more deprecated packages
-`;
-  if (compilingCount > 0)
-    out += "Compiled " + compilingCount + ` packages
-`;
-  if (downloadingCount > 0)
-    out += "Downloaded " + downloadingCount + ` packages
-`;
-  for (const line of errors)
-    out += line + `
-`;
-  for (const line of warnings.slice(0, 5))
-    out += line + `
-`;
-  if (warnings.length > 5)
-    out += "... +" + (warnings.length - 5) + ` more warnings
-`;
-  if (summary)
-    out += summary + `
-`;
-  const result = out.replace(/\n+$/, "");
-  return result || input;
-}
-function compactFind(input) {
-  const paths = input.split(`
-`).filter((line) => line.trim());
-  if (paths.length === 0)
-    return input;
-  const byDir = new Map;
-  for (const rawPath of paths) {
-    const lastSep = Math.max(rawPath.lastIndexOf("/"), rawPath.lastIndexOf("\\"));
-    const dir = lastSep === -1 ? "." : rawPath.slice(0, lastSep) || "/";
-    const basename = lastSep === -1 ? rawPath : rawPath.slice(lastSep + 1);
-    const items = byDir.get(dir) ?? [];
-    items.push(basename);
-    byDir.set(dir, items);
-  }
-  const dirs = Array.from(byDir.keys()).sort();
-  let out = paths.length + " files in " + dirs.length + ` dirs:
-
-`;
-  for (const dir of dirs.slice(0, FIND_TOTAL_DIR_MAX)) {
-    const files = byDir.get(dir) ?? [];
-    out += dir.replace(/\\/g, "/") + "/  (" + files.length + `)
-`;
-    for (const file of files.slice(0, FIND_PER_DIR_MAX))
-      out += "  " + file + `
-`;
-    if (files.length > FIND_PER_DIR_MAX)
-      out += "  +" + (files.length - FIND_PER_DIR_MAX) + `
-`;
-  }
-  if (dirs.length > FIND_TOTAL_DIR_MAX)
-    out += `
-+` + (dirs.length - FIND_TOTAL_DIR_MAX) + ` more dirs
-`;
-  return out.replace(/\n+$/, "");
-}
-function compactLs(input) {
-  const datePattern = /\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+(\d{4}|\d{2}:\d{2})\s+/;
-  const dirs = [];
-  const files = [];
-  const extensions = new Map;
-  const humanSize = (bytes) => bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + "M" : bytes >= 1024 ? (bytes / 1024).toFixed(1) + "K" : bytes + "B";
-  for (const line of input.split(`
-`)) {
-    if (line.startsWith("total ") || line.length === 0)
-      continue;
-    const match = datePattern.exec(line);
-    if (!match)
-      continue;
-    const name = line.slice(match.index + match[0].length);
-    const before = line.slice(0, match.index).split(/\s+/).filter(Boolean);
-    if (before.length < 4)
-      continue;
-    const fileType = before[0]?.charAt(0);
-    let size = 0;
-    for (let i = before.length - 1;i >= 0; i -= 1) {
-      const value = Number(before[i]);
-      if (Number.isInteger(value) && String(value) === before[i]) {
-        size = value;
-        break;
-      }
-    }
-    if (name === "." || name === ".." || LS_NOISE_DIRS.has(name))
-      continue;
-    if (fileType === "d") {
-      dirs.push(name);
-    } else if (fileType === "-" || fileType === "l") {
-      const dot = name.lastIndexOf(".");
-      const ext = dot > 0 ? name.slice(dot) : "no ext";
-      extensions.set(ext, (extensions.get(ext) ?? 0) + 1);
-      files.push([name, humanSize(size)]);
-    }
-  }
-  if (dirs.length === 0 && files.length === 0)
-    return input;
-  let out = "";
-  for (const dir of dirs)
-    out += dir + `/
-`;
-  for (const [name, size] of files)
-    out += name + "  " + size + `
-`;
-  let summary = `
-Summary: ` + files.length + " files, " + dirs.length + " dirs";
-  if (extensions.size > 0) {
-    const ordered = Array.from(extensions.entries()).sort((a, b) => b[1] - a[1]);
-    summary += " (" + ordered.slice(0, LS_EXT_SUMMARY_TOP).map(([ext, count]) => count + " " + ext).join(", ");
-    if (ordered.length > LS_EXT_SUMMARY_TOP)
-      summary += ", +" + (ordered.length - LS_EXT_SUMMARY_TOP) + " more";
-    summary += ")";
-  }
-  const result = out + summary;
-  return result.length < input.length ? result : input;
-}
-function compactTree(input) {
-  const lines = input.split(`
-`);
-  const filtered = [];
-  for (const line of lines) {
-    if (line.includes("director") && line.includes("file"))
-      continue;
-    if (line.trim() === "" && filtered.length === 0)
-      continue;
-    filtered.push(line);
-  }
-  while (filtered.length > 0 && filtered[filtered.length - 1]?.trim() === "")
-    filtered.pop();
-  if (filtered.length > TREE_MAX_LINES) {
-    const cut = filtered.length - TREE_MAX_LINES;
-    return filtered.slice(0, TREE_MAX_LINES).join(`
-`) + `
-... +` + cut + " more lines";
-  }
-  return filtered.join(`
-`);
-}
-function compactSearchList(input) {
-  const lines = input.split(`
-`);
-  const header = lines[0] ?? "";
-  const paths = [];
-  for (const raw of lines.slice(1)) {
-    const trimmed = raw.trim();
-    if (trimmed.startsWith("- "))
-      paths.push(trimmed.slice(2));
-  }
-  if (paths.length === 0)
-    return input;
-  const byDir = new Map;
-  for (const path of paths) {
-    const slash = path.lastIndexOf("/");
-    const dir = slash === -1 ? "." : path.slice(0, slash) || "/";
-    const basename = slash === -1 ? path : path.slice(slash + 1);
-    const files = byDir.get(dir) ?? [];
-    files.push(basename);
-    byDir.set(dir, files);
-  }
-  const dirs = Array.from(byDir.keys()).sort();
-  let out = header + `
-` + paths.length + " files in " + dirs.length + ` dirs:
-
-`;
-  for (const dir of dirs.slice(0, SEARCH_LIST_TOTAL_DIR_MAX)) {
-    const names = byDir.get(dir) ?? [];
-    out += dir + "/ (" + names.length + `):
-`;
-    for (const name of names.slice(0, SEARCH_LIST_PER_DIR_MAX))
-      out += "  " + name + `
-`;
-    if (names.length > SEARCH_LIST_PER_DIR_MAX)
-      out += "  +" + (names.length - SEARCH_LIST_PER_DIR_MAX) + `
-`;
-    out += `
-`;
-  }
-  if (dirs.length > SEARCH_LIST_TOTAL_DIR_MAX)
-    out += "+" + (dirs.length - SEARCH_LIST_TOTAL_DIR_MAX) + ` more dirs
-`;
-  return out.replace(/\n+$/, "");
-}
-function compactReadNumbered(input) {
-  const lines = input.split(`
-`);
-  if (lines.length < SMART_TRUNCATE_MIN_LINES)
-    return input;
-  const sample = lines.slice(0, 100).filter((line) => line.length > 0);
-  if (sample.length < 5)
-    return input;
-  const hits = sample.filter((line) => /^\s*\d+\|/.test(line)).length;
-  if (hits / sample.length < READ_NUMBERED_MIN_HIT_RATIO)
-    return input;
-  const head = lines.slice(0, SMART_TRUNCATE_HEAD);
-  const tail = lines.slice(Math.max(head.length, lines.length - SMART_TRUNCATE_TAIL));
-  const cut = lines.length - head.length - tail.length;
-  if (cut <= 0)
-    return input;
-  return [...head, "... +" + cut + " lines truncated (file continues)", ...tail].join(`
-`);
-}
-function compactDedupLog(input) {
-  const lines = input.split(`
-`);
-  const out = [];
-  let previous = null;
-  let runCount = 0;
-  let blankStreak = 0;
-  const flushRun = () => {
-    if (previous !== null && runCount > 1)
-      out.push("  ... (" + (runCount - 1) + " duplicate lines)");
-  };
-  for (const line of lines) {
-    if (!line.trim()) {
-      if (blankStreak < 1)
-        out.push(line);
-      blankStreak += 1;
-      flushRun();
-      previous = null;
-      runCount = 0;
-      continue;
-    }
-    blankStreak = 0;
-    if (line === previous) {
-      runCount += 1;
-      continue;
-    }
-    flushRun();
-    out.push(line);
-    previous = line;
-    runCount = 1;
-    if (out.length >= DEDUP_LINE_MAX) {
-      out.push("... (truncated at " + DEDUP_LINE_MAX + " lines)");
-      return out.join(`
-`);
-    }
-  }
-  flushRun();
-  return out.join(`
-`);
-}
-function compactSmartTruncate(input) {
-  return smartTruncate(input);
-}
-function smartTruncate(input) {
-  const lines = input.split(`
-`);
-  if (lines.length < SMART_TRUNCATE_MIN_LINES)
-    return input;
-  const head = lines.slice(0, SMART_TRUNCATE_HEAD);
-  const tail = lines.slice(lines.length - SMART_TRUNCATE_TAIL);
-  const cut = lines.length - head.length - tail.length;
-  return [...head, `... +${cut} lines truncated ...`, ...tail].join(`
-`);
-}
-var RE_GIT_DIFF = /^diff --git /m;
-var RE_GIT_DIFF_HUNK = /^@@ /m;
-var RE_GIT_STATUS = /^On branch |^nothing to commit|^Changes (not |to be )|^Untracked files:/m;
-var RE_GIT_LOG = /^[*|/\\ ]*commit [0-9a-f]{7,40}$/m;
-var RE_BUILD_OUTPUT = /^(npm (warn|error|ERR!)|yarn (warn|error)|\s*Compiling\s+\S+|\s*Downloading\s+\S+|added \d+ package|\[ERROR\]|BUILD (SUCCESS|FAILED)|\s*Finished\s+|Successfully (installed|built)|ERROR:)/im;
-var RE_TREE_GLYPH = /[├└]──|│  /;
-var RE_LS_ROW = /^[-dlbcps][rwx-]{9}/m;
-var RE_LS_TOTAL = /^total \d+$/m;
-var RE_SEARCH_LIST_HEADER = /^Result of search in '[^']*' \(total \d+ files?\):/;
-function autoDetectFilter(text) {
-  const head = text.length > DETECT_WINDOW ? text.slice(0, DETECT_WINDOW) : text;
-  if (RE_GIT_LOG.test(head) || isGitOneline(head))
-    return compactGitLog;
-  if (RE_GIT_DIFF.test(head) || RE_GIT_DIFF_HUNK.test(head))
-    return compactGitDiff;
-  if (RE_GIT_STATUS.test(head) || isMostlyPorcelain(head))
-    return compactGitStatus;
-  if (RE_BUILD_OUTPUT.test(head))
-    return compactBuildOutput;
-  const lines = head.split(`
-`);
-  const allLines = text.split(`
-`);
-  const nonEmpty = lines.filter((line) => line.trim().length > 0);
-  const firstFive = nonEmpty.slice(0, 5);
-  if (firstFive.some(isGrepLine))
-    return compactGrep;
-  if (nonEmpty.length >= 3 && nonEmpty.every(isPathLike))
-    return compactFind;
-  if (RE_TREE_GLYPH.test(head))
-    return compactTree;
-  if (RE_LS_TOTAL.test(head) || countMatches(head, RE_LS_ROW) >= 3)
-    return compactLs;
-  if (RE_SEARCH_LIST_HEADER.test(head))
-    return compactSearchList;
-  if (allLines.length >= SMART_TRUNCATE_MIN_LINES && isLineNumbered(allLines))
-    return compactReadNumbered;
-  if (nonEmpty.length >= 5)
-    return compactDedupLog;
-  if (text.split(`
-`).length >= SMART_TRUNCATE_MIN_LINES)
-    return compactSmartTruncate;
-  return null;
-}
-function isGitOneline(text) {
-  const lines = text.split(`
-`).map((line) => line.trim()).filter(Boolean).slice(0, 8);
-  return lines.length >= 2 && lines.every((line) => /^[*|/\\ ]*[0-9a-f]{7,40}\s+\S+/i.test(line));
-}
-function isGrepLine(line) {
-  const first = line.indexOf(":");
-  if (first === -1)
-    return false;
-  const second = line.indexOf(":", first + 1);
-  if (second === -1)
-    return false;
-  return /^\d+$/.test(line.slice(first + 1, second));
-}
-function isPathLike(line) {
-  const value = line.trim();
-  if (!value)
-    return false;
-  if (/^[A-Za-z]:[\\/]/.test(value))
-    return true;
-  if (value.includes(":"))
-    return false;
-  return value.startsWith(".") || value.startsWith("/") || value.includes("/") || value.includes("\\");
-}
-function isLineNumbered(lines) {
-  const sample = lines.slice(0, 100).filter((line) => line.length > 0);
-  if (sample.length < 5)
-    return false;
-  const hits = sample.filter((line) => /^\s*\d+\|/.test(line)).length;
-  return hits / sample.length >= READ_NUMBERED_MIN_HIT_RATIO;
-}
-function isMostlyPorcelain(head) {
-  const lines = head.split(`
-`).filter((line) => line.trim());
-  if (lines.length < 3)
-    return false;
-  const hits = lines.filter((line) => /^[ MADRCU?!][ MADRCU?!] \S/.test(line)).length;
-  return hits / lines.length >= 0.6;
-}
-function countMatches(text, regex) {
-  const global = new RegExp(regex.source, regex.flags.includes("g") ? regex.flags : regex.flags + "g");
-  return (text.match(global) ?? []).length;
-}
-function compressText(text) {
-  const bytesIn = text.length;
-  if (bytesIn < MIN_COMPRESS_SIZE || bytesIn > RAW_CAP)
-    return text;
-  const fn = autoDetectFilter(text);
-  if (!fn)
-    return text;
-  try {
-    const out = fn(text);
-    if (!out || out.length === 0 || out.length >= bytesIn)
-      return text;
-    return out;
-  } catch {
-    return text;
-  }
-}
-function compressMessages(body, enabled = true) {
-  if (!enabled || !body)
-    return false;
-  const items = Array.isArray(body.messages) ? body.messages : null;
-  if (!items)
-    return false;
-  let anyCompressed = false;
-  for (let i = 0;i < items.length; i++) {
-    const msg = items[i];
-    if (!msg)
-      continue;
-    if (msg.role === "tool" && typeof msg.content === "string") {
-      const compressed = compressText(msg.content);
-      if (compressed !== msg.content) {
-        msg.content = compressed;
-        anyCompressed = true;
-      }
-      continue;
-    }
-    if (Array.isArray(msg.content)) {
-      for (let j = 0;j < msg.content.length; j++) {
-        const block = msg.content[j];
-        if (!block || block.type !== "tool_result" || block.is_error === true)
-          continue;
-        if (typeof block.content === "string") {
-          const compressed = compressText(block.content);
-          if (compressed !== block.content) {
-            block.content = compressed;
-            anyCompressed = true;
-          }
-        }
-      }
-    }
-  }
-  return anyCompressed;
 }
 
-// service/token-saver-styles.ts
-var CAVEMAN_PROMPTS = {
-  lite: [
-    "Answer concisely in complete sentences. Remove pleasantries, filler, repetition, and unnecessary hedging.",
-    "Preserve the user’s language and exact code, identifiers, paths, commands, URLs, and error strings.",
-    "Keep security warnings, irreversible-action confirmations, and ordered steps clear."
-  ].join(" "),
-  full: [
-    "Use terse technical language; compact phrases are acceptable when unambiguous.",
-    "Remove filler and redundant explanations. Preserve the user’s language and all technical literals exactly.",
-    "Do not compress security warnings, irreversible-action confirmations, or ordered steps where ambiguity could cause mistakes."
-  ].join(" "),
-  ultra: [
-    "Use the fewest words that retain correctness and clarity. Prefer compact, direct answers.",
-    "Never alter code, identifiers, paths, commands, URLs, or error strings.",
-    "Keep safety warnings and destructive-action confirmations explicit. Keep multi-step sequences unambiguous."
-  ].join(" ")
-};
-var PONYTAIL_PROMPTS = {
-  lite: [
-    "When writing code, prefer the smallest correct change.",
-    "Check YAGNI, standard library, native platform features, and already-installed dependencies before adding abstractions or packages.",
-    "Never omit explicitly requested behavior, trust-boundary validation, error handling, security, or accessibility.",
-    "For non-trivial logic, include one runnable check or a focused test."
-  ].join(" "),
-  full: [
-    "Act as an efficient senior developer. Prefer deletion over addition and the smallest correct diff.",
-    "Use standard library, native platform features, and existing dependencies first.",
-    "Avoid unrequested factories, one-implementation interfaces, configuration that never changes, and scaffolding for hypothetical future needs.",
-    "Never remove required behavior, validation, error handling, security, or accessibility. Test non-trivial logic."
-  ].join(" "),
-  ultra: [
-    "Minimize implementation and explanation aggressively. Choose the smallest correct change; delete unnecessary code before adding code.",
-    "Do not add new dependencies, abstractions, or future-proof scaffolding unless the task requires them.",
-    "Do not simplify away requested behavior, validation, error handling, security, or accessibility. Add a runnable check for non-trivial logic."
-  ].join(" ")
-};
-var applyTokenSaverStyles = (body, cavemanLevel = "off", ponytailLevel = "off") => {
-  const prompts = [];
-  if (cavemanLevel !== "off")
-    prompts.push(CAVEMAN_PROMPTS[cavemanLevel]);
-  if (ponytailLevel !== "off")
-    prompts.push(PONYTAIL_PROMPTS[ponytailLevel]);
-  if (prompts.length === 0 || !Array.isArray(body.messages))
-    return false;
-  const instruction = prompts.join(`
-
-`);
-  const messages = body.messages;
-  const systemIndex = messages.findIndex((message) => !!message && typeof message === "object" && !Array.isArray(message) && message.role === "system");
-  const current = systemIndex >= 0 ? messages[systemIndex] : null;
-  if (current && typeof current.content === "string") {
-    const existing = current.content.trim();
-    current.content = existing ? existing + `
-
-` + instruction : instruction;
-  } else {
-    messages.unshift({ role: "system", content: instruction });
-  }
-  return true;
-};
-
-// service/zen.ts
-var BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-var FINGERPRINT_TOOLS = ["read", "shell"];
-var FINGERPRINT_TOOL_DEFINITIONS = {
-  read: {
-    name: "read",
-    description: "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.",
-    parameters: {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "File or directory to read" },
-        offset: {
-          type: "integer",
-          minimum: 0,
-          description: "The line or directory entry to start reading from (1-based)"
-        },
-        limit: {
-          type: "integer",
-          minimum: 0,
-          description: "The maximum number of lines or directory entries to read (defaults to and capped at 2000)"
-        }
-      },
-      required: ["path"],
-      additionalProperties: false
+// service/core/providers/registry/opencode.js
+var opencode_default = {
+  id: "opencode",
+  priority: 40,
+  hasFree: true,
+  alias: "oc",
+  uiAlias: "oc",
+  display: {
+    name: "OpenCode Free",
+    icon: "terminal",
+    color: "#E87040",
+    textIcon: "OC"
+  },
+  category: "free",
+  noAuth: true,
+  transport: {
+    baseUrl: "https://opencode.ai",
+    headers: {
+      "x-opencode-client": "desktop"
+    },
+    forceStream: true,
+    noAuth: true,
+    reasoningInject: {
+      scope: "all"
+    },
+    quirks: {
+      forceAutoToolChoiceModels: ["muse-spark-1.3-contributor-free"],
+      reasoningAliasFields: true
     }
   },
-  shell: {
-    name: "shell",
-    description: "Execute a shell command and return its output. Commands run on Linux using bash. Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.",
-    parameters: {
-      type: "object",
-      properties: {
-        command: { type: "string", description: "Shell command string to execute" },
-        workdir: {
-          type: "string",
-          description: "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead."
-        },
-        timeout: {
-          type: "integer",
-          minimum: 0,
-          description: "Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default."
-        },
-        background: {
-          type: "boolean",
-          description: "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion."
-        }
-      },
-      required: ["command"],
-      additionalProperties: false
+  models: [
+    { id: "muse-spark-1.2-contributor-free", name: "Muse Spark 1.2 Contributor Free", targetFormat: "openai-responses" },
+    { id: "muse-spark-1.3-contributor-free", name: "Muse Spark 1.3 Contributor Free", targetFormat: "openai-responses" },
+    { id: "union-alpha", name: "Union Alpha Free", targetFormat: "claude" },
+    { id: "jev-1.13-free", name: "Jev 1.13 Free", kind: "systemone" }
+  ],
+  serviceKinds: ["llm", "systemone"],
+  systemoneConfig: {
+    baseUrl: "https://opencode.ai/zen/v1/systemone",
+    headers: {
+      "x-opencode-client": "desktop",
+      "User-Agent": "opencode/1.18.31"
     }
+  },
+  modelsFetcher: { url: "https://opencode.ai/zen/v1/models", type: "opencode-free" },
+  passthroughModels: true
+};
+
+// service/core/config/providers.js
+var PROVIDERS = {
+  [opencode_default.id]: {
+    ...opencode_default.transport,
+    id: opencode_default.id,
+    alias: opencode_default.alias,
+    models: opencode_default.models,
+    noAuth: opencode_default.noAuth
   }
 };
-var randomTail = () => {
-  const bytes = randomBytes2(14);
-  let out = "";
-  for (let index = 0;index < 14; index += 1)
-    out += BASE62[(bytes[index] ?? 0) % 62];
-  return out;
+
+// service/core/config/runtimeConfig.js
+var MEMORY_CONFIG = {
+  sessionTtlMs: 2 * 60 * 60 * 1000,
+  sessionCleanupIntervalMs: 30 * 60 * 1000,
+  dnsCacheTtlMs: 5 * 60 * 1000,
+  proxyDispatchersMaxSize: 20
 };
-var sessionId = (now = Date.now()) => {
-  const prefix = (~(BigInt(now) * 0x1000n + 1n) & (1n << 48n) - 1n).toString(16).padStart(12, "0");
-  return `ses_${prefix}${randomTail()}`;
+var DEFAULT_MAX_TOKENS = 64000;
+var DEFAULT_MIN_TOKENS = 32000;
+
+// service/core/providers/capabilities.js
+var CAPABILITIES = {
+  "muse-spark-1.2-contributor-free": {
+    vision: true,
+    reasoning: true,
+    thinkingFormat: "openai",
+    contextWindow: 1048576,
+    maxOutput: 131072
+  },
+  "muse-spark-1.3-contributor-free": {
+    vision: true,
+    reasoning: true,
+    thinkingFormat: "openai",
+    contextWindow: 1048576,
+    maxOutput: 131072
+  },
+  "union-alpha": { vision: true, contextWindow: 262144, maxOutput: 131072 },
+  "glm-5.3-flash-free": {
+    vision: true,
+    videoInput: true,
+    pdf: true,
+    reasoning: true,
+    thinkingFormat: "openai",
+    thinkingCanDisable: false,
+    contextWindow: 1e6,
+    maxOutput: 128000
+  },
+  "mimo-v2.6-flash-free": {
+    vision: true,
+    audioInput: true,
+    videoInput: true,
+    reasoning: true,
+    thinkingFormat: "openai",
+    thinkingCanDisable: true,
+    contextWindow: 1048576,
+    maxOutput: 131072
+  },
+  "deepseek-v4.1-flash-free": {
+    vision: true,
+    reasoning: true,
+    thinkingFormat: "deepseek",
+    contextWindow: 330000,
+    maxOutput: 128000
+  }
 };
-var freeTierHeaders = (session) => ({
-  authorization: "Bearer public",
-  "user-agent": "opencode/latest/2.0.26/cli",
-  "x-opencode-client": "cli",
-  "x-opencode-project": "global",
-  "x-opencode-session": session,
-  "x-opencode-session-id": session,
-  "x-session-affinity": session,
-  "x-session-id": session
-});
-var toolNameOf = (tool) => {
-  if (!isJsonObject(tool))
+function getCapabilitiesForModel(_provider, model) {
+  const clean = String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
+  const id = clean.includes("/") ? clean.split("/").pop() : clean;
+  return CAPABILITIES[id] || { reasoning: false, contextWindow: 200000, maxOutput: 64000 };
+}
+
+// service/core/providers/thinkingLevels.js
+var OPENAI_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"];
+var OPENAI_LEVELS_WITH_MAX = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+var DEEPSEEK_FREE_LEVELS = ["low", "high", "max"];
+var MODEL_LEVELS = {
+  "mimo-v2.6-flash-free": OPENAI_LEVELS_WITH_MAX,
+  "deepseek-v4.1-flash-free": DEEPSEEK_FREE_LEVELS
+};
+function getThinkingLevels(provider, model) {
+  if (provider !== "opencode")
+    return null;
+  const clean = String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
+  const id = clean.includes("/") ? clean.split("/").pop() : clean;
+  const capabilities = getCapabilitiesForModel(provider, id);
+  if (!capabilities.reasoning)
+    return null;
+  const levels = MODEL_LEVELS[id] || (capabilities.thinkingFormat === "openai" ? OPENAI_LEVELS : capabilities.thinkingFormat === "deepseek" ? DEEPSEEK_FREE_LEVELS : null);
+  if (!levels)
+    return null;
+  return capabilities.thinkingCanDisable === false ? levels.filter((level) => level !== "none") : levels;
+}
+
+// service/core/utils/reasoningContentInjector.js
+var PLACEHOLDER = " ";
+var providerRuleFor = (provider) => PROVIDERS[provider]?.reasoningInject;
+var MODEL_RULES2 = [
+  { match: (m) => /^kimi-/i.test(m || ""), scope: "toolCalls" },
+  { match: (m) => /deepseek/i.test(m || ""), scope: "all" }
+];
+var DEEPSEEK_V4_PRO = "deepseek-v4-pro";
+var DEEPSEEK_V4_PRO_ALIASES = {
+  [`${DEEPSEEK_V4_PRO}-max`]: {
+    thinkingType: "enabled",
+    reasoningEffort: "max"
+  },
+  [`${DEEPSEEK_V4_PRO}-none`]: {
+    thinkingType: "disabled",
+    reasoningEffort: null
+  }
+};
+function shouldInject(message, scope) {
+  if (message?.role !== "assistant")
+    return false;
+  const rc = message.reasoning_content;
+  if (typeof rc === "string" && rc.length > 0)
+    return false;
+  if (scope === "toolCalls")
+    return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+  return true;
+}
+function applyRule(body, rule) {
+  if (!rule || !body?.messages)
+    return body;
+  const messages = body.messages.map((m) => shouldInject(m, rule.scope) ? { ...m, reasoning_content: PLACEHOLDER } : m);
+  return { ...body, messages };
+}
+function applyDeepSeekV4ProAlias({ provider, model, body }) {
+  const alias = DEEPSEEK_V4_PRO_ALIASES[model];
+  if (provider !== "deepseek" || !alias || !body)
+    return body;
+  const nextBody = {
+    ...body,
+    model: DEEPSEEK_V4_PRO,
+    extra_body: {
+      ...body.extra_body || {},
+      thinking: {
+        ...body.extra_body?.thinking || {},
+        type: alias.thinkingType
+      }
+    }
+  };
+  if (alias.reasoningEffort) {
+    nextBody.reasoning_effort = alias.reasoningEffort;
+  } else {
+    delete nextBody.reasoning_effort;
+  }
+  return nextBody;
+}
+function injectReasoningContent({ provider, model, body }) {
+  const providerRule = providerRuleFor(provider);
+  const modelRule = MODEL_RULES2.find((r) => r.match(model));
+  const rule = providerRule || modelRule;
+  const nextBody = applyDeepSeekV4ProAlias({ provider, model, body });
+  return applyRule(nextBody, rule);
+}
+
+// service/core/utils/sessionManager.js
+import crypto from "crypto";
+var runtimeSessionStore = new Map;
+var continuationStore = new Map;
+var cleanupInterval = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of runtimeSessionStore) {
+    if (now - entry.lastUsed > MEMORY_CONFIG.sessionTtlMs) {
+      runtimeSessionStore.delete(key);
+    }
+  }
+}, MEMORY_CONFIG.sessionCleanupIntervalMs);
+if (cleanupInterval.unref)
+  cleanupInterval.unref();
+function deriveSessionId(connectionId) {
+  if (!connectionId) {
+    return generateBinaryStyleId();
+  }
+  const existing = runtimeSessionStore.get(connectionId);
+  if (existing) {
+    existing.lastUsed = Date.now();
+    return existing.sessionId;
+  }
+  const MAX_SESSIONS = 1000;
+  if (runtimeSessionStore.size >= MAX_SESSIONS) {
+    const oldest = runtimeSessionStore.keys().next().value;
+    runtimeSessionStore.delete(oldest);
+  }
+  const sessionId = generateBinaryStyleId();
+  runtimeSessionStore.set(connectionId, { sessionId, lastUsed: Date.now() });
+  return sessionId;
+}
+function generateBinaryStyleId() {
+  return crypto.randomUUID() + Date.now().toString();
+}
+var assistantSessionStore = new Map;
+var ASSISTANT_MIN_LEN = 50;
+var ASSISTANT_CAP_LEN = 50;
+var MAX_ASSISTANT_SESSIONS = 5000;
+var SESSION_HEADER_KEYS = ["x-session-id", "session-id", "session_id", "x-amp-thread-id"];
+var CLAUDE_CODE_SESSION_RE = /_session_([a-f0-9-]+)$/;
+var CLAUDE_CODE_SESSION_HEADER = "x-claude-code-session-id";
+function sha16(text) {
+  return crypto.createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+function normalizeSessionId(value) {
+  if (typeof value !== "string")
+    return null;
+  const v = value.trim();
+  if (!v || v.length > 256)
+    return null;
+  return v;
+}
+function extractClaudeCodeSession(userId) {
+  if (typeof userId !== "string" || !userId)
+    return null;
+  const m = userId.match(CLAUDE_CODE_SESSION_RE);
+  if (m)
+    return m[1];
+  if (userId[0] === "{") {
+    try {
+      return normalizeSessionId(JSON.parse(userId)?.session_id);
+    } catch {}
+  }
+  return null;
+}
+function headerValue(headers, key) {
+  if (!headers || typeof headers !== "object")
+    return null;
+  return normalizeSessionId(headers[key] ?? headers[key.toLowerCase()]);
+}
+var ANTIGRAVITY_CONV_RE = /^[a-z]+\/([0-9a-f-]{36})\//i;
+function extractAntigravitySession(body) {
+  const sid = body?.request?.sessionId;
+  if (sid != null && sid !== "")
+    return normalizeSessionId(String(sid));
+  const m = typeof body?.requestId === "string" ? body.requestId.match(ANTIGRAVITY_CONV_RE) : null;
+  return m ? normalizeSessionId(m[1]) : null;
+}
+function extractClientSessionId(headers, body, scope = "") {
+  const claude = extractClaudeCodeSession(body?.metadata?.user_id) || headerValue(headers, CLAUDE_CODE_SESSION_HEADER);
+  if (claude)
+    return `claude:${claude}`;
+  const antigravity = extractAntigravitySession(body);
+  if (antigravity)
+    return `antigravity:${antigravity}`;
+  for (const key of SESSION_HEADER_KEYS) {
+    const v = headerValue(headers, key);
+    if (v)
+      return v;
+  }
+  const requestId = scope === "kiro" ? null : headerValue(headers, "x-client-request-id");
+  if (requestId)
+    return requestId;
+  const fromBody = normalizeSessionId(body?.prompt_cache_key) || normalizeSessionId(body?.session_id) || normalizeSessionId(body?.conversation_id) || (scope === "kiro" ? null : normalizeSessionId(body?.metadata?.user_id));
+  return fromBody || null;
+}
+function requestMessages(body) {
+  if (Array.isArray(body?.messages))
+    return body.messages;
+  if (Array.isArray(body?.input))
+    return body.input;
+  return [];
+}
+function accumulateAssistantText(body) {
+  const items = requestMessages(body);
+  if (!items)
     return "";
-  const fn = isJsonObject(tool.function) ? tool.function : null;
-  if (typeof tool.name === "string" && tool.name.trim())
-    return tool.name.trim();
-  if (fn && typeof fn.name === "string")
-    return fn.name.trim();
-  return "";
-};
-var ensureFreeTierTools = (body) => {
-  const tools = Array.isArray(body.tools) ? body.tools : [];
-  const present = new Set(tools.map((tool) => toolNameOf(tool)).filter((name) => name.length > 0));
-  for (const name of FINGERPRINT_TOOLS) {
-    if (present.has(name))
+  let text = "";
+  for (const item of items) {
+    if (item?.role !== "assistant")
       continue;
-    const def = FINGERPRINT_TOOL_DEFINITIONS[name];
-    tools.push({
-      type: "function",
-      function: {
-        name: def.name,
-        description: def.description,
-        parameters: def.parameters
+    if (typeof item.content === "string")
+      text += item.content;
+    else if (Array.isArray(item.content)) {
+      for (const c of item.content)
+        text += c?.text || c?.output || "";
+    }
+    if (text.length >= ASSISTANT_CAP_LEN)
+      break;
+  }
+  return text;
+}
+function assistantTextSessionId(scope, body) {
+  const text = accumulateAssistantText(body);
+  if (text.length < ASSISTANT_MIN_LEN)
+    return null;
+  const hash = sha16(`${scope}:${text.slice(0, ASSISTANT_CAP_LEN)}`);
+  const existing = assistantSessionStore.get(hash);
+  if (existing) {
+    existing.lastUsed = Date.now();
+    return existing.sessionId;
+  }
+  if (assistantSessionStore.size >= MAX_ASSISTANT_SESSIONS) {
+    assistantSessionStore.delete(assistantSessionStore.keys().next().value);
+  }
+  const sessionId = generateBinaryStyleId();
+  assistantSessionStore.set(hash, { sessionId, lastUsed: Date.now() });
+  return sessionId;
+}
+function resolveSessionIdentity({ headers, body, connectionId, workspaceId, scope = "" } = {}) {
+  const client = extractClientSessionId(headers, body, scope);
+  if (client)
+    return { sessionId: client, ephemeral: false };
+  const fromAssistant = scope === "kiro" ? null : assistantTextSessionId(`${scope}:${connectionId || ""}`, body);
+  if (fromAssistant)
+    return { sessionId: fromAssistant, ephemeral: false };
+  const ws = normalizeSessionId(workspaceId);
+  if (ws)
+    return { sessionId: ws, ephemeral: false };
+  if (scope === "kiro")
+    return { sessionId: generateBinaryStyleId(), ephemeral: true };
+  return { sessionId: deriveSessionId(connectionId), ephemeral: false };
+}
+function resolveSessionId(opts = {}) {
+  return resolveSessionIdentity(opts).sessionId;
+}
+var assistantCleanup = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of assistantSessionStore) {
+    if (now - entry.lastUsed > MEMORY_CONFIG.sessionTtlMs)
+      assistantSessionStore.delete(key);
+  }
+  for (const [key, entry] of continuationStore) {
+    if (now - entry.lastUsed > MEMORY_CONFIG.sessionTtlMs)
+      continuationStore.delete(key);
+  }
+}, MEMORY_CONFIG.sessionCleanupIntervalMs);
+if (assistantCleanup.unref)
+  assistantCleanup.unref();
+
+// service/core/translator/formats.js
+var FORMATS = {
+  OPENAI: "openai",
+  OPENAI_RESPONSES: "openai-responses",
+  OPENAI_RESPONSE: "openai-response",
+  CLAUDE: "claude",
+  GEMINI: "gemini",
+  GEMINI_CLI: "gemini-cli",
+  VERTEX: "vertex",
+  CODEX: "codex",
+  ANTIGRAVITY: "antigravity",
+  KIRO: "kiro",
+  CURSOR: "cursor",
+  OLLAMA: "ollama",
+  COMMANDCODE: "commandcode"
+};
+
+// service/core/providers/models/helpers.js
+function isMuseSparkModel(modelId) {
+  if (!modelId || typeof modelId !== "string")
+    return false;
+  const clean = modelId.replace(/\([^()]+\)\s*$/, "").trim();
+  const base = clean.includes("/") ? clean.split("/").pop() : clean;
+  return /^muse[-_]?spark(?:$|[-_:.\s])/i.test(base);
+}
+var OPENCODE_FAMILIES = [
+  { match: /^(grok|gpt|muse[-_]?spark)/i, supportedFormats: [FORMATS.OPENAI_RESPONSES], targetFormat: FORMATS.OPENAI_RESPONSES },
+  { match: /^deepseek-v4-(pro|flash)/, supportedFormats: [FORMATS.OPENAI, FORMATS.CLAUDE, FORMATS.OPENAI_RESPONSES] },
+  { match: /^(minimax|qwen)/, supportedFormats: [FORMATS.OPENAI, FORMATS.CLAUDE] },
+  { match: /^claude-/i, supportedFormats: [FORMATS.CLAUDE] }
+];
+
+// service/core/services/lazyRuntime.js
+import { spawn } from "node:child_process";
+import fs2 from "node:fs";
+import path6 from "node:path";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+
+// service/core/services/writableDataDir.js
+import fs from "node:fs";
+import os2 from "node:os";
+import path5 from "node:path";
+var cached = null;
+function getWritableDataDir() {
+  if (cached)
+    return cached;
+  const configRoot = path5.join(os2.homedir(), ".openchamber", "blackrouter");
+  const candidates = [
+    process.env.BLACKROUTER_DATA_DIR,
+    process.env.OPENCHAMBER_DATA_DIR ? path5.join(process.env.OPENCHAMBER_DATA_DIR, "blackrouter") : null,
+    configRoot,
+    path5.join(os2.tmpdir(), "blackrouter-runtime")
+  ].filter((value) => typeof value === "string" && value.length > 0);
+  for (const candidate of candidates) {
+    try {
+      fs.mkdirSync(candidate, { recursive: true });
+      fs.accessSync(candidate, fs.constants.W_OK);
+      cached = candidate;
+      return candidate;
+    } catch {}
+  }
+  cached = process.cwd();
+  return cached;
+}
+
+// service/core/services/lazyRuntime.js
+var LAZY_DEP_VERSIONS = {
+  "wreq-js": "^3.2.0"
+};
+function getRuntimeDir() {
+  return path6.join(getWritableDataDir(), "runtime");
+}
+function isModuleMissing(error) {
+  const code = String(error?.code || "");
+  return code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND";
+}
+function npmInstall(pkg, version) {
+  const cwd = getRuntimeDir();
+  fs2.mkdirSync(cwd, { recursive: true });
+  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+  const args = ["install", "--no-audit", "--no-fund", "--prefer-online", `${pkg}@${version}`];
+  return new Promise((resolve) => {
+    const child = spawn(npm, args, { cwd, stdio: ["ignore", "pipe", "pipe"], shell: process.platform === "win32" });
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", (error) => resolve({ ok: false, stderr: String(error.message || error) }));
+    child.on("close", (status) => resolve({ ok: status === 0, stderr }));
+  });
+}
+var inflight = new Map;
+async function load(pkg) {
+  try {
+    return await import(pkg);
+  } catch (error) {
+    if (!isModuleMissing(error))
+      throw error;
+  }
+  const runtimeRequire = createRequire(path6.join(getRuntimeDir(), "package.json"));
+  try {
+    return await import(pathToFileURL(runtimeRequire.resolve(pkg)).href);
+  } catch (error) {
+    if (!isModuleMissing(error))
+      throw error;
+  }
+  const version = LAZY_DEP_VERSIONS[pkg] || "latest";
+  const dir = getRuntimeDir();
+  const res = await npmInstall(pkg, version);
+  if (!res.ok) {
+    const reason = (res.stderr.match(/npm ERR! ?(.+)/) || [])[1] || res.stderr.split(`
+`).filter(Boolean).pop() || "unknown npm error";
+    throw new Error(`${pkg} is missing and the on-demand install failed (${String(reason).slice(0, 160)}) — ` + `install it manually: cd "${dir}" && npm install ${pkg}@${version}`);
+  }
+  return import(pathToFileURL(createRequire(path6.join(dir, "package.json")).resolve(pkg)).href);
+}
+function loadRuntimeDep(pkg) {
+  if (!inflight.has(pkg)) {
+    inflight.set(pkg, load(pkg).finally(() => inflight.delete(pkg)));
+  }
+  return inflight.get(pkg);
+}
+
+// service/core/services/opencodeTlsClient.js
+var OPENCODE_CIPHER_LIST = [
+  "TLS_AES_128_GCM_SHA256",
+  "TLS_AES_256_GCM_SHA384",
+  "TLS_CHACHA20_POLY1305_SHA256",
+  "ECDHE-ECDSA-AES128-GCM-SHA256",
+  "ECDHE-RSA-AES128-GCM-SHA256",
+  "ECDHE-ECDSA-AES256-GCM-SHA384",
+  "ECDHE-RSA-AES256-GCM-SHA384",
+  "ECDHE-ECDSA-CHACHA20-POLY1305",
+  "ECDHE-RSA-CHACHA20-POLY1305",
+  "ECDHE-ECDSA-AES128-SHA",
+  "ECDHE-RSA-AES128-SHA",
+  "ECDHE-ECDSA-AES256-SHA",
+  "ECDHE-RSA-AES256-SHA",
+  "AES128-GCM-SHA256",
+  "AES256-GCM-SHA384",
+  "AES128-SHA",
+  "AES256-SHA"
+].join(":");
+var DEFAULT_TIMEOUT_MS = 120000;
+var sessionPromise = null;
+
+class OpencodeTlsUnavailableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "OpencodeTlsUnavailableError";
+  }
+}
+async function loadSession() {
+  if (!sessionPromise) {
+    sessionPromise = (async () => {
+      const wreq = await loadRuntimeDep("wreq-js");
+      if (typeof wreq.createSession !== "function") {
+        throw new Error("wreq-js runtime is missing createSession");
+      }
+      return wreq.createSession({
+        emulation: { tlsOptions: { cipherList: OPENCODE_CIPHER_LIST } }
+      });
+    })().catch((error) => {
+      sessionPromise = null;
+      throw error;
+    });
+  }
+  return sessionPromise;
+}
+async function opencodeTlsFetch(url, init = {}, { signal, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  let session;
+  try {
+    session = await loadSession();
+  } catch (error) {
+    throw new OpencodeTlsUnavailableError(`wreq-js unavailable (${error instanceof Error ? error.message : "unknown"}) — install the optional wreq-js dependency to reach the OpenCode free tier`);
+  }
+  const options = {
+    method: init.method || "GET",
+    headers: init.headers,
+    redirect: "follow",
+    timeout: timeoutMs
+  };
+  if (init.body !== undefined)
+    options.body = init.body;
+  if (signal)
+    options.signal = signal;
+  const res = await session.fetch(url, options);
+  const headers = {};
+  res.headers?.forEach?.((value, key) => {
+    headers[key] = value;
+  });
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
+// service/core/providers/shared.js
+var ANTHROPIC_API_VERSION = "2023-06-01";
+
+// service/core/translator/schema/roles.js
+var ROLE = {
+  USER: "user",
+  ASSISTANT: "assistant",
+  TOOL: "tool",
+  SYSTEM: "system",
+  DEVELOPER: "developer"
+};
+// service/core/translator/schema/blocks.js
+var OPENAI_BLOCK = {
+  TEXT: "text",
+  IMAGE_URL: "image_url",
+  IMAGE: "image",
+  INPUT_AUDIO: "input_audio",
+  AUDIO_URL: "audio_url",
+  FILE: "file",
+  FUNCTION: "function"
+};
+var CLAUDE_BLOCK = {
+  TEXT: "text",
+  IMAGE: "image",
+  DOCUMENT: "document",
+  TOOL_USE: "tool_use",
+  TOOL_RESULT: "tool_result",
+  CONTAINER_UPLOAD: "container_upload",
+  THINKING: "thinking",
+  REDACTED_THINKING: "redacted_thinking",
+  SERVER_TOOL_USE: "server_tool_use",
+  WEB_SEARCH_TOOL_RESULT: "web_search_tool_result"
+};
+var RESPONSES_ITEM = {
+  MESSAGE: "message",
+  FUNCTION_CALL: "function_call",
+  FUNCTION_CALL_OUTPUT: "function_call_output",
+  CUSTOM_TOOL_CALL: "custom_tool_call",
+  CUSTOM_TOOL_CALL_OUTPUT: "custom_tool_call_output",
+  ADDITIONAL_TOOLS: "additional_tools",
+  REASONING: "reasoning",
+  OUTPUT_TEXT: "output_text",
+  INPUT_TEXT: "input_text",
+  INPUT_IMAGE: "input_image",
+  SUMMARY_TEXT: "summary_text"
+};
+var VALID_OPENAI_CONTENT_TYPES = [
+  OPENAI_BLOCK.TEXT,
+  OPENAI_BLOCK.IMAGE_URL,
+  OPENAI_BLOCK.IMAGE,
+  OPENAI_BLOCK.INPUT_AUDIO,
+  OPENAI_BLOCK.AUDIO_URL,
+  OPENAI_BLOCK.FILE
+];
+var VALID_OPENAI_MESSAGE_TYPES = [
+  OPENAI_BLOCK.TEXT,
+  OPENAI_BLOCK.IMAGE_URL,
+  OPENAI_BLOCK.IMAGE,
+  "tool_calls",
+  CLAUDE_BLOCK.TOOL_RESULT
+];
+// service/core/translator/schema/finishReasons.js
+var OPENAI_FINISH = {
+  STOP: "stop",
+  LENGTH: "length",
+  TOOL_CALLS: "tool_calls",
+  CONTENT_FILTER: "content_filter"
+};
+var NO_RETRY_EMPTY_FINISH = new Set([OPENAI_FINISH.CONTENT_FILTER]);
+// service/core/translator/formats/responsesApi.js
+function normalizeResponsesInput(input) {
+  if (typeof input === "string") {
+    const text = input.trim() === "" ? "..." : input;
+    return [{ type: RESPONSES_ITEM.MESSAGE, role: ROLE.USER, content: [{ type: RESPONSES_ITEM.INPUT_TEXT, text }] }];
+  }
+  if (Array.isArray(input)) {
+    if (input.length === 0) {
+      return [{ type: RESPONSES_ITEM.MESSAGE, role: ROLE.USER, content: [{ type: RESPONSES_ITEM.INPUT_TEXT, text: "..." }] }];
+    }
+    return input;
+  }
+  return null;
+}
+var MAX_RESPONSES_CALL_ID_LEN = 64;
+var responsesCallIdSeq = 0;
+function clampResponsesCallId(id) {
+  if (typeof id !== "string" || !id)
+    return `call_${Date.now()}_${responsesCallIdSeq += 1}`;
+  return id.length > MAX_RESPONSES_CALL_ID_LEN ? id.substring(0, MAX_RESPONSES_CALL_ID_LEN) : id;
+}
+function coerceResponsesArguments(value) {
+  if (value === undefined || value === null || value === "")
+    return "{}";
+  if (typeof value !== "string") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "{}";
+    }
+  }
+  try {
+    JSON.parse(value);
+    return value;
+  } catch {
+    return "{}";
+  }
+}
+function coerceResponsesOutput(value) {
+  if (typeof value === "string")
+    return value;
+  if (value === undefined || value === null)
+    return "";
+  if (Array.isArray(value)) {
+    return value.map((c) => {
+      try {
+        return c?.text ?? JSON.stringify(c);
+      } catch {
+        return String(c);
+      }
+    }).join("");
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+// service/core/executors/opencode.js
+var OPENCODE_UA = "opencode/latest/2.1.4/cli";
+var OPENCODE_CLIENT = "cli";
+var MAX_SESSION_LENGTH = 256;
+var MAX_TOOL_NAME_LEN = 128;
+var SESSION_HEADER = "x-opencode-session";
+var SESSION_FIELD = "_opencodeSession";
+var OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
+var BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+function hasValidOpencodeVersion(ua) {
+  const m = String(ua || "").match(/^opencode\/[a-z0-9-]+\/(\d+)\.\d+\.\d+\/[a-z0-9-]+$/i);
+  return !!m && parseInt(m[1], 10) >= 2;
+}
+var RESPONSES_MODELS = new Set([
+  "muse-spark-1.2-contributor-free",
+  "muse-spark-1.3-contributor-free"
+]);
+var MESSAGES_MODELS = new Set(["union-alpha"]);
+var lastTimestamp = 0;
+var counter = 0;
+function unstableRandom() {
+  const bytes = crypto2.randomBytes(14);
+  let randomPart = "";
+  for (let i = 0;i < 14; i++) {
+    randomPart += BASE62_CHARS[bytes[i] % 62];
+  }
+  return randomPart;
+}
+var SESSION_PREFIX_MASK = (1n << 48n) - 1n;
+function descendingTimeHex(time, counterValue) {
+  return (~(BigInt(time) * 0x1000n + BigInt(counterValue)) & SESSION_PREFIX_MASK).toString(16).padStart(12, "0");
+}
+function generateSessionId(timestamp = Date.now()) {
+  if (timestamp !== lastTimestamp) {
+    lastTimestamp = timestamp;
+    counter = 0;
+  }
+  counter++;
+  return `ses_${descendingTimeHex(timestamp, counter)}${unstableRandom()}`;
+}
+var translatedOpencodeSessions = new Map;
+var MAX_TRANSLATED_SESSIONS = 5000;
+var translatedSessionCleanup = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of translatedOpencodeSessions) {
+    if (now - entry.lastUsed > MEMORY_CONFIG.sessionTtlMs) {
+      translatedOpencodeSessions.delete(key);
+    }
+  }
+}, MEMORY_CONFIG.sessionCleanupIntervalMs);
+if (translatedSessionCleanup.unref)
+  translatedSessionCleanup.unref();
+function translateSessionId(sessionId, clientTool = "") {
+  if (typeof sessionId === "string" && OPENCODE_SESSION_RE.test(sessionId.trim())) {
+    return sessionId.trim();
+  }
+  const key = `${clientTool || "generic"}\x00${sessionId || ""}`;
+  const existing = translatedOpencodeSessions.get(key);
+  if (existing) {
+    existing.lastUsed = Date.now();
+    return existing.sessionId;
+  }
+  const translated = `ses_${descendingTimeHex(Date.now(), 1)}${unstableRandom()}`;
+  if (translatedOpencodeSessions.size >= MAX_TRANSLATED_SESSIONS) {
+    translatedOpencodeSessions.delete(translatedOpencodeSessions.keys().next().value);
+  }
+  translatedOpencodeSessions.set(key, { sessionId: translated, lastUsed: Date.now() });
+  return translated;
+}
+function normalizeSession(value) {
+  if (typeof value !== "string")
+    return null;
+  const normalized = value.trim();
+  if (!normalized || normalized.length > MAX_SESSION_LENGTH)
+    return null;
+  return normalized;
+}
+function nativeSession(headers) {
+  if (!headers || typeof headers !== "object")
+    return null;
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === SESSION_HEADER) {
+      const normalized = normalizeSession(value);
+      if (normalized && OPENCODE_SESSION_RE.test(normalized))
+        return normalized;
+    }
+  }
+  return null;
+}
+var stableOpencodeSessions = new Map;
+var MAX_STABLE_SESSIONS = 1000;
+var stableSessionCleanup = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of stableOpencodeSessions) {
+    if (now - entry.lastUsed > MEMORY_CONFIG.sessionTtlMs) {
+      stableOpencodeSessions.delete(key);
+    }
+  }
+}, MEMORY_CONFIG.sessionCleanupIntervalMs);
+if (stableSessionCleanup.unref)
+  stableSessionCleanup.unref();
+function identityKey(credentials) {
+  const connectionId = credentials?.connectionId || credentials?.id;
+  if (connectionId)
+    return `opencode:conn:${String(connectionId).slice(0, 128)}`;
+  const raw = credentials?.rawHeaders || {};
+  const auth = raw.authorization || raw.Authorization || raw["x-api-key"] || raw["X-Api-Key"] || "";
+  if (auth) {
+    const digest = crypto2.createHash("sha256").update(String(auth)).digest("hex").slice(0, 32);
+    return `opencode:auth:${digest}`;
+  }
+  return "opencode:default";
+}
+function stableSessionId(credentials) {
+  const key = identityKey(credentials);
+  const existing = stableOpencodeSessions.get(key);
+  if (existing) {
+    existing.lastUsed = Date.now();
+    stableOpencodeSessions.delete(key);
+    stableOpencodeSessions.set(key, existing);
+    return existing.sessionId;
+  }
+  const sessionId = generateSessionId();
+  if (stableOpencodeSessions.size >= MAX_STABLE_SESSIONS) {
+    stableOpencodeSessions.delete(stableOpencodeSessions.keys().next().value);
+  }
+  stableOpencodeSessions.set(key, { sessionId, lastUsed: Date.now() });
+  return sessionId;
+}
+function bodyHasSessionHints(body) {
+  try {
+    if (!body || typeof body !== "object")
+      return false;
+    if (typeof body.session_id === "string" && body.session_id.trim())
+      return true;
+    if (typeof body.conversation_id === "string" && body.conversation_id.trim())
+      return true;
+    if (typeof body.prompt_cache_key === "string" && body.prompt_cache_key.trim())
+      return true;
+    if (body.metadata && typeof body.metadata.user_id === "string" && body.metadata.user_id.trim())
+      return true;
+    if (body.request && body.request.sessionId != null && String(body.request.sessionId) !== "")
+      return true;
+    const arr = Array.isArray(body.messages) ? body.messages : Array.isArray(body.input) ? body.input : null;
+    if (arr) {
+      let assistantText = "";
+      for (const msg of arr) {
+        if (msg?.role === "assistant") {
+          const content = msg.content;
+          if (typeof content === "string")
+            assistantText += content;
+          else if (Array.isArray(content)) {
+            for (const part of content)
+              assistantText += part?.text || part?.output || "";
+          }
+          if (assistantText.length >= 50)
+            return true;
+        }
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+function baseModelId(model) {
+  return String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
+}
+function isResponsesModel(model) {
+  const base = baseModelId(model);
+  return RESPONSES_MODELS.has(base) || isMuseSparkModel(base);
+}
+function isMessagesModel(model) {
+  return MESSAGES_MODELS.has(baseModelId(model));
+}
+function resolveOpencodeSession(body, credentials, providerSessionId, clientTool) {
+  const headers = credentials?.rawHeaders || {};
+  const native = nativeSession(headers);
+  if (native)
+    return native;
+  let incoming = null;
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === SESSION_HEADER) {
+      incoming = normalizeSession(value);
+      break;
+    }
+  }
+  const hinted = incoming || normalizeSession(providerSessionId);
+  if (hinted)
+    return translateSessionId(hinted, clientTool);
+  if (credentials?.connectionId || bodyHasSessionHints(body)) {
+    let viaManager = null;
+    try {
+      viaManager = resolveSessionId({
+        headers,
+        body,
+        connectionId: credentials?.connectionId,
+        scope: "opencode"
+      });
+    } catch {
+      viaManager = null;
+    }
+    if (viaManager)
+      return translateSessionId(viaManager, clientTool);
+  }
+  return stableSessionId(credentials);
+}
+function normalizeResponsesTools(body) {
+  if (!Array.isArray(body.tools))
+    return;
+  const validNames = new Set;
+  body.tools = body.tools.filter((tool) => {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool))
+      return false;
+    const fn = tool.function && typeof tool.function === "object" && !Array.isArray(tool.function) ? tool.function : null;
+    const rawName = typeof tool.name === "string" ? tool.name : typeof fn?.name === "string" ? fn.name : "";
+    const name = rawName.trim();
+    if (!name)
+      return false;
+    const description = typeof tool.description === "string" ? tool.description : typeof fn?.description === "string" ? fn.description : "";
+    let parameters = tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters) ? tool.parameters : fn?.parameters && typeof fn.parameters === "object" && !Array.isArray(fn.parameters) ? fn.parameters : { type: "object", properties: {} };
+    if (parameters.type === "object" && !parameters.properties)
+      parameters = { ...parameters, properties: {} };
+    for (const k of Object.keys(tool))
+      delete tool[k];
+    tool.type = "function";
+    tool.name = name.slice(0, MAX_TOOL_NAME_LEN);
+    if (description)
+      tool.description = description;
+    tool.parameters = parameters;
+    validNames.add(tool.name);
+    return true;
+  });
+  if (body.tool_choice && typeof body.tool_choice === "object" && !Array.isArray(body.tool_choice)) {
+    if (body.tool_choice.type === "function") {
+      const n = typeof body.tool_choice.name === "string" ? body.tool_choice.name.trim() : "";
+      if (!n || !validNames.has(n))
+        delete body.tool_choice;
+    }
+  }
+}
+function sanitizeResponsesItems(body) {
+  if (!Array.isArray(body.input))
+    return;
+  body.input = body.input.filter((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item))
+      return true;
+    if (item.type === "reasoning")
+      return false;
+    delete item.encrypted_content;
+    delete item.reasoning_encrypted_content;
+    if (item.type === "function_call") {
+      if (!item.name || typeof item.name !== "string" || item.name.trim() === "")
+        return false;
+      item.name = item.name.trim().slice(0, MAX_TOOL_NAME_LEN);
+      item.call_id = clampResponsesCallId(item.call_id);
+      item.arguments = coerceResponsesArguments(item.arguments);
+      return true;
+    }
+    if (item.type === "function_call_output") {
+      item.call_id = clampResponsesCallId(item.call_id);
+      item.output = coerceResponsesOutput(item.output);
+      return true;
+    }
+    return true;
+  });
+}
+function normalizeOpencodeReasoning(model, body) {
+  const current = body.reasoning;
+  const currentReasoning = current && typeof current === "object" && !Array.isArray(current) ? current : null;
+  const requestedEffort = typeof body.reasoning_effort === "string" ? body.reasoning_effort : currentReasoning?.effort;
+  if (typeof requestedEffort !== "string")
+    return;
+  const cleanModel = baseModelId(model || body.model);
+  const supportedLevels = getThinkingLevels("opencode", cleanModel);
+  let effort = requestedEffort.toLowerCase().trim();
+  if ((effort === "max" || effort === "ultra") && supportedLevels?.length && !supportedLevels.includes(effort)) {
+    if (effort === "ultra" && supportedLevels.includes("max"))
+      effort = "max";
+    else if (supportedLevels.includes("xhigh"))
+      effort = "xhigh";
+  }
+  body.reasoning = { ...currentReasoning, effort };
+  if (!body.reasoning.summary)
+    body.reasoning.summary = "auto";
+  delete body.reasoning_effort;
+}
+function dropAdaptiveReasoningEffort(body) {
+  if (body?.reasoning_effort === "auto")
+    delete body.reasoning_effort;
+}
+
+class OpenCodeExecutor extends BaseExecutor {
+  constructor() {
+    super("opencode", PROVIDERS.opencode);
+  }
+  prepareRequestCredentials({ body, credentials, providerSessionId, clientTool } = {}) {
+    const sourceCredentials = credentials || {};
+    const session = resolveOpencodeSession(body, sourceCredentials, providerSessionId, clientTool);
+    return {
+      ...sourceCredentials,
+      [SESSION_FIELD]: session
+    };
+  }
+  transformRequest(model, body, stream, credentials) {
+    if (body && typeof body === "object" && model && !body.model)
+      body.model = model;
+    if (body && typeof body === "object")
+      body.stream = true;
+    if (isResponsesModel(model || body?.model) && body && typeof body === "object") {
+      if ("tool_choice" in body && body.tool_choice !== "auto" && this.config.quirks?.forceAutoToolChoiceModels?.includes(baseModelId(model))) {
+        body.tool_choice = "auto";
+      }
+      const normalized = normalizeResponsesInput(body.input);
+      if (normalized)
+        body.input = normalized;
+      if (!Array.isArray(body.input) || body.input.length === 0) {
+        body.input = [{ type: "message", role: "user", content: [{ type: "input_text", text: "..." }] }];
+      }
+      if (body.max_output_tokens === undefined) {
+        if (body.max_completion_tokens !== undefined)
+          body.max_output_tokens = body.max_completion_tokens;
+        else if (body.max_tokens !== undefined)
+          body.max_output_tokens = body.max_tokens;
+      }
+      delete body.max_tokens;
+      delete body.max_completion_tokens;
+      normalizeOpencodeReasoning(model, body);
+      body.stream = true;
+      body.store = false;
+      normalizeResponsesTools(body);
+      sanitizeResponsesItems(body);
+      applyFingerprintTools(body, true);
+    } else if (body && typeof body === "object") {
+      dropAdaptiveReasoningEffort(body);
+      applyFingerprintTools(body, false, { claude: isMessagesModel(model || body?.model) });
+    }
+    return injectReasoningContent({ provider: this.provider, model, body });
+  }
+  async execute(args) {
+    const credentials = this.prepareRequestCredentials(args);
+    return super.execute({
+      ...args,
+      credentials,
+      directFetch: async (url, options) => {
+        try {
+          return await opencodeTlsFetch(url, {
+            method: options.method,
+            headers: options.headers,
+            body: options.body
+          }, { signal: options.signal });
+        } catch (error) {
+          if (error instanceof OpencodeTlsUnavailableError) {
+            return fetch(url, options);
+          }
+          throw error;
+        }
       }
     });
   }
-  body.tools = tools;
-};
-var prepareChat = (raw, options) => {
-  let parsed;
+  buildUrl(model) {
+    const base = this.config.baseUrl;
+    if (isResponsesModel(model))
+      return `${base}/inference/v1/responses`;
+    if (isMessagesModel(model))
+      return `${base}/inference/v1/messages`;
+    return `${base}/inference/v1/chat/completions`;
+  }
+  buildHeaders(credentials, stream = true, url = "") {
+    const raw = credentials?.rawHeaders || {};
+    const lower = {};
+    for (const [k, v] of Object.entries(raw))
+      lower[k.toLowerCase()] = v;
+    const downstreamUa = lower["user-agent"] || "";
+    const isOpencodeDownstream = hasValidOpencodeVersion(downstreamUa);
+    const session = credentials?.[SESSION_FIELD] || this.prepareRequestCredentials({ credentials })[SESSION_FIELD];
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: "Bearer public",
+      "User-Agent": isOpencodeDownstream ? downstreamUa : OPENCODE_UA,
+      "x-opencode-client": lower["x-opencode-client"] || OPENCODE_CLIENT,
+      "x-opencode-session": session,
+      "x-opencode-session-id": session,
+      "x-session-affinity": session,
+      "x-session-id": session,
+      "x-opencode-project": lower["x-opencode-project"] || "global",
+      Accept: stream ? "text/event-stream" : "*/*"
+    };
+    if (url.endsWith("/messages"))
+      headers["anthropic-version"] = ANTHROPIC_API_VERSION;
+    return headers;
+  }
+}
+
+// service/core/translator/request/openai-responses.js
+var MAX_TOOL_NAME_LEN2 = 128;
+function openaiResponsesToOpenAIRequest(model, body, stream, credentials) {
+  if (!body.input)
+    return body;
+  const result = { ...body };
+  result.messages = [];
+  if (body.instructions) {
+    result.messages.push({ role: ROLE.SYSTEM, content: body.instructions });
+  }
+  let currentAssistantMsg = null;
+  let pendingToolResults = [];
+  let pendingReasoning = "";
+  let pendingReasoningEncrypted = "";
+  const additionalTools = [];
+  const customToolNames = new Set;
+  const inputItems = normalizeResponsesInput(body.input);
+  if (!inputItems)
+    return body;
+  const extractReasoningText = (item) => {
+    if (Array.isArray(item.summary)) {
+      const txt = item.summary.map((s) => s?.text || "").filter(Boolean).join(`
+`);
+      if (txt)
+        return txt;
+    }
+    if (Array.isArray(item.content)) {
+      const txt = item.content.map((c) => c?.text || "").filter(Boolean).join(`
+`);
+      if (txt)
+        return txt;
+    }
+    return "";
+  };
+  const attachPendingReasoning = (msg) => {
+    if (pendingReasoning)
+      msg.reasoning_content = pendingReasoning;
+    if (pendingReasoningEncrypted)
+      msg.encrypted_content = pendingReasoningEncrypted;
+    pendingReasoning = "";
+    pendingReasoningEncrypted = "";
+  };
+  for (const item of inputItems) {
+    const itemType = item.type || (item.role ? RESPONSES_ITEM.MESSAGE : null);
+    if (itemType === RESPONSES_ITEM.MESSAGE) {
+      if (currentAssistantMsg) {
+        result.messages.push(currentAssistantMsg);
+        currentAssistantMsg = null;
+      }
+      if (pendingToolResults.length > 0) {
+        for (const tr of pendingToolResults) {
+          result.messages.push(tr);
+        }
+        pendingToolResults = [];
+      }
+      const content = Array.isArray(item.content) ? item.content.map((c) => {
+        if (c.type === RESPONSES_ITEM.INPUT_TEXT)
+          return { type: OPENAI_BLOCK.TEXT, text: c.text };
+        if (c.type === RESPONSES_ITEM.OUTPUT_TEXT)
+          return { type: OPENAI_BLOCK.TEXT, text: c.text };
+        if (c.type === RESPONSES_ITEM.INPUT_IMAGE) {
+          const url = c.image_url || c.file_id || "";
+          return { type: OPENAI_BLOCK.IMAGE_URL, image_url: { url, detail: c.detail || "auto" } };
+        }
+        return c;
+      }) : item.content;
+      const msg = { role: item.role, content };
+      if (item.role === ROLE.ASSISTANT)
+        attachPendingReasoning(msg);
+      else {
+        pendingReasoning = "";
+        pendingReasoningEncrypted = "";
+      }
+      result.messages.push(msg);
+    } else if (itemType === RESPONSES_ITEM.FUNCTION_CALL || itemType === RESPONSES_ITEM.CUSTOM_TOOL_CALL) {
+      if (!currentAssistantMsg) {
+        currentAssistantMsg = {
+          role: ROLE.ASSISTANT,
+          content: null,
+          tool_calls: []
+        };
+        attachPendingReasoning(currentAssistantMsg);
+      }
+      if (!item.name || typeof item.name !== "string" || item.name.trim() === "")
+        continue;
+      if (itemType === RESPONSES_ITEM.CUSTOM_TOOL_CALL)
+        customToolNames.add(item.name);
+      const toolInput = itemType === RESPONSES_ITEM.CUSTOM_TOOL_CALL ? { input: typeof item.input === "string" ? item.input : JSON.stringify(item.input ?? "") } : item.arguments;
+      currentAssistantMsg.tool_calls.push({
+        id: item.call_id,
+        type: OPENAI_BLOCK.FUNCTION,
+        function: {
+          name: item.name,
+          arguments: typeof toolInput === "string" ? toolInput : JSON.stringify(toolInput ?? {})
+        }
+      });
+    } else if (itemType === RESPONSES_ITEM.FUNCTION_CALL_OUTPUT || itemType === RESPONSES_ITEM.CUSTOM_TOOL_CALL_OUTPUT) {
+      if (currentAssistantMsg) {
+        result.messages.push(currentAssistantMsg);
+        currentAssistantMsg = null;
+      }
+      if (pendingToolResults.length > 0) {
+        for (const tr of pendingToolResults) {
+          result.messages.push(tr);
+        }
+        pendingToolResults = [];
+      }
+      result.messages.push({
+        role: ROLE.TOOL,
+        tool_call_id: item.call_id,
+        content: typeof item.output === "string" ? item.output : JSON.stringify(item.output)
+      });
+    } else if (itemType === RESPONSES_ITEM.ADDITIONAL_TOOLS) {
+      if (Array.isArray(item.tools))
+        additionalTools.push(...item.tools);
+    } else if (itemType === RESPONSES_ITEM.REASONING) {
+      const txt = extractReasoningText(item);
+      if (txt)
+        pendingReasoning = pendingReasoning ? `${pendingReasoning}
+${txt}` : txt;
+      if (typeof item.encrypted_content === "string" && item.encrypted_content) {
+        pendingReasoningEncrypted = item.encrypted_content;
+      }
+      continue;
+    }
+  }
+  if (currentAssistantMsg) {
+    result.messages.push(currentAssistantMsg);
+  }
+  if (pendingToolResults.length > 0) {
+    for (const tr of pendingToolResults) {
+      result.messages.push(tr);
+    }
+  }
+  const responseTools = [
+    ...Array.isArray(body.tools) ? body.tools : [],
+    ...additionalTools
+  ];
+  if (responseTools.length > 0) {
+    result.tools = responseTools.map((tool) => {
+      if (tool.function)
+        return tool;
+      const name = tool.name;
+      if (!name || typeof name !== "string" || name.trim() === "")
+        return null;
+      if (tool.type === "custom") {
+        customToolNames.add(name);
+        const formatHint = [tool.format?.syntax, tool.format?.definition].filter(Boolean).join(`
+`);
+        return {
+          type: OPENAI_BLOCK.FUNCTION,
+          function: {
+            name,
+            description: [String(tool.description || ""), formatHint].filter(Boolean).join(`
+
+`),
+            parameters: {
+              type: "object",
+              properties: {
+                input: {
+                  type: "string",
+                  description: "Raw freeform input for this custom tool"
+                }
+              },
+              required: ["input"],
+              additionalProperties: false
+            }
+          }
+        };
+      }
+      return {
+        type: OPENAI_BLOCK.FUNCTION,
+        function: {
+          name,
+          description: String(tool.description || ""),
+          parameters: normalizeToolParameters(tool.parameters),
+          strict: tool.strict
+        }
+      };
+    }).filter(Boolean);
+  }
+  if (customToolNames.size > 0)
+    result._customToolNames = [...customToolNames];
+  if (result.max_output_tokens !== undefined) {
+    if (result.max_tokens === undefined)
+      result.max_tokens = result.max_output_tokens;
+    delete result.max_output_tokens;
+  }
+  delete result.input;
+  delete result.instructions;
+  delete result.include;
+  delete result.prompt_cache_key;
+  delete result.store;
+  if (typeof result.reasoning?.effort === "string") {
+    result.reasoning_effort = result.reasoning.effort;
+  }
+  delete result.reasoning;
+  delete result.client_metadata;
+  return result;
+}
+function extractInstructionsText(content) {
+  if (typeof content === "string")
+    return content;
+  if (Array.isArray(content)) {
+    return content.map((c) => {
+      if (typeof c?.text === "string")
+        return c.text;
+      if (typeof c?.content === "string")
+        return c.content;
+      return "";
+    }).filter(Boolean).join(`
+`);
+  }
+  return "";
+}
+function normalizeToolParameters(params) {
+  if (!params)
+    return { type: "object", properties: {} };
+  if (params.type === "object" && !params.properties)
+    return { ...params, properties: {} };
+  return params;
+}
+function buildReasoningInputItem(msg) {
+  if (!msg || typeof msg !== "object")
+    return null;
+  const encrypted = typeof msg.encrypted_content === "string" && msg.encrypted_content || typeof msg.reasoning_encrypted_content === "string" && msg.reasoning_encrypted_content || typeof msg.reasoning?.encrypted_content === "string" && msg.reasoning.encrypted_content || "";
+  let summaryText = "";
+  if (typeof msg.reasoning_content === "string" && msg.reasoning_content.trim()) {
+    summaryText = msg.reasoning_content;
+  } else if (typeof msg.reasoning === "string" && msg.reasoning.trim()) {
+    summaryText = msg.reasoning;
+  } else if (Array.isArray(msg.reasoning_details)) {
+    summaryText = msg.reasoning_details.map((d) => typeof d?.text === "string" ? d.text : typeof d?.content === "string" ? d.content : "").filter(Boolean).join(`
+`);
+  }
+  if (!encrypted && !summaryText)
+    return null;
+  const item = { type: RESPONSES_ITEM.REASONING };
+  if (summaryText) {
+    item.summary = [{ type: RESPONSES_ITEM.SUMMARY_TEXT, text: summaryText }];
+  }
+  if (encrypted)
+    item.encrypted_content = encrypted;
+  return item;
+}
+function openaiToOpenAIResponsesRequest(model, body, stream, credentials) {
+  if (body.input) {
+    const out = { ...body, model, stream: true };
+    if (out.max_output_tokens === undefined) {
+      if (out.max_completion_tokens !== undefined)
+        out.max_output_tokens = out.max_completion_tokens;
+      else if (out.max_tokens !== undefined)
+        out.max_output_tokens = out.max_tokens;
+    }
+    delete out.max_tokens;
+    delete out.max_completion_tokens;
+    return out;
+  }
+  const result = {
+    model,
+    input: [],
+    stream: true,
+    store: false
+  };
+  let hasSystemMessage = false;
+  const messages = body.messages || [];
+  for (const msg of messages) {
+    if (msg.role === ROLE.SYSTEM || msg.role === ROLE.DEVELOPER) {
+      if (!hasSystemMessage) {
+        result.instructions = extractInstructionsText(msg.content);
+        hasSystemMessage = true;
+      }
+      continue;
+    }
+    if (msg.role === ROLE.USER || msg.role === ROLE.ASSISTANT) {
+      if (msg.role === ROLE.ASSISTANT) {
+        const reasoningItem = buildReasoningInputItem(msg);
+        if (reasoningItem)
+          result.input.push(reasoningItem);
+      }
+      const contentType = msg.role === ROLE.USER ? RESPONSES_ITEM.INPUT_TEXT : RESPONSES_ITEM.OUTPUT_TEXT;
+      const content = typeof msg.content === "string" ? [{ type: contentType, text: msg.content }] : Array.isArray(msg.content) ? msg.content.map((c) => {
+        if (c.type === OPENAI_BLOCK.TEXT)
+          return { type: contentType, text: c.text };
+        if (c.type === OPENAI_BLOCK.IMAGE_URL) {
+          const url = typeof c.image_url === "string" ? c.image_url : c.image_url?.url;
+          return { type: RESPONSES_ITEM.INPUT_IMAGE, image_url: url, detail: c.image_url?.detail || "auto" };
+        }
+        if (c.type === RESPONSES_ITEM.INPUT_IMAGE)
+          return c;
+        const text = c.text || c.content || JSON.stringify(c);
+        return { type: contentType, text: typeof text === "string" ? text : JSON.stringify(text) };
+      }) : [];
+      if (content.length > 0) {
+        result.input.push({
+          type: RESPONSES_ITEM.MESSAGE,
+          role: msg.role,
+          content
+        });
+      }
+    }
+    if (msg.role === ROLE.ASSISTANT && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        const name = typeof tc.function?.name === "string" ? tc.function.name.trim() : "";
+        if (!name)
+          continue;
+        result.input.push({
+          type: RESPONSES_ITEM.FUNCTION_CALL,
+          call_id: clampResponsesCallId(tc.id),
+          name: name.slice(0, MAX_TOOL_NAME_LEN2),
+          arguments: coerceResponsesArguments(tc.function?.arguments)
+        });
+      }
+    }
+    if (msg.role === ROLE.TOOL) {
+      result.input.push({
+        type: RESPONSES_ITEM.FUNCTION_CALL_OUTPUT,
+        call_id: clampResponsesCallId(msg.tool_call_id),
+        output: coerceResponsesOutput(msg.content)
+      });
+    }
+  }
+  if (!hasSystemMessage) {
+    result.instructions = "";
+  }
+  if (body.tools && Array.isArray(body.tools)) {
+    result.tools = body.tools.map((tool) => {
+      if (tool.type === OPENAI_BLOCK.FUNCTION) {
+        const name = typeof tool.function?.name === "string" ? tool.function.name.trim() : "";
+        if (!name)
+          return null;
+        return {
+          type: OPENAI_BLOCK.FUNCTION,
+          name: name.slice(0, MAX_TOOL_NAME_LEN2),
+          description: String(tool.function.description || ""),
+          parameters: normalizeToolParameters(tool.function.parameters),
+          strict: tool.function.strict
+        };
+      }
+      return tool;
+    }).filter(Boolean);
+  }
+  if (body.temperature !== undefined)
+    result.temperature = body.temperature;
+  if (body.max_output_tokens !== undefined) {
+    result.max_output_tokens = body.max_output_tokens;
+  } else if (body.max_completion_tokens !== undefined) {
+    result.max_output_tokens = body.max_completion_tokens;
+  } else if (body.max_tokens !== undefined) {
+    result.max_output_tokens = body.max_tokens;
+  }
+  if (body.top_p !== undefined)
+    result.top_p = body.top_p;
+  if (body.reasoning !== undefined)
+    result.reasoning = body.reasoning;
+  if (body.reasoning_effort !== undefined)
+    result.reasoning = { effort: body.reasoning_effort, summary: "auto" };
+  if (body.service_tier !== undefined)
+    result.service_tier = body.service_tier;
+  if (body.prompt_cache_key !== undefined)
+    result.prompt_cache_key = body.prompt_cache_key;
+  return result;
+}
+register(FORMATS.OPENAI_RESPONSES, FORMATS.OPENAI, openaiResponsesToOpenAIRequest, null);
+register(FORMATS.OPENAI, FORMATS.OPENAI_RESPONSES, openaiToOpenAIResponsesRequest, null);
+
+// service/core/config/appConstants.js
+var CLAUDE_SYSTEM_PROMPT = "You are Claude Code, Anthropic's official CLI for Claude.";
+
+// service/core/translator/formats/maxTokens.js
+function adjustMaxTokens(body, ceiling = DEFAULT_MAX_TOKENS) {
+  let maxTokens = body.max_tokens || DEFAULT_MAX_TOKENS;
+  if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
+    if (maxTokens < DEFAULT_MIN_TOKENS) {
+      maxTokens = DEFAULT_MIN_TOKENS;
+    }
+  }
+  if (body.thinking?.budget_tokens && maxTokens <= body.thinking.budget_tokens) {
+    maxTokens = body.thinking.budget_tokens + 1024;
+  }
+  if (maxTokens > ceiling)
+    maxTokens = ceiling;
+  return maxTokens;
+}
+
+// service/core/translator/concerns/json.js
+function safeParseJSON(str, fallback) {
+  if (typeof str !== "string")
+    return str;
   try {
-    parsed = JSON.parse(raw);
+    return JSON.parse(str);
   } catch {
-    throw new Error("The request body is not JSON.");
+    return fallback;
   }
-  if (!isJsonObject(parsed)) {
-    throw new Error("The request body must be a JSON object.");
+}
+
+// service/core/translator/concerns/image.js
+var DATA_URI_RE = /^data:([^;]+);base64,([\s\S]+)$/;
+function parseDataUri(url) {
+  if (typeof url !== "string")
+    return null;
+  const match = url.match(DATA_URI_RE);
+  return match ? { mimeType: match[1], base64: match[2] } : null;
+}
+
+// service/core/translator/formats/gemini.js
+function extractTextContent(content, separator = "") {
+  if (typeof content === "string")
+    return content;
+  if (Array.isArray(content)) {
+    return content.filter((part) => part.type === OPENAI_BLOCK.TEXT).map((part) => part.text).join(separator);
   }
-  const stream = parsed.stream === true;
-  const model = typeof parsed.model === "string" ? parsed.model : "";
-  if (!parsed.messages) {
-    throw new Error("The request body has no messages.");
+  return "";
+}
+
+// service/core/translator/request/openai-to-claude.js
+var CLAUDE_OAUTH_TOOL_PREFIX = "";
+function openaiToClaudeRequest(model, body, stream) {
+  const toolNameMap = new Map;
+  const modelCeiling = getCapabilitiesForModel(null, model).maxOutput || undefined;
+  const result = {
+    model,
+    max_tokens: adjustMaxTokens(body, modelCeiling),
+    stream
+  };
+  if (body.temperature !== undefined) {
+    result.temperature = body.temperature;
   }
-  const effectiveOptions = typeof options === "boolean" ? { rtkEnabled: options } : options ?? {};
-  applyTokenSaverStyles(parsed, effectiveOptions.cavemanLevel ?? "off", effectiveOptions.ponytailLevel ?? "off");
-  const openCodeFreeTier = effectiveOptions.openCodeFreeTier ?? true;
-  if (openCodeFreeTier) {
-    ensureFreeTierTools(parsed);
-    if (Array.isArray(parsed.messages)) {
-      for (const msg of parsed.messages) {
-        if (isJsonObject(msg) && msg.role === "assistant") {
-          if (typeof msg.reasoning_content !== "string" || msg.reasoning_content.length === 0) {
-            msg.reasoning_content = " ";
+  result.messages = [];
+  const systemParts = [];
+  if (body.messages && Array.isArray(body.messages)) {
+    for (const msg of body.messages) {
+      if (msg.role === ROLE.SYSTEM) {
+        systemParts.push(typeof msg.content === "string" ? msg.content : extractTextContent(msg.content, `
+`));
+      }
+    }
+    const nonSystemMessages = body.messages.filter((m) => m.role !== ROLE.SYSTEM);
+    let currentRole = undefined;
+    let currentParts = [];
+    const flushCurrentMessage = () => {
+      if (currentRole && currentParts.length > 0) {
+        result.messages.push({ role: currentRole, content: currentParts });
+        currentParts = [];
+      }
+    };
+    for (const msg of nonSystemMessages) {
+      const newRole = msg.role === ROLE.USER || msg.role === ROLE.TOOL ? ROLE.USER : ROLE.ASSISTANT;
+      const blocks = getContentBlocksFromMessage(msg, toolNameMap);
+      const hasToolUse = blocks.some((b) => b.type === CLAUDE_BLOCK.TOOL_USE);
+      const hasToolResult = blocks.some((b) => b.type === CLAUDE_BLOCK.TOOL_RESULT);
+      if (hasToolResult) {
+        const toolResultBlocks = blocks.filter((b) => b.type === CLAUDE_BLOCK.TOOL_RESULT);
+        const otherBlocks = blocks.filter((b) => b.type !== CLAUDE_BLOCK.TOOL_RESULT);
+        flushCurrentMessage();
+        if (toolResultBlocks.length > 0) {
+          result.messages.push({ role: ROLE.USER, content: toolResultBlocks });
+        }
+        if (otherBlocks.length > 0) {
+          currentRole = newRole;
+          currentParts.push(...otherBlocks);
+        }
+        continue;
+      }
+      if (currentRole !== newRole) {
+        flushCurrentMessage();
+        currentRole = newRole;
+      }
+      currentParts.push(...blocks);
+      if (hasToolUse) {
+        flushCurrentMessage();
+      }
+    }
+    flushCurrentMessage();
+    for (let i = result.messages.length - 1;i >= 0; i--) {
+      const message = result.messages[i];
+      if (message.role === ROLE.ASSISTANT && Array.isArray(message.content) && message.content.length > 0) {
+        const validBlockTypes = [CLAUDE_BLOCK.TEXT, CLAUDE_BLOCK.TOOL_USE, CLAUDE_BLOCK.TOOL_RESULT, CLAUDE_BLOCK.IMAGE];
+        for (let j = message.content.length - 1;j >= 0; j--) {
+          const block = message.content[j];
+          if (validBlockTypes.includes(block.type)) {
+            block.cache_control = { type: "ephemeral" };
+            break;
+          }
+        }
+        break;
+      }
+    }
+  }
+  if (body.response_format) {
+    const responseFormat = body.response_format;
+    if (responseFormat.type === "json_schema" && responseFormat.json_schema?.schema) {
+      const schemaJson = JSON.stringify(responseFormat.json_schema.schema, null, 2);
+      systemParts.push(`You must respond with valid JSON that strictly follows this JSON schema:
+\`\`\`json
+${schemaJson}
+\`\`\`
+Respond ONLY with the JSON object, no other text.`);
+    } else if (responseFormat.type === "json_object") {
+      systemParts.push("You must respond with valid JSON. Respond ONLY with a JSON object, no other text.");
+    }
+  }
+  const claudeCodePrompt = { type: CLAUDE_BLOCK.TEXT, text: CLAUDE_SYSTEM_PROMPT };
+  if (systemParts.length > 0) {
+    const systemText = systemParts.join(`
+`);
+    result.system = [
+      claudeCodePrompt,
+      { type: CLAUDE_BLOCK.TEXT, text: systemText, cache_control: { type: "ephemeral", ttl: "1h" } }
+    ];
+  } else {
+    result.system = [claudeCodePrompt];
+  }
+  if (body.tools && Array.isArray(body.tools)) {
+    result.tools = [];
+    for (const tool of body.tools) {
+      const toolType = tool.type;
+      if (toolType && toolType !== OPENAI_BLOCK.FUNCTION) {
+        result.tools.push(tool);
+        continue;
+      }
+      const toolData = tool.function ?? tool;
+      const originalName = toolData.name;
+      const toolName = CLAUDE_OAUTH_TOOL_PREFIX + originalName;
+      toolNameMap.set(toolName, originalName);
+      result.tools.push({
+        name: toolName,
+        description: toolData.description || "",
+        input_schema: toolData.parameters || toolData.input_schema || { type: "object", properties: {}, required: [] }
+      });
+    }
+    if (result.tools.length > 0) {
+      result.tools[result.tools.length - 1].cache_control = { type: "ephemeral", ttl: "1h" };
+    }
+  }
+  if (body.tool_choice) {
+    result.tool_choice = convertOpenAIToolChoice(body.tool_choice);
+  }
+  if (toolNameMap.size > 0) {
+    result._toolNameMap = toolNameMap;
+  }
+  return result;
+}
+function getContentBlocksFromMessage(msg, toolNameMap = new Map) {
+  const blocks = [];
+  if (msg.role === ROLE.TOOL) {
+    blocks.push({
+      type: CLAUDE_BLOCK.TOOL_RESULT,
+      tool_use_id: msg.tool_call_id,
+      content: msg.content
+    });
+  } else if (msg.role === ROLE.USER) {
+    if (typeof msg.content === "string") {
+      if (msg.content) {
+        blocks.push({ type: CLAUDE_BLOCK.TEXT, text: msg.content });
+      }
+    } else if (Array.isArray(msg.content)) {
+      for (const part of msg.content) {
+        if (part.type === OPENAI_BLOCK.TEXT && part.text) {
+          blocks.push({ type: CLAUDE_BLOCK.TEXT, text: part.text });
+        } else if (part.type === CLAUDE_BLOCK.TOOL_RESULT) {
+          blocks.push({
+            type: CLAUDE_BLOCK.TOOL_RESULT,
+            tool_use_id: part.tool_use_id,
+            content: part.content,
+            ...part.is_error && { is_error: part.is_error }
+          });
+        } else if (part.type === OPENAI_BLOCK.IMAGE_URL) {
+          const url = part.image_url.url;
+          const parsed = parseDataUri(url);
+          if (parsed) {
+            blocks.push({
+              type: CLAUDE_BLOCK.IMAGE,
+              source: { type: "base64", media_type: parsed.mimeType, data: parsed.base64 }
+            });
+          } else if (url.startsWith("http://") || url.startsWith("https://")) {
+            blocks.push({
+              type: CLAUDE_BLOCK.IMAGE,
+              source: { type: "url", url }
+            });
+          }
+        } else if (part.type === OPENAI_BLOCK.IMAGE && part.source) {
+          blocks.push({ type: CLAUDE_BLOCK.IMAGE, source: part.source });
+        } else if (part.type === OPENAI_BLOCK.FILE && part.file) {
+          const fileData = part.file.file_data;
+          const parsed = parseDataUri(fileData);
+          if (parsed && parsed.mimeType === "application/pdf") {
+            blocks.push({
+              type: CLAUDE_BLOCK.DOCUMENT,
+              source: { type: "base64", media_type: parsed.mimeType, data: parsed.base64 }
+            });
           }
         }
       }
     }
+  } else if (msg.role === ROLE.ASSISTANT) {
+    if (Array.isArray(msg.content)) {
+      for (const part of msg.content) {
+        if (part.type === OPENAI_BLOCK.TEXT && part.text) {
+          blocks.push({ type: CLAUDE_BLOCK.TEXT, text: part.text });
+        } else if (part.type === CLAUDE_BLOCK.TOOL_USE) {
+          blocks.push({ type: CLAUDE_BLOCK.TOOL_USE, id: part.id, name: part.name, input: part.input });
+        } else if (part.type === CLAUDE_BLOCK.THINKING) {
+          const { cache_control, ...thinkingBlock } = part;
+          blocks.push(thinkingBlock);
+        }
+      }
+    } else if (msg.content) {
+      const text = typeof msg.content === "string" ? msg.content : extractTextContent(msg.content, `
+`);
+      if (text) {
+        blocks.push({ type: CLAUDE_BLOCK.TEXT, text });
+      }
+    }
+    if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
+      for (const tc of msg.tool_calls) {
+        if (tc.type === OPENAI_BLOCK.FUNCTION) {
+          const toolName = CLAUDE_OAUTH_TOOL_PREFIX + tc.function.name;
+          blocks.push({
+            type: CLAUDE_BLOCK.TOOL_USE,
+            id: tc.id,
+            name: toolName,
+            input: safeParseJSON(tc.function.arguments, tc.function.arguments)
+          });
+        }
+      }
+    }
   }
-  const rtkEnabled = effectiveOptions.rtkEnabled ?? true;
-  if (rtkEnabled) {
-    compressMessages(parsed, true);
+  return blocks;
+}
+var CLAUDE_TOOL_CHOICE_TYPES = new Set(["auto", "any", "tool", "none"]);
+function convertOpenAIToolChoice(choice) {
+  if (!choice)
+    return { type: "auto" };
+  if (typeof choice === "string") {
+    if (choice === "required")
+      return { type: "any" };
+    return { type: "auto" };
   }
-  if (parsed.max_completion_tokens !== undefined && parsed.max_tokens === undefined) {
-    parsed.max_tokens = parsed.max_completion_tokens;
+  if (typeof choice === "object") {
+    if (choice.function?.name) {
+      return { type: "tool", name: choice.function.name };
+    }
+    if (CLAUDE_TOOL_CHOICE_TYPES.has(choice.type)) {
+      return choice;
+    }
   }
-  if (parsed.reasoning_effort === "auto") {
-    delete parsed.reasoning_effort;
+  return { type: "auto" };
+}
+register(FORMATS.OPENAI, FORMATS.CLAUDE, openaiToClaudeRequest, null);
+
+// service/core/translator/index.js
+var requestRegistry;
+var responseRegistry;
+function register(from, to, requestFn, responseFn) {
+  requestRegistry ??= new Map;
+  responseRegistry ??= new Map;
+  const key = String(from) + ":" + String(to);
+  if (requestFn)
+    requestRegistry.set(key, requestFn);
+  if (responseFn)
+    responseRegistry.set(key, responseFn);
+}
+function translateRequest(sourceFormat, targetFormat, model, body, stream = true, credentials = null) {
+  requestRegistry ??= new Map;
+  responseRegistry ??= new Map;
+  if (sourceFormat === targetFormat)
+    return body;
+  const translator = requestRegistry.get(String(sourceFormat) + ":" + String(targetFormat));
+  if (!translator) {
+    throw new Error("Unsupported native request translation: " + sourceFormat + " -> " + targetFormat);
   }
-  parsed.stream = true;
-  return { body: JSON.stringify(parsed), stream, model };
+  return translator(model, body, stream, credentials);
+}
+
+// service/core/provider-adapter.js
+var cleanModelId2 = (model) => {
+  const clean = String(model || "").replace(/\([^()]+\)\s*$/, "").trim();
+  return clean.startsWith("blackrouter/") ? clean.slice("blackrouter/".length) : clean;
+};
+var targetFormatForModel = (model) => {
+  const base = cleanModelId2(model);
+  const registryEntry = (PROVIDERS.opencode.models || []).find((entry) => entry.id === base);
+  if (registryEntry?.targetFormat)
+    return registryEntry.targetFormat;
+  return isMuseSparkModel(base) ? FORMATS.OPENAI_RESPONSES : FORMATS.OPENAI;
+};
+var normalizeHeaders = (headers) => Object.fromEntries(Object.entries(headers || {}).map(([key, value]) => [key.toLowerCase(), String(value)]));
+var toolNameOf2 = (tool) => {
+  if (!tool || typeof tool !== "object")
+    return "";
+  if (typeof tool.name === "string")
+    return tool.name;
+  if (typeof tool.function?.name === "string")
+    return tool.function.name;
+  return "";
+};
+var inferToolNameMap = (sourceNames, transformedBody) => {
+  const map = new Map;
+  const transformedTools = Array.isArray(transformedBody?.tools) ? transformedBody.tools : [];
+  const transformedNames = new Set(transformedTools.map(toolNameOf2).filter(Boolean));
+  for (const originalName of ["read", "shell"]) {
+    if (!sourceNames.has(originalName))
+      continue;
+    const aliasPrefix = originalName + "_client";
+    const alias = [...transformedNames].filter((name) => {
+      if (!name.startsWith(aliasPrefix) || sourceNames.has(name))
+        return false;
+      const suffix = name.slice(aliasPrefix.length);
+      return suffix === "" || [...suffix].every((digit) => digit >= "0" && digit <= "9");
+    })[0];
+    if (alias)
+      map.set(alias, originalName);
+  }
+  return map;
+};
+var normalizeMessagesFingerprintTools = (body) => {
+  if (!body || typeof body !== "object" || !Array.isArray(body.tools))
+    return body;
+  const injectedNames = [];
+  body.tools = body.tools.map((tool) => {
+    const fn = tool?.function;
+    if (!fn || !["read", "shell"].includes(fn.name))
+      return tool;
+    injectedNames.push(fn.name);
+    return {
+      name: fn.name,
+      description: fn.description,
+      input_schema: fn.parameters || { type: "object", properties: {} }
+    };
+  });
+  if (injectedNames.length > 0) {
+    const names = [...new Set(injectedNames)];
+    const list = names.length > 1 ? "read and shell" : names[0];
+    const note = names.length > 1 ? "Do not call the " + list + " tools; they are placeholders that do nothing. Use the other tools you have been given instead." : "Do not call the " + list + " tool; it is a placeholder that does nothing. Use the other tools you have been given instead.";
+    if (typeof body.system === "string" && body.system.trim()) {
+      body.system += `
+
+` + note;
+    } else if (Array.isArray(body.system)) {
+      body.system.push({ type: "text", text: note });
+    } else {
+      body.system = note;
+    }
+  }
+  return body;
+};
+var prepareProviderRequest = async ({ model, body, session, rawHeaders = {} }) => {
+  const upstreamModel = cleanModelId2(model);
+  const originalToolNames = new Set((Array.isArray(body?.tools) ? body.tools : []).map(toolNameOf2).filter(Boolean));
+  const targetFormat = targetFormatForModel(upstreamModel);
+  const credentials = {
+    connectionId: session,
+    rawHeaders: { ...rawHeaders, "x-opencode-session": session },
+    providerSpecificData: {}
+  };
+  const sourceBody = { ...body, model: upstreamModel };
+  const translatedBody = targetFormat === FORMATS.OPENAI ? sourceBody : translateRequest(FORMATS.OPENAI, targetFormat, upstreamModel, sourceBody, true, credentials);
+  const executor = new OpenCodeExecutor;
+  const prepared = await executor.execute({
+    model: upstreamModel,
+    body: translatedBody,
+    stream: true,
+    credentials,
+    providerSessionId: session,
+    clientTool: "generic",
+    dispatch: async ({ url, headers, body: outboundBody, responseFormat, directFetch }) => {
+      const transportBody = responseFormat === "claude" ? normalizeMessagesFingerprintTools(outboundBody) : outboundBody;
+      const toolNameMap = takeRenamedToolNames(outboundBody) || inferToolNameMap(originalToolNames, outboundBody);
+      return {
+        url: new URL(url),
+        headers: normalizeHeaders(headers),
+        body: JSON.stringify(transportBody),
+        responseFormat,
+        lane: responseFormat === "openai-responses" ? "responses" : responseFormat === "claude" ? "messages" : "chat",
+        toolNameMap,
+        directFetch
+      };
+    }
+  });
+  return prepared;
 };
 
 // service/usage-observer.ts
@@ -7272,11 +8326,38 @@ var createUsageObserver = (onUsage) => {
 };
 
 // service/upstream.ts
+var CONNECT_HANDSHAKE_TIMEOUT_MS = 12000;
+
 class TunnelAgent extends https2.Agent {
+  connectTimeoutMs;
   proxyUrl;
-  constructor(proxyUrlString) {
+  pendingConnects = new Map;
+  constructor(proxyUrlString, connectTimeoutMs = CONNECT_HANDSHAKE_TIMEOUT_MS) {
     super({ keepAlive: true });
+    this.connectTimeoutMs = connectTimeoutMs;
     this.proxyUrl = new URL(proxyUrlString);
+  }
+  finishPending(request, pending, error, socket) {
+    if (pending.settled)
+      return;
+    pending.settled = true;
+    if (pending.timeout)
+      clearTimeout(pending.timeout);
+    this.pendingConnects.delete(request);
+    if (error) {
+      pending.callback?.(error, null);
+      request.destroy();
+      pending.tlsSocket?.destroy();
+      pending.socket?.destroy();
+      return;
+    }
+    pending.callback?.(null, socket);
+  }
+  destroy() {
+    const error = new Error("Proxy CONNECT cancelled because the tunnel agent was destroyed.");
+    for (const [request, pending] of [...this.pendingConnects])
+      this.finishPending(request, pending, error);
+    super.destroy();
   }
   createConnection(options, callback) {
     const proxyPort = Number(this.proxyUrl.port) || (this.proxyUrl.protocol === "https:" ? 443 : 80);
@@ -7298,31 +8379,39 @@ class TunnelAgent extends https2.Agent {
       path: `${targetHost}:${targetPort}`,
       headers: connectHeaders
     });
+    const pending = { callback, settled: false };
+    this.pendingConnects.set(connectReq, pending);
+    pending.timeout = setTimeout(() => {
+      this.finishPending(connectReq, pending, new Error(`Proxy CONNECT handshake timed out after ${this.connectTimeoutMs} ms.`));
+    }, this.connectTimeoutMs);
+    pending.timeout.unref?.();
     connectReq.on("connect", (res, socket) => {
-      if (res.statusCode !== 200) {
+      pending.socket = socket;
+      if (pending.settled) {
         socket.destroy();
-        callback?.(new Error(`Proxy CONNECT to ${targetHost}:${targetPort} failed with HTTP ${res.statusCode}`), socket);
         return;
       }
-      const tlsSocket = tls.connect({
-        socket,
-        servername: targetHost
-      }, () => {
-        callback?.(null, tlsSocket);
+      if (res.statusCode !== 200) {
+        this.finishPending(connectReq, pending, new Error(`Proxy CONNECT to ${targetHost}:${targetPort} failed with HTTP ${res.statusCode}`));
+        return;
+      }
+      const tlsSocket = tls.connect({ socket, servername: targetHost }, () => {
+        this.finishPending(connectReq, pending, null, tlsSocket);
       });
-      tlsSocket.on("error", (err) => {
-        socket.destroy();
-        callback?.(err, socket);
+      pending.tlsSocket = tlsSocket;
+      tlsSocket.once("error", (err) => {
+        if (!pending.settled)
+          this.finishPending(connectReq, pending, err);
+        else
+          socket.destroy();
       });
     });
-    connectReq.on("error", (err) => {
-      callback?.(err, null);
-    });
+    connectReq.on("error", (err) => this.finishPending(connectReq, pending, err));
     connectReq.end();
     return null;
   }
 }
-var createTunnelAgent = (proxyUrlString) => new TunnelAgent(proxyUrlString);
+var createTunnelAgent = (proxyUrlString, connectTimeoutMs = CONNECT_HANDSHAKE_TIMEOUT_MS) => new TunnelAgent(proxyUrlString, connectTimeoutMs);
 var isOpenCodeUpstream = (upstream) => {
   try {
     const hostname = new URL(upstream).hostname.toLowerCase();
@@ -7331,6 +8420,7 @@ var isOpenCodeUpstream = (upstream) => {
     return false;
   }
 };
+var isOpenCodeFreeTierGateResponse = (status, body, isOpenCode, usedProxyPool) => status === 403 && isOpenCode && usedProxyPool && body.includes("FreeTierError");
 var hasSameUpstreamOrigin = (left, right) => {
   try {
     return new URL(left).origin === new URL(right).origin;
@@ -7338,20 +8428,7 @@ var hasSameUpstreamOrigin = (left, right) => {
     return left === right;
   }
 };
-var isMuseSparkModel = (id) => /^muse[-_]?spark(?:$|[-_:.\s])/i.test(id);
-var isUnionAlphaModel = (id) => /^union[-_]?alpha(?:$|[-_:.\s])/i.test(id);
-var resolveOpencodePath = (call, modelId) => {
-  if (call === "models")
-    return "/zen/v1/models";
-  const clean = (modelId || "").replace(/\([^()]+\)\s*$/, "").trim().toLowerCase();
-  const base = clean.includes("/") ? clean.split("/").pop() : clean;
-  if (isMuseSparkModel(base))
-    return "/inference/v1/responses";
-  if (isUnionAlphaModel(base))
-    return "/inference/v1/messages";
-  return "/inference/v1/chat/completions";
-};
-var buildTarget = (config, call, poolOverride, modelId) => {
+var buildTarget = (config, call, poolOverride, nativeUrl) => {
   const activePool = poolOverride !== undefined ? poolOverride : (config.proxyPools || []).find((p) => p.isActive && p.proxyUrl.trim()) ?? null;
   const parsed = new URL(config.upstream);
   const isOpenCode = isOpenCodeUpstream(config.upstream);
@@ -7359,8 +8436,14 @@ var buildTarget = (config, call, poolOverride, modelId) => {
   let targetOrigin;
   let targetPath;
   if (isOpenCode) {
-    targetOrigin = "https://opencode.ai";
-    targetPath = resolveOpencodePath(call, modelId);
+    targetOrigin = nativeUrl?.origin ?? "https://opencode.ai";
+    if (call === "models") {
+      targetPath = "/zen/v1/models";
+    } else if (nativeUrl) {
+      targetPath = nativeUrl.pathname + nativeUrl.search;
+    } else {
+      throw new Error("The native provider core must resolve the OpenCode request URL before transport.");
+    }
   } else {
     targetOrigin = `${parsed.protocol}//${parsed.host}`;
     const basePath = parsed.pathname.replace(/\/+$/, "");
@@ -7435,7 +8518,7 @@ var toModels = (ids, rawEntries) => ids.map((id) => {
 var fetchModelIds = async (config, fetchImpl = fetch) => {
   const target = buildTarget(config, "models");
   const isOpenCode = isOpenCodeUpstream(config.upstream);
-  const upstreamUserAgent = isOpenCode ? "opencode/latest/2.0.26/cli" : "BlackRouter/1.0";
+  const upstreamUserAgent = isOpenCode ? "opencode/latest/2.1.4/cli" : "BlackRouter/1.0";
   let payload;
   if (target.agent && fetchImpl === fetch) {
     try {
@@ -7529,6 +8612,44 @@ var responseHeaders = (headers) => {
     picked["content-type"] = "application/json";
   return picked;
 };
+var createSseFirstByteKeepAlive = (keepAliveMs = Number(process.env.SSE_KEEPALIVE_MS ?? 15000)) => {
+  let timer = null;
+  let seenData = false;
+  const stream = new Transform3({
+    transform(chunk, _encoding, callback) {
+      seenData = true;
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      callback(null, chunk);
+    },
+    flush(callback) {
+      if (timer)
+        clearInterval(timer);
+      timer = null;
+      callback();
+    }
+  });
+  stream.once("pipe", () => {
+    if (!Number.isFinite(keepAliveMs) || keepAliveMs <= 0 || seenData)
+      return;
+    timer = setInterval(() => {
+      if (!seenData && !stream.destroyed && !stream.writableEnded) {
+        stream.push(Buffer.from(`: ping
+
+`));
+      }
+    }, keepAliveMs);
+    timer.unref?.();
+  });
+  stream.once("close", () => {
+    if (timer)
+      clearInterval(timer);
+    timer = null;
+  });
+  return stream;
+};
 var writeJson = (response, status, body, headers = {}) => {
   if (response.headersSent) {
     response.destroy();
@@ -7538,7 +8659,7 @@ var writeJson = (response, status, body, headers = {}) => {
   response.end(JSON.stringify(body));
 };
 var writeOpenAiError = (response, status, message, code, headers = {}) => {
-  writeJson(response, status, { error: { message, type: "invalid_request_error", code } }, headers);
+  writeJson(response, status, { error: { message: redactDiagnosticText(message), type: "invalid_request_error", code } }, headers);
 };
 var AGGREGATE_LIMIT_BYTES = 8 * 1024 * 1024;
 var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimit, onUsage) => {
@@ -7559,11 +8680,12 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
   let lastRequestedModel = prepared.model;
   const fallbackReasons = [];
   const rateLimitedPoolIds = new Set;
+  const failedPoolIds = new Set;
   const advanceToNextAttempt = () => {
     let nextIndex = attemptIndex + 1;
     while (nextIndex < attempts.length) {
       const nextAttempt = attempts[nextIndex];
-      if (nextAttempt?.pool && rateLimitedPoolIds.has(nextAttempt.pool.id)) {
+      if (nextAttempt?.pool && (rateLimitedPoolIds.has(nextAttempt.pool.id) || failedPoolIds.has(nextAttempt.pool.id))) {
         nextIndex += 1;
         continue;
       }
@@ -7581,23 +8703,32 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
     ...attempt.model !== prepared.model ? { "x-blackrouter-fallback-used": "true" } : {},
     ...fallbackReasons.length > 0 ? { "x-blackrouter-fallback-reason": fallbackReasons.join(" -> ") } : {}
   });
-  const modelAwareBody = (model) => {
-    const lane = resolveOpenCodeLane(config.upstream, model);
-    let raw = prepared.body;
+  const modelAwareBody = async (model) => {
+    let parsed;
     try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        parsed.model = model;
-        raw = JSON.stringify(parsed);
-      }
-    } catch {}
-    const isOpenCode = isOpenCodeUpstream(config.upstream);
+      parsed = JSON.parse(prepared.body);
+    } catch {
+      throw new Error("Prepared request body was not valid JSON.");
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Prepared request body must be a JSON object.");
+    }
+    const body = parsed;
+    body.model = model;
+    if (!isOpenCodeUpstream(config.upstream)) {
+      return { lane: "chat", body: JSON.stringify(body) };
+    }
+    const native = await prepareProviderRequest({ model, body, session });
     return {
-      lane,
-      body: prepareOpenCodeRequestBody(raw, lane, isOpenCode)
+      lane: native.lane,
+      body: native.body,
+      headers: native.headers,
+      url: native.url,
+      toolNameMap: native.toolNameMap,
+      directFetch: native.directFetch
     };
   };
-  const sendAttempt = () => {
+  const sendAttempt = async () => {
     if (response.destroyed || response.writableEnded)
       return;
     const attempt = attempts[attemptIndex];
@@ -7609,32 +8740,93 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
     const candidate = attempt.pool;
     let lane;
     let upstreamBody;
+    let nativeHeaders = {};
+    let nativeUrl;
+    let nativeToolNameMap = null;
+    let nativeDirectFetch;
     try {
-      const preparedForModel = modelAwareBody(attempt.model);
+      const preparedForModel = await modelAwareBody(attempt.model);
       lane = preparedForModel.lane;
       upstreamBody = preparedForModel.body;
+      nativeHeaders = preparedForModel.headers ?? {};
+      nativeUrl = preparedForModel.url;
+      nativeToolNameMap = preparedForModel.toolNameMap ?? null;
+      nativeDirectFetch = preparedForModel.directFetch;
     } catch (error) {
-      writeOpenAiError(response, 400, error instanceof Error ? error.message : "Could not convert the OpenCode request body.", "invalid_request");
+      if (response.destroyed || response.writableEnded)
+        return;
+      writeOpenAiError(response, 400, error instanceof Error ? error.message : "Could not prepare the native provider request.", "invalid_request");
       return;
     }
-    const target = buildTarget(config, "chat", candidate, attempt.model);
+    if (response.destroyed || response.writableEnded)
+      return;
+    const target = buildTarget(config, "chat", candidate, nativeUrl);
+    const requestHeaders = { ...isOpenCodeUpstream(config.upstream) ? nativeHeaders : {}, ...target.headers, "content-type": "application/json", accept: "text/event-stream", "content-length": String(Buffer.byteLength(upstreamBody)) };
     const transport = target.url.protocol === "http:" ? http2 : https2;
-    const upstream = transport.request(target.url, {
-      method: "POST",
-      agent: target.agent,
-      headers: {
-        ...isOpenCodeUpstream(config.upstream) ? freeTierHeaders(session) : {},
-        ...target.headers,
-        ...lane === "messages" ? { "anthropic-version": "2023-06-01" } : {},
-        "content-type": "application/json",
-        accept: "text/event-stream",
-        "content-length": String(Buffer.byteLength(upstreamBody))
-      }
-    }, (answer) => {
+    const usesNativeDirectTransport = candidate === null && isOpenCodeUpstream(config.upstream) && typeof nativeDirectFetch === "function";
+    const handleAnswer = (answer) => {
       const status = answer.statusCode ?? 502;
       const retryAfterHeader = answer.headers["retry-after"];
       const retryAfter = typeof retryAfterHeader === "string" ? retryAfterHeader : undefined;
       const isShortDirect429 = status === 429 && candidate === null && retryAfter !== undefined && parseRetryAfterMs(retryAfter) <= 2000;
+      if (status === 403 && candidate && isOpenCodeUpstream(config.upstream)) {
+        const maxInspectableErrorBytes = 256 * 1024;
+        const chunks = [];
+        let inspectedBytes = 0;
+        let inspecting = true;
+        answer.on("data", (raw) => {
+          const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+          if (!inspecting) {
+            if (!response.destroyed && !response.writableEnded)
+              response.write(chunk);
+            return;
+          }
+          chunks.push(chunk);
+          inspectedBytes += chunk.length;
+          if (inspectedBytes > maxInspectableErrorBytes) {
+            inspecting = false;
+            const routeHeaders = routingHeaders(attempt);
+            response.writeHead(status, {
+              ...responseHeaders(answer.headers),
+              ...routeHeaders
+            });
+            for (const buffered of chunks)
+              response.write(buffered);
+            chunks.length = 0;
+          }
+        });
+        answer.on("end", () => {
+          if (!inspecting) {
+            if (!response.destroyed && !response.writableEnded)
+              response.end();
+            return;
+          }
+          const bodyBuffer = Buffer.concat(chunks);
+          const bodyText = bodyBuffer.toString("utf8");
+          if (isOpenCodeFreeTierGateResponse(status, bodyText, true, true)) {
+            failedPoolIds.add(candidate.id);
+            if (advanceToNextAttempt()) {
+              fallbackReasons.push(`HTTP 403 FreeTierError on proxy pool ${candidate.name}`);
+              sendAttempt();
+              return;
+            }
+          }
+          const routeHeaders = routingHeaders(attempt);
+          response.writeHead(status, {
+            ...responseHeaders(answer.headers),
+            ...routeHeaders
+          });
+          response.end(bodyBuffer);
+        });
+        answer.on("error", (error) => {
+          if (!response.headersSent) {
+            writeOpenAiError(response, 502, `Could not read the upstream error response: ${error.message}`, "upstream_unreachable");
+          } else {
+            response.destroy(error);
+          }
+        });
+        return;
+      }
       if (status === 429) {
         if (candidate)
           rateLimitedPoolIds.add(candidate.id);
@@ -7669,7 +8861,7 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
         return;
       }
       const contentType = typeof answer.headers["content-type"] === "string" ? answer.headers["content-type"].toLowerCase() : "";
-      const protocolTransform = lane !== "chat" && contentType.includes("text/event-stream") ? createOpenCodeResponseTransform(lane, attempt.model) : null;
+      const protocolTransform = contentType.includes("text/event-stream") ? lane === "chat" ? createToolNameRestoreTransform(nativeToolNameMap) : createOpenCodeResponseTransform(lane, attempt.model, nativeToolNameMap) : null;
       const successHeaders = {
         ...responseHeaders(answer.headers),
         ...routeHeaders
@@ -7677,8 +8869,14 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       if (prepared.stream) {
         response.writeHead(status, successHeaders);
         const observer = createUsageObserver((usage) => onUsage?.(usage));
-        if (protocolTransform) {
+        const keepAliveMs = Number(process.env.SSE_KEEPALIVE_MS ?? 15000);
+        const keepAlive = contentType.includes("text/event-stream") && Number.isFinite(keepAliveMs) && keepAliveMs > 0 ? createSseFirstByteKeepAlive(keepAliveMs) : null;
+        if (protocolTransform && keepAlive) {
+          pipeline(answer, protocolTransform, observer, keepAlive, response, () => {});
+        } else if (protocolTransform) {
           pipeline(answer, protocolTransform, observer, response, () => {});
+        } else if (keepAlive) {
+          pipeline(answer, observer, keepAlive, response, () => {});
         } else {
           pipeline(answer, observer, response, () => {});
         }
@@ -7699,7 +8897,7 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
         const usage = extractTokenUsage(completion);
         if (usage)
           onUsage?.(usage);
-        writeJson(response, status, completion, successHeaders);
+        writeJson(response, status, completion, { ...successHeaders, "content-type": "application/json" });
       });
       source.on("error", (error) => {
         writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, "upstream_unreachable");
@@ -7709,26 +8907,1155 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
       });
       if (protocolTransform)
         answer.pipe(protocolTransform);
-    });
-    upstream.on("error", (error) => {
+    };
+    const handleTransportError = (error) => {
+      if (response.destroyed || response.writableEnded)
+        return;
+      if (candidate)
+        failedPoolIds.add(candidate.id);
       if (!response.headersSent && !response.destroyed && advanceToNextAttempt()) {
         fallbackReasons.push(`network error on ${lastRequestedModel}`);
         sendAttempt();
         return;
       }
-      const finalAttempt = attempt;
-      const routeHeaders = routingHeaders(finalAttempt);
+      const routeHeaders = routingHeaders(attempt);
       for (const [name, value] of Object.entries(routeHeaders))
         response.setHeader(name, value);
       writeOpenAiError(response, 502, `The upstream did not answer for ${lastRequestedModel}: ${error.message}`, "upstream_unreachable", routeHeaders);
-    });
+    };
+    let upstream = null;
+    let directAbort = null;
+    if (usesNativeDirectTransport && nativeDirectFetch) {
+      directAbort = new AbortController;
+      nativeDirectFetch(target.url, { method: "POST", headers: requestHeaders, body: upstreamBody, signal: AbortSignal.any([directAbort.signal, AbortSignal.timeout(120000)]) }).then((fetched) => {
+        const body = fetched.body ? Readable.fromWeb(fetched.body) : Readable.from([]);
+        const wrapped = body;
+        Object.defineProperty(wrapped, "statusCode", { value: fetched.status });
+        Object.defineProperty(wrapped, "headers", { value: Object.fromEntries(fetched.headers.entries()) });
+        handleAnswer(wrapped);
+      }).catch((error) => handleTransportError(error instanceof Error ? error : new Error(String(error))));
+    } else {
+      upstream = transport.request(target.url, { method: "POST", agent: target.agent, headers: requestHeaders }, handleAnswer);
+      upstream.on("error", handleTransportError);
+      upstream.end(upstreamBody);
+    }
     response.on("close", () => {
-      if (!response.writableEnded)
-        upstream.destroy();
+      target.agent?.destroy();
+      if (response.writableEnded)
+        return;
+      upstream?.destroy();
+      directAbort?.abort(new Error("Downstream client disconnected."));
     });
-    upstream.end(upstreamBody);
   };
   sendAttempt();
+};
+
+// service/core/rtk/constants.js
+var RAW_CAP = 10 * 1024 * 1024;
+var MIN_COMPRESS_SIZE = 500;
+var DETECT_WINDOW = 1024;
+var GIT_DIFF_HUNK_MAX_LINES = 100;
+var GIT_LOG_MAX_LINES = 200;
+var DEDUP_LINE_MAX = 2000;
+var GREP_PER_FILE_MAX = 10;
+var FIND_PER_DIR_MAX = 10;
+var FIND_TOTAL_DIR_MAX = 20;
+var STATUS_MAX_FILES = 10;
+var STATUS_MAX_UNTRACKED = 10;
+var LS_EXT_SUMMARY_TOP = 5;
+var LS_NOISE_DIRS = [
+  "node_modules",
+  ".git",
+  "target",
+  "__pycache__",
+  ".next",
+  "dist",
+  "build",
+  ".cache",
+  ".turbo",
+  ".vercel",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".tox",
+  ".venv",
+  "venv",
+  "env",
+  "coverage",
+  ".nyc_output",
+  ".DS_Store",
+  "Thumbs.db",
+  ".idea",
+  ".vscode",
+  ".vs",
+  "*.egg-info",
+  ".eggs"
+];
+var TREE_MAX_LINES = 200;
+var SEARCH_LIST_PER_DIR_MAX = 10;
+var SEARCH_LIST_TOTAL_DIR_MAX = 20;
+var SMART_TRUNCATE_HEAD = 120;
+var SMART_TRUNCATE_TAIL = 60;
+var SMART_TRUNCATE_MIN_LINES = 250;
+var READ_NUMBERED_MIN_HIT_RATIO = 0.7;
+
+// service/core/rtk/filters/gitDiff.js
+function gitDiff(diff, maxLines = 500) {
+  const result = [];
+  let currentFile = "";
+  let added = 0;
+  let removed = 0;
+  let inHunk = false;
+  let hunkShown = 0;
+  let hunkSkipped = 0;
+  let wasTruncated = false;
+  const maxHunkLines = GIT_DIFF_HUNK_MAX_LINES;
+  const lines = diff.split(`
+`);
+  outer:
+    for (const line of lines) {
+      if (line.startsWith("diff --git")) {
+        if (hunkSkipped > 0) {
+          result.push(`  ... (${hunkSkipped} lines truncated)`);
+          wasTruncated = true;
+          hunkSkipped = 0;
+        }
+        if (currentFile && (added > 0 || removed > 0)) {
+          result.push(`  +${added} -${removed}`);
+        }
+        const parts = line.split(" b/");
+        currentFile = parts.length > 1 ? parts.slice(1).join(" b/") : "unknown";
+        result.push(`
+${currentFile}`);
+        added = 0;
+        removed = 0;
+        inHunk = false;
+        hunkShown = 0;
+      } else if (line.startsWith("@@")) {
+        if (hunkSkipped > 0) {
+          result.push(`  ... (${hunkSkipped} lines truncated)`);
+          wasTruncated = true;
+          hunkSkipped = 0;
+        }
+        inHunk = true;
+        hunkShown = 0;
+        result.push(`  ${line}`);
+      } else if (inHunk) {
+        if (line.startsWith("+") && !line.startsWith("+++")) {
+          added += 1;
+          if (hunkShown < maxHunkLines) {
+            result.push(`  ${line}`);
+            hunkShown += 1;
+          } else {
+            hunkSkipped += 1;
+          }
+        } else if (line.startsWith("-") && !line.startsWith("---")) {
+          removed += 1;
+          if (hunkShown < maxHunkLines) {
+            result.push(`  ${line}`);
+            hunkShown += 1;
+          } else {
+            hunkSkipped += 1;
+          }
+        } else if (hunkShown < maxHunkLines && !line.startsWith("\\")) {
+          if (hunkShown > 0) {
+            result.push(`  ${line}`);
+            hunkShown += 1;
+          }
+        }
+      }
+      if (result.length >= maxLines) {
+        result.push(`
+... (more changes truncated)`);
+        wasTruncated = true;
+        break outer;
+      }
+    }
+  if (hunkSkipped > 0) {
+    result.push(`  ... (${hunkSkipped} lines truncated)`);
+    wasTruncated = true;
+  }
+  if (currentFile && (added > 0 || removed > 0)) {
+    result.push(`  +${added} -${removed}`);
+  }
+  if (wasTruncated) {
+    result.push("[full diff: rtk git diff --no-compact]");
+  }
+  return result.join(`
+`);
+}
+gitDiff.filterName = "git-diff";
+
+// service/core/rtk/filters/gitStatus.js
+function gitStatus(input) {
+  const lines = input.split(`
+`);
+  if (lines.length === 0 || lines.length === 1 && !lines[0].trim()) {
+    return "Clean working tree";
+  }
+  let branch = "";
+  const stagedFiles = [];
+  const modifiedFiles = [];
+  const untrackedFiles = [];
+  let staged = 0;
+  let modified = 0;
+  let untracked = 0;
+  let conflicts = 0;
+  for (const raw of lines) {
+    if (!raw.trim())
+      continue;
+    const longBranch = raw.match(/^On branch (\S+)/);
+    if (longBranch) {
+      branch = longBranch[1];
+      continue;
+    }
+    if (raw.startsWith("##")) {
+      branch = raw.replace(/^##\s*/, "");
+      continue;
+    }
+    if (raw.length >= 3 && /^[ MADRCU?!][ MADRCU?!] /.test(raw)) {
+      const x = raw[0];
+      const y = raw[1];
+      const file = raw.slice(3);
+      if (raw.slice(0, 2) === "??") {
+        untracked++;
+        untrackedFiles.push(file);
+        continue;
+      }
+      if ("MADRC".includes(x)) {
+        staged++;
+        stagedFiles.push(file);
+      } else if (x === "U") {
+        conflicts++;
+      }
+      if (y === "M" || y === "D") {
+        modified++;
+        modifiedFiles.push(file);
+      }
+      continue;
+    }
+    const longMatch = raw.match(/^\s*(modified|new file|deleted|renamed|both modified):\s+(.+)$/);
+    if (longMatch) {
+      const kind = longMatch[1];
+      const path = longMatch[2].trim();
+      if (kind === "both modified") {
+        conflicts++;
+      } else if (kind === "modified" || kind === "deleted") {
+        modified++;
+        modifiedFiles.push(path);
+      } else if (kind === "new file" || kind === "renamed") {
+        staged++;
+        stagedFiles.push(path);
+      }
+      continue;
+    }
+  }
+  let out = "";
+  if (branch)
+    out += `* ${branch}
+`;
+  if (staged > 0) {
+    out += `+ Staged: ${staged} files
+`;
+    for (const f of stagedFiles.slice(0, STATUS_MAX_FILES))
+      out += `   ${f}
+`;
+    if (stagedFiles.length > STATUS_MAX_FILES) {
+      out += `   ... +${stagedFiles.length - STATUS_MAX_FILES} more
+`;
+    }
+  }
+  if (modified > 0) {
+    out += `~ Modified: ${modified} files
+`;
+    for (const f of modifiedFiles.slice(0, STATUS_MAX_FILES))
+      out += `   ${f}
+`;
+    if (modifiedFiles.length > STATUS_MAX_FILES) {
+      out += `   ... +${modifiedFiles.length - STATUS_MAX_FILES} more
+`;
+    }
+  }
+  if (untracked > 0) {
+    out += `? Untracked: ${untracked} files
+`;
+    for (const f of untrackedFiles.slice(0, STATUS_MAX_UNTRACKED))
+      out += `   ${f}
+`;
+    if (untrackedFiles.length > STATUS_MAX_UNTRACKED) {
+      out += `   ... +${untrackedFiles.length - STATUS_MAX_UNTRACKED} more
+`;
+    }
+  }
+  if (conflicts > 0) {
+    out += `conflicts: ${conflicts} files
+`;
+  }
+  if (staged === 0 && modified === 0 && untracked === 0 && conflicts === 0) {
+    out += `clean — nothing to commit
+`;
+  }
+  return out.replace(/\n+$/, "");
+}
+gitStatus.filterName = "git-status";
+
+// service/core/rtk/filters/gitLog.js
+function gitLog(text, maxLines = GIT_LOG_MAX_LINES) {
+  if (!text)
+    return "";
+  const input = String(text);
+  const lines = input.split(`
+`);
+  const out = [];
+  let skipped = 0;
+  let inCommit = false;
+  let subjectSeen = false;
+  function pushLine(l) {
+    if (out.length < maxLines) {
+      out.push(l);
+      return true;
+    }
+    skipped++;
+    return false;
+  }
+  for (let i = 0;i < lines.length; i++) {
+    const raw = lines[i];
+    const line = raw.trimEnd();
+    const trimmed = line.trim();
+    if (/^commit [0-9a-f]{7,40}$/i.test(trimmed) || /^[*|/\\ ]+commit [0-9a-f]{7,40}/i.test(trimmed)) {
+      inCommit = true;
+      subjectSeen = false;
+      pushLine(line);
+      continue;
+    }
+    if (inCommit) {
+      if (/^[*|/\\ ]*(Author|Date):/i.test(trimmed)) {
+        pushLine(trimmed);
+        continue;
+      }
+      if (trimmed === "")
+        continue;
+      if (!subjectSeen && /^[*|/\\ ]*    \S/.test(line)) {
+        pushLine("  Subject: " + trimmed);
+        subjectSeen = true;
+        continue;
+      }
+      if (/^\d+ file\w* changed/.test(trimmed)) {
+        pushLine("  " + trimmed);
+        continue;
+      }
+      if (/^diff --git /.test(trimmed)) {
+        pushLine("  ... diff body omitted");
+        continue;
+      }
+      continue;
+    }
+    const graphMatch = trimmed.match(/^[*|/\\ ]+([0-9a-f]{7,40}\s+.+)/i);
+    if (graphMatch) {
+      pushLine(graphMatch[1]);
+      continue;
+    }
+    if (/^[0-9a-f]{7,40}\s+/.test(trimmed)) {
+      pushLine(trimmed);
+      continue;
+    }
+    if (/^[*|/\\ ]+$/.test(trimmed) && /[*|/\\]/.test(trimmed)) {
+      continue;
+    }
+    pushLine(trimmed);
+  }
+  if (skipped > 0)
+    out.push(`... (${skipped} more lines)`);
+  const result = out.join(`
+`);
+  if (!result && input)
+    return input;
+  if (result.length > input.length)
+    return input;
+  return result;
+}
+gitLog.filterName = "git-log";
+
+// service/core/rtk/filters/buildOutput.js
+var RE_CARGO_ERR_CONT = /^\s*(-->|\||\d+\s*\||=)/;
+var DEPRECATION_KEEP = 3;
+function buildOutput(input) {
+  const lines = input.split(`
+`);
+  if (lines.length === 0)
+    return input;
+  const errors = [];
+  const warnings = [];
+  const deprecations = [];
+  let summary = null;
+  let compilingCount = 0;
+  let downloadingCount = 0;
+  let inCargoError = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (inCargoError) {
+      if (!trimmed) {
+        inCargoError = false;
+        continue;
+      }
+      if (RE_CARGO_ERR_CONT.test(line)) {
+        errors.push(line);
+        continue;
+      }
+      inCargoError = false;
+    }
+    if (!trimmed)
+      continue;
+    if (/^npm (ERR!|error)/i.test(trimmed) || /^yarn error/i.test(trimmed)) {
+      errors.push(line);
+      continue;
+    }
+    if (/^npm warn deprecated/i.test(trimmed)) {
+      deprecations.push(line);
+      continue;
+    }
+    if (/^npm warn/i.test(trimmed) || /^yarn warn/i.test(trimmed)) {
+      warnings.push(line);
+      continue;
+    }
+    if (/^error(\[|:)/i.test(trimmed) || trimmed.startsWith("error -->")) {
+      errors.push(line);
+      inCargoError = true;
+      continue;
+    }
+    if (/^warning(\[|:)/i.test(trimmed) || trimmed.startsWith("warning -->")) {
+      warnings.push(line);
+      inCargoError = true;
+      continue;
+    }
+    if (/^ERROR:/i.test(trimmed)) {
+      errors.push(line);
+      continue;
+    }
+    if (/^\[ERROR\]/i.test(trimmed) || /^BUILD FAILED/i.test(trimmed)) {
+      errors.push(line);
+      continue;
+    }
+    if (/^\[WARNING\]/i.test(trimmed)) {
+      warnings.push(line);
+      continue;
+    }
+    if (/^\s*Compiling\s+\S+/i.test(trimmed)) {
+      compilingCount++;
+      continue;
+    }
+    if (/^\s*Downloading\s+\S+/i.test(trimmed) || /^Fetching\s+/i.test(trimmed)) {
+      downloadingCount++;
+      continue;
+    }
+    if (/^(added|removed|changed|audited|installed)\s+\d+\s+package/i.test(trimmed) || /^\s*Finished\s+/i.test(trimmed) || /^BUILD SUCCESS/i.test(trimmed) || /^\d+\s+(vulnerabilities|packages?|warnings?|errors?)/i.test(trimmed) || /^Successfully (installed|built)/i.test(trimmed) || /^To address .* issues/i.test(trimmed) || /^Run `npm (audit|fund)`/i.test(trimmed) || /packages are looking for funding/i.test(trimmed)) {
+      summary = summary ? `${summary}
+${line}` : line;
+      continue;
+    }
+  }
+  let out = "";
+  const keepDep = deprecations.slice(0, DEPRECATION_KEEP);
+  for (const d of keepDep)
+    out += `${d}
+`;
+  if (deprecations.length > DEPRECATION_KEEP) {
+    out += `... +${deprecations.length - DEPRECATION_KEEP} more deprecated packages
+`;
+  }
+  if (compilingCount > 0) {
+    out += `Compiled ${compilingCount} packages
+`;
+  }
+  if (downloadingCount > 0) {
+    out += `Downloaded ${downloadingCount} packages
+`;
+  }
+  for (const e of errors)
+    out += `${e}
+`;
+  const keepWarnings = warnings.slice(0, 5);
+  for (const w of keepWarnings)
+    out += `${w}
+`;
+  if (warnings.length > 5) {
+    out += `... +${warnings.length - 5} more warnings
+`;
+  }
+  if (summary)
+    out += `${summary}
+`;
+  return out.replace(/\n+$/, "") || input;
+}
+buildOutput.filterName = "build-output";
+
+// service/core/rtk/filters/grep.js
+function grep(input) {
+  const byFile = new Map;
+  let total = 0;
+  for (const line of input.split(`
+`)) {
+    const first = line.indexOf(":");
+    if (first === -1)
+      continue;
+    const second = line.indexOf(":", first + 1);
+    if (second === -1)
+      continue;
+    const file = line.slice(0, first);
+    const lineNumStr = line.slice(first + 1, second);
+    const content = line.slice(second + 1);
+    if (!/^\d+$/.test(lineNumStr))
+      continue;
+    total++;
+    if (!byFile.has(file))
+      byFile.set(file, []);
+    byFile.get(file).push([lineNumStr, content]);
+  }
+  if (total === 0)
+    return input;
+  const files = Array.from(byFile.keys()).sort();
+  let out = `${total} matches in ${files.length}F:
+
+`;
+  for (const file of files) {
+    const matches = byFile.get(file);
+    out += `[file] ${file} (${matches.length}):
+`;
+    const show = matches.slice(0, GREP_PER_FILE_MAX);
+    for (const [lineNum, content] of show) {
+      out += `  ${lineNum.padStart(4)}: ${content.trim()}
+`;
+    }
+    if (matches.length > GREP_PER_FILE_MAX) {
+      out += `  +${matches.length - GREP_PER_FILE_MAX}
+`;
+    }
+    out += `
+`;
+  }
+  return out;
+}
+grep.filterName = "grep";
+
+// service/core/rtk/filters/find.js
+function find(input) {
+  const lines = input.split(`
+`).filter((l) => l.trim());
+  if (lines.length === 0)
+    return input;
+  const byDir = new Map;
+  for (const path of lines) {
+    const lastSep = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+    let dir;
+    let basename;
+    if (lastSep === -1) {
+      dir = ".";
+      basename = path;
+    } else {
+      dir = path.slice(0, lastSep) || "/";
+      basename = path.slice(lastSep + 1);
+    }
+    if (!byDir.has(dir))
+      byDir.set(dir, []);
+    byDir.get(dir).push(basename);
+  }
+  const dirs = Array.from(byDir.keys()).sort();
+  let out = `${lines.length} files in ${dirs.length} dirs:
+
+`;
+  const showDirs = dirs.slice(0, FIND_TOTAL_DIR_MAX);
+  for (const dir of showDirs) {
+    const files = byDir.get(dir);
+    const dirLabel = dir.replace(/\\/g, "/");
+    out += `${dirLabel}/  (${files.length})
+`;
+    const showFiles = files.slice(0, FIND_PER_DIR_MAX);
+    for (const f of showFiles)
+      out += `  ${f}
+`;
+    if (files.length > FIND_PER_DIR_MAX) {
+      out += `  +${files.length - FIND_PER_DIR_MAX}
+`;
+    }
+  }
+  if (dirs.length > FIND_TOTAL_DIR_MAX) {
+    out += `
++${dirs.length - FIND_TOTAL_DIR_MAX} more dirs
+`;
+  }
+  return out;
+}
+find.filterName = "find";
+
+// service/core/rtk/filters/dedupLog.js
+function dedupLog(input) {
+  const lines = input.split(`
+`);
+  const out = [];
+  let prev = null;
+  let runCount = 0;
+  let blankStreak = 0;
+  const flushRun = () => {
+    if (prev !== null && runCount > 1) {
+      out.push(`  ... (${runCount - 1} duplicate lines)`);
+    }
+  };
+  for (const line of lines) {
+    if (line.trim() === "") {
+      if (blankStreak < 1)
+        out.push(line);
+      blankStreak += 1;
+      flushRun();
+      prev = null;
+      runCount = 0;
+      continue;
+    }
+    blankStreak = 0;
+    if (line === prev) {
+      runCount += 1;
+      continue;
+    }
+    flushRun();
+    out.push(line);
+    prev = line;
+    runCount = 1;
+    if (out.length >= DEDUP_LINE_MAX) {
+      out.push(`... (truncated at ${DEDUP_LINE_MAX} lines)`);
+      return out.join(`
+`);
+    }
+  }
+  flushRun();
+  return out.join(`
+`);
+}
+dedupLog.filterName = "dedup-log";
+
+// service/core/rtk/filters/ls.js
+var LS_DATE_RE = /\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+(\d{4}|\d{2}:\d{2})\s+/;
+function humanSize(bytes) {
+  if (bytes >= 1048576)
+    return `${(bytes / 1048576).toFixed(1)}M`;
+  if (bytes >= 1024)
+    return `${(bytes / 1024).toFixed(1)}K`;
+  return `${bytes}B`;
+}
+function parseLsLine(line) {
+  const m = LS_DATE_RE.exec(line);
+  if (!m)
+    return null;
+  const name = line.slice(m.index + m[0].length);
+  const beforeDate = line.slice(0, m.index);
+  const beforeParts = beforeDate.split(/\s+/).filter(Boolean);
+  if (beforeParts.length < 4)
+    return null;
+  const perms = beforeParts[0];
+  const fileType = perms.charAt(0);
+  let size = 0;
+  for (let i = beforeParts.length - 1;i >= 0; i--) {
+    const n = Number(beforeParts[i]);
+    if (Number.isInteger(n) && String(n) === beforeParts[i]) {
+      size = n;
+      break;
+    }
+  }
+  return { fileType, size, name };
+}
+function ls(input) {
+  const dirs = [];
+  const files = [];
+  const byExt = new Map;
+  for (const line of input.split(`
+`)) {
+    if (line.startsWith("total ") || line.length === 0)
+      continue;
+    const parsed = parseLsLine(line);
+    if (!parsed)
+      continue;
+    if (parsed.name === "." || parsed.name === "..")
+      continue;
+    if (LS_NOISE_DIRS.includes(parsed.name))
+      continue;
+    if (parsed.fileType === "d") {
+      dirs.push(parsed.name);
+    } else if (parsed.fileType === "-" || parsed.fileType === "l") {
+      const dot = parsed.name.lastIndexOf(".");
+      const ext = dot > 0 ? parsed.name.slice(dot) : "no ext";
+      byExt.set(ext, (byExt.get(ext) || 0) + 1);
+      files.push([parsed.name, humanSize(parsed.size)]);
+    }
+  }
+  if (dirs.length === 0 && files.length === 0)
+    return input;
+  let out = "";
+  for (const d of dirs)
+    out += `${d}/
+`;
+  for (const [name, size] of files)
+    out += `${name}  ${size}
+`;
+  let summary = `
+Summary: ${files.length} files, ${dirs.length} dirs`;
+  if (byExt.size > 0) {
+    const ext = Array.from(byExt.entries()).sort((a, b) => b[1] - a[1]);
+    const parts = ext.slice(0, LS_EXT_SUMMARY_TOP).map(([e, c]) => `${c} ${e}`);
+    summary += ` (${parts.join(", ")}`;
+    if (ext.length > LS_EXT_SUMMARY_TOP) {
+      summary += `, +${ext.length - LS_EXT_SUMMARY_TOP} more`;
+    }
+    summary += ")";
+  }
+  return out + summary;
+}
+ls.filterName = "ls";
+
+// service/core/rtk/filters/tree.js
+function tree(input) {
+  const lines = input.split(`
+`);
+  if (lines.length === 0)
+    return input;
+  const filtered = [];
+  for (const line of lines) {
+    if (line.includes("director") && line.includes("file"))
+      continue;
+    if (line.trim() === "" && filtered.length === 0)
+      continue;
+    filtered.push(line);
+  }
+  while (filtered.length > 0 && filtered[filtered.length - 1].trim() === "") {
+    filtered.pop();
+  }
+  if (filtered.length > TREE_MAX_LINES) {
+    const cut = filtered.length - TREE_MAX_LINES;
+    return filtered.slice(0, TREE_MAX_LINES).join(`
+`) + `
+... +${cut} more lines`;
+  }
+  return filtered.join(`
+`);
+}
+tree.filterName = "tree";
+
+// service/core/rtk/filters/smartTruncate.js
+function smartTruncate(input) {
+  const lines = input.split(`
+`);
+  if (lines.length < SMART_TRUNCATE_MIN_LINES)
+    return input;
+  const head = lines.slice(0, SMART_TRUNCATE_HEAD);
+  const tail = lines.slice(lines.length - SMART_TRUNCATE_TAIL);
+  const cut = lines.length - head.length - tail.length;
+  return [...head, `... +${cut} lines truncated`, ...tail].join(`
+`);
+}
+smartTruncate.filterName = "smart-truncate";
+
+// service/core/rtk/filters/readNumbered.js
+var LINE_RE = /^\s*\d+\|/;
+function readNumbered(input) {
+  const lines = input.split(`
+`);
+  if (lines.length < SMART_TRUNCATE_MIN_LINES)
+    return input;
+  const head = lines.slice(0, SMART_TRUNCATE_HEAD);
+  const tail = lines.slice(lines.length - SMART_TRUNCATE_TAIL);
+  const cut = lines.length - head.length - tail.length;
+  return [
+    ...head,
+    `... +${cut} lines truncated (file continues)`,
+    ...tail
+  ].join(`
+`);
+}
+readNumbered.filterName = "read-numbered";
+var READ_NUMBERED_LINE_RE = LINE_RE;
+
+// service/core/rtk/filters/searchList.js
+var HEADER_RE = /^Result of search in '[^']*' \(total (\d+) files?\):/;
+function searchList(input) {
+  const lines = input.split(`
+`);
+  if (lines.length === 0)
+    return input;
+  const header = lines[0] || "";
+  const rest = lines.slice(1);
+  const paths = [];
+  for (const raw of rest) {
+    const t = raw.trim();
+    if (!t.startsWith("- "))
+      continue;
+    paths.push(t.slice(2));
+  }
+  if (paths.length === 0)
+    return input;
+  const byDir = new Map;
+  for (const p of paths) {
+    const slash = p.lastIndexOf("/");
+    const dir = slash === -1 ? "." : p.slice(0, slash) || "/";
+    const name = slash === -1 ? p : p.slice(slash + 1);
+    if (!byDir.has(dir))
+      byDir.set(dir, []);
+    byDir.get(dir).push(name);
+  }
+  const dirs = Array.from(byDir.keys()).sort();
+  let out = `${header}
+${paths.length} files in ${dirs.length} dirs:
+
+`;
+  for (const dir of dirs.slice(0, SEARCH_LIST_TOTAL_DIR_MAX)) {
+    const names = byDir.get(dir);
+    out += `${dir}/ (${names.length}):
+`;
+    for (const n of names.slice(0, SEARCH_LIST_PER_DIR_MAX))
+      out += `  ${n}
+`;
+    if (names.length > SEARCH_LIST_PER_DIR_MAX) {
+      out += `  +${names.length - SEARCH_LIST_PER_DIR_MAX}
+`;
+    }
+    out += `
+`;
+  }
+  if (dirs.length > SEARCH_LIST_TOTAL_DIR_MAX) {
+    out += `+${dirs.length - SEARCH_LIST_TOTAL_DIR_MAX} more dirs
+`;
+  }
+  return out.replace(/\n+$/, "");
+}
+searchList.filterName = "search-list";
+var SEARCH_LIST_HEADER_RE = HEADER_RE;
+
+// service/core/rtk/autodetect.js
+var RE_GIT_DIFF = /^diff --git /m;
+var RE_GIT_DIFF_HUNK = /^@@ /m;
+var RE_GIT_STATUS = /^On branch |^nothing to commit|^Changes (not |to be )|^Untracked files:/m;
+var RE_GIT_LOG = /^[*|/\\ ]*commit [0-9a-f]{7,40}$/m;
+var RE_PORCELAIN = /^[ MADRCU?!][ MADRCU?!] \S/m;
+var RE_BUILD_OUTPUT = /^(npm (warn|error|ERR!)|yarn (warn|error)|\s*Compiling\s+\S+|\s*Downloading\s+\S+|added \d+ package|\[ERROR\]|BUILD (SUCCESS|FAILED)|\s*Finished\s+|Successfully (installed|built)|ERROR:)/im;
+var RE_TREE_GLYPH = /[├└]──|│  /;
+var RE_LS_ROW = /^[-dlbcps][rwx-]{9}/m;
+var RE_LS_TOTAL = /^total \d+$/m;
+function autoDetectFilter(text) {
+  const head = text.length > DETECT_WINDOW ? text.slice(0, DETECT_WINDOW) : text;
+  if (RE_GIT_LOG.test(head))
+    return gitLog;
+  if (RE_GIT_DIFF.test(head) || RE_GIT_DIFF_HUNK.test(head))
+    return gitDiff;
+  if (RE_GIT_STATUS.test(head))
+    return gitStatus;
+  if (RE_BUILD_OUTPUT.test(head))
+    return buildOutput;
+  if (isMostlyPorcelain(head))
+    return gitStatus;
+  const lines = head.split(`
+`);
+  const nonEmpty = lines.filter((l) => l.trim().length > 0);
+  const first5 = nonEmpty.slice(0, 5);
+  if (first5.some(isGrepLine))
+    return grep;
+  if (nonEmpty.length >= 3 && nonEmpty.every(isPathLike))
+    return find;
+  if (RE_TREE_GLYPH.test(head))
+    return tree;
+  if (RE_LS_TOTAL.test(head) || countMatches(head, RE_LS_ROW) >= 3)
+    return ls;
+  if (SEARCH_LIST_HEADER_RE.test(head))
+    return searchList;
+  const totalLines = 1 + (text.match(/\n/g)?.length ?? 0);
+  if (totalLines >= SMART_TRUNCATE_MIN_LINES && isLineNumbered(text.split(`
+`, 100))) {
+    return readNumbered;
+  }
+  if (nonEmpty.length >= 5)
+    return dedupLog;
+  if (text.split(`
+`).length >= SMART_TRUNCATE_MIN_LINES)
+    return smartTruncate;
+  return null;
+}
+function isGrepLine(line) {
+  const first = line.indexOf(":");
+  if (first === -1)
+    return false;
+  const second = line.indexOf(":", first + 1);
+  if (second === -1)
+    return false;
+  const lineno = line.slice(first + 1, second);
+  return /^\d+$/.test(lineno);
+}
+function isPathLike(line) {
+  const t = line.trim();
+  if (t.length === 0)
+    return false;
+  if (/^[A-Za-z]:[\\/]/.test(t))
+    return true;
+  if (t.includes(":"))
+    return false;
+  return t.startsWith(".") || t.startsWith("/") || t.includes("/");
+}
+function isMostlyPorcelain(head) {
+  const lines = head.split(`
+`).filter((l) => l.trim());
+  if (lines.length < 3)
+    return false;
+  const hits = lines.filter((l) => RE_PORCELAIN.test(l)).length;
+  return hits / lines.length >= 0.6;
+}
+function isLineNumbered(lines) {
+  let hits = 0;
+  let nonEmpty = 0;
+  const sample = lines.slice(0, 100);
+  for (const l of sample) {
+    if (l.length === 0)
+      continue;
+    nonEmpty++;
+    if (READ_NUMBERED_LINE_RE.test(l))
+      hits++;
+  }
+  if (nonEmpty < 5)
+    return false;
+  return hits / nonEmpty >= READ_NUMBERED_MIN_HIT_RATIO;
+}
+function countMatches(text, re) {
+  const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+  return (text.match(g) || []).length;
+}
+
+// service/core/rtk/applyFilter.js
+function safeApply(fn, text) {
+  if (typeof fn !== "function")
+    return text;
+  try {
+    const out = fn(text);
+    if (typeof out !== "string")
+      return text;
+    return out;
+  } catch (err) {
+    const name = fn.filterName || fn.name || "anonymous";
+    console.warn(`[rtk] warning: filter '${name}' panicked — passing through raw output: ${err?.message || err}`);
+    return text;
+  }
+}
+
+// service/core/rtk/index.js
+function compressMessages(body, enabled) {
+  if (!enabled)
+    return null;
+  if (!body)
+    return null;
+  if (body.conversationState) {
+    return compressKiroFormat(body, enabled);
+  }
+  const items = Array.isArray(body.messages) ? body.messages : Array.isArray(body.input) ? body.input : null;
+  if (!items)
+    return null;
+  const stats = { bytesBefore: 0, bytesAfter: 0, hits: [] };
+  try {
+    for (let i = 0;i < items.length; i++) {
+      const msg = items[i];
+      if (!msg)
+        continue;
+      if (msg.type === "function_call_output") {
+        if (typeof msg.output === "string") {
+          msg.output = compressText(msg.output, stats, "openai-responses-string");
+        } else if (Array.isArray(msg.output)) {
+          for (let k = 0;k < msg.output.length; k++) {
+            const part = msg.output[k];
+            if (part && part.type === "input_text" && typeof part.text === "string") {
+              part.text = compressText(part.text, stats, "openai-responses-array");
+            }
+          }
+        }
+        continue;
+      }
+      if (msg.role === "tool" && typeof msg.content === "string") {
+        msg.content = compressText(msg.content, stats, "openai-tool");
+        continue;
+      }
+      if (!Array.isArray(msg.content))
+        continue;
+      if (msg.role === "tool") {
+        for (let k = 0;k < msg.content.length; k++) {
+          const part = msg.content[k];
+          if (part && part.type === "text" && typeof part.text === "string") {
+            part.text = compressText(part.text, stats, "openai-tool-array");
+          }
+        }
+        continue;
+      }
+      for (let j = 0;j < msg.content.length; j++) {
+        const block = msg.content[j];
+        if (!block || block.type !== "tool_result")
+          continue;
+        if (block.is_error === true)
+          continue;
+        if (typeof block.content === "string") {
+          block.content = compressText(block.content, stats, "claude-string");
+        } else if (Array.isArray(block.content)) {
+          for (let k = 0;k < block.content.length; k++) {
+            const part = block.content[k];
+            if (part && part.type === "text" && typeof part.text === "string") {
+              part.text = compressText(part.text, stats, "claude-array");
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[RTK] compressMessages error:", e.message);
+    return null;
+  }
+  return stats;
+}
+function compressKiroFormat(body, enabled) {
+  const stats = { bytesBefore: 0, bytesAfter: 0, hits: [] };
+  try {
+    const state = body.conversationState;
+    const allMessages = [...Array.isArray(state?.history) ? state.history : []];
+    if (state?.currentMessage)
+      allMessages.push(state.currentMessage);
+    for (const msg of allMessages) {
+      const toolResults = msg?.userInputMessage?.userInputMessageContext?.toolResults;
+      if (!Array.isArray(toolResults))
+        continue;
+      for (const tr of toolResults) {
+        if (tr.status === "error")
+          continue;
+        if (!Array.isArray(tr.content))
+          continue;
+        for (const part of tr.content) {
+          if (part && typeof part.text === "string") {
+            part.text = compressText(part.text, stats, "kiro-tool-result");
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[RTK] compressKiroFormat error:", e.message);
+    return null;
+  }
+  return stats;
+}
+function compressText(text, stats, shape) {
+  const bytesIn = text.length;
+  stats.bytesBefore += bytesIn;
+  if (bytesIn < MIN_COMPRESS_SIZE || bytesIn > RAW_CAP) {
+    stats.bytesAfter += bytesIn;
+    return text;
+  }
+  const fn = autoDetectFilter(text);
+  if (!fn) {
+    stats.bytesAfter += bytesIn;
+    return text;
+  }
+  const out = safeApply(fn, text);
+  if (!out || out.length === 0 || out.length >= bytesIn) {
+    stats.bytesAfter += bytesIn;
+    return text;
+  }
+  stats.bytesAfter += out.length;
+  stats.hits.push({ shape, filter: fn.filterName || fn.name, saved: bytesIn - out.length });
+  return out;
+}
+
+// service/rtk.ts
+var compressMessages2 = (body, enabled = true) => {
+  const stats = compressMessages(body, enabled);
+  return Boolean(stats?.hits?.length);
+};
+
+// service/token-saver-styles.ts
+var CAVEMAN_PROMPTS = {
+  lite: [
+    "Answer concisely in complete sentences. Remove pleasantries, filler, repetition, and unnecessary hedging.",
+    "Preserve the user’s language and exact code, identifiers, paths, commands, URLs, and error strings.",
+    "Keep security warnings, irreversible-action confirmations, and ordered steps clear."
+  ].join(" "),
+  full: [
+    "Use terse technical language; compact phrases are acceptable when unambiguous.",
+    "Remove filler and redundant explanations. Preserve the user’s language and all technical literals exactly.",
+    "Do not compress security warnings, irreversible-action confirmations, or ordered steps where ambiguity could cause mistakes."
+  ].join(" "),
+  ultra: [
+    "Use the fewest words that retain correctness and clarity. Prefer compact, direct answers.",
+    "Never alter code, identifiers, paths, commands, URLs, or error strings.",
+    "Keep safety warnings and destructive-action confirmations explicit. Keep multi-step sequences unambiguous."
+  ].join(" ")
+};
+var PONYTAIL_PROMPTS = {
+  lite: [
+    "When writing code, prefer the smallest correct change.",
+    "Check YAGNI, standard library, native platform features, and already-installed dependencies before adding abstractions or packages.",
+    "Never omit explicitly requested behavior, trust-boundary validation, error handling, security, or accessibility.",
+    "For non-trivial logic, include one runnable check or a focused test."
+  ].join(" "),
+  full: [
+    "Act as an efficient senior developer. Prefer deletion over addition and the smallest correct diff.",
+    "Use standard library, native platform features, and existing dependencies first.",
+    "Avoid unrequested factories, one-implementation interfaces, configuration that never changes, and scaffolding for hypothetical future needs.",
+    "Never remove required behavior, validation, error handling, security, or accessibility. Test non-trivial logic."
+  ].join(" "),
+  ultra: [
+    "Minimize implementation and explanation aggressively. Choose the smallest correct change; delete unnecessary code before adding code.",
+    "Do not add new dependencies, abstractions, or future-proof scaffolding unless the task requires them.",
+    "Do not simplify away requested behavior, validation, error handling, security, or accessibility. Add a runnable check for non-trivial logic."
+  ].join(" ")
+};
+var applyTokenSaverStyles = (body, cavemanLevel = "off", ponytailLevel = "off") => {
+  const prompts = [];
+  if (cavemanLevel !== "off")
+    prompts.push(CAVEMAN_PROMPTS[cavemanLevel]);
+  if (ponytailLevel !== "off")
+    prompts.push(PONYTAIL_PROMPTS[ponytailLevel]);
+  if (prompts.length === 0 || !Array.isArray(body.messages))
+    return false;
+  const instruction = prompts.join(`
+
+`);
+  const messages = body.messages;
+  const systemIndex = messages.findIndex((message) => !!message && typeof message === "object" && !Array.isArray(message) && message.role === "system");
+  const current = systemIndex >= 0 ? messages[systemIndex] : null;
+  if (current && typeof current.content === "string") {
+    const existing = current.content.trim();
+    current.content = existing ? existing + `
+
+` + instruction : instruction;
+  } else {
+    messages.unshift({ role: "system", content: instruction });
+  }
+  return true;
+};
+
+// service/zen.ts
+var sessionId = generateSessionId;
+var prepareChat = (raw, options) => {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("The request body is not JSON.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("The request body must be a JSON object.");
+  }
+  const body = parsed;
+  const stream = body.stream === true;
+  const model = typeof body.model === "string" ? body.model : "";
+  if (!Array.isArray(body.messages)) {
+    throw new Error("The request body has no messages.");
+  }
+  const effectiveOptions = typeof options === "boolean" ? { rtkEnabled: options } : options ?? {};
+  const rtkEnabled = effectiveOptions.rtkEnabled ?? true;
+  if (rtkEnabled)
+    compressMessages2(body, true);
+  applyTokenSaverStyles(body, effectiveOptions.cavemanLevel ?? "off", effectiveOptions.ponytailLevel ?? "off");
+  if (body.max_completion_tokens !== undefined && body.max_tokens === undefined) {
+    body.max_tokens = body.max_completion_tokens;
+  }
+  if (body.reasoning_effort === "auto")
+    delete body.reasoning_effort;
+  body.stream = true;
+  return { body: JSON.stringify(body), stream, model };
 };
 
 // service/router-server.ts
@@ -7834,8 +10161,7 @@ var startRouterServer = (deps) => new Promise((resolve, reject) => {
         const prepared = prepareChat(body, {
           rtkEnabled: config.rtkEnabled,
           cavemanLevel: config.cavemanLevel,
-          ponytailLevel: config.ponytailLevel,
-          openCodeFreeTier: isOpenCodeUpstream(config.upstream)
+          ponytailLevel: config.ponytailLevel
         });
         const pool = deps.pickPool ? deps.pickPool() : null;
         const tokenUsage = {};
@@ -7904,15 +10230,31 @@ var startRouterServer = (deps) => new Promise((resolve, reject) => {
 });
 
 // service/runtime.ts
+var normalizeTestSse = (raw, lane, model, toolNameMap) => {
+  if (!lane)
+    return Promise.resolve(raw);
+  const transform = lane === "chat" ? createToolNameRestoreTransform(toolNameMap) : createOpenCodeResponseTransform(lane, model, toolNameMap);
+  if (!transform)
+    return Promise.resolve(raw);
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    transform.on("data", (chunk) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    transform.on("error", reject);
+    transform.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    transform.end(raw);
+  });
+};
 var REFRESH_INTERVAL_MS = 10 * 60000;
 var REQUEST_LOG_LIMIT = REQUEST_HISTORY_LIMIT;
-var PACKAGE_ROOT = path4.dirname(path4.dirname(fileURLToPath(import.meta.url)));
+var PACKAGE_ROOT = path7.dirname(path7.dirname(fileURLToPath(import.meta.url)));
 var RELAY_FILES = {
-  http: path4.join("relays", "cloudflare", "worker.js"),
-  cloudflare: path4.join("relays", "cloudflare", "worker.js"),
-  vercel: path4.join("relays", "vercel", "api", "relay.js"),
-  netlify: path4.join("relays", "netlify", "functions", "relay.mjs"),
-  deno: path4.join("relays", "deno", "main.ts")
+  http: path7.join("relays", "cloudflare", "worker.js"),
+  cloudflare: path7.join("relays", "cloudflare", "worker.js"),
+  vercel: path7.join("relays", "vercel", "api", "relay.js"),
+  netlify: path7.join("relays", "netlify", "functions", "relay.mjs"),
+  deno: path7.join("relays", "deno", "main.ts")
 };
 var createRuntime = (store = createConfigStore()) => {
   let config = store.load();
@@ -7959,7 +10301,14 @@ var createRuntime = (store = createConfigStore()) => {
       running: router !== null,
       routerError,
       endpoint: endpointFor(config),
-      config: { ...config, upstreamApiKey: "" },
+      config: {
+        ...config,
+        upstreamApiKey: "",
+        proxyPools: config.proxyPools.map((pool) => ({
+          ...pool,
+          proxyUrl: redactProxyUrlCredentials(pool.proxyUrl)
+        }))
+      },
       upstreamApiKeyConfigured: Boolean(config.upstreamApiKey?.trim()),
       models,
       modelsFetchedAt,
@@ -7998,7 +10347,11 @@ var createRuntime = (store = createConfigStore()) => {
           persist({ ...config, proxyPools: updatedPools });
         },
         record: (entry) => {
-          requests.unshift(entry);
+          requests.unshift({
+            ...entry,
+            ...typeof entry.poolName === "string" ? { poolName: redactDiagnosticText(entry.poolName) } : {},
+            ...entry.fallbackReason ? { fallbackReason: redactDiagnosticText(entry.fallbackReason) } : {}
+          });
           if (requests.length > REQUEST_LOG_LIMIT)
             requests.length = REQUEST_LOG_LIMIT;
           try {
@@ -8010,7 +10363,7 @@ var createRuntime = (store = createConfigStore()) => {
       });
     } catch (error) {
       router = null;
-      routerError = error instanceof Error ? error.message : String(error);
+      routerError = redactDiagnosticText(error instanceof Error ? error.message : String(error));
     }
   };
   const loadModels = async () => {
@@ -8024,7 +10377,7 @@ var createRuntime = (store = createConfigStore()) => {
         refreshRegistration(false);
       }
     } catch (error) {
-      modelsError = error instanceof Error ? error.message : String(error);
+      modelsError = redactDiagnosticText(error instanceof Error ? error.message : String(error));
     }
   };
   const refreshRegistration = (force = false) => {
@@ -8061,7 +10414,7 @@ var createRuntime = (store = createConfigStore()) => {
         selectedModels: (upstreamChanged || upstreamApiKeyChanged) && patch.selectedModels === undefined ? [] : patch.selectedModels ?? previous.selectedModels,
         fallbackModels: patch.fallbackModels ?? previous.fallbackModels,
         modelCombos: patch.modelCombos ?? previous.modelCombos,
-        proxyPools: patch.proxyPools ?? previous.proxyPools,
+        proxyPools: patch.proxyPools !== undefined ? preserveProxyPoolCredentials(previous.proxyPools, patch.proxyPools) : previous.proxyPools,
         proxyStrategy: patch.proxyStrategy ?? previous.proxyStrategy,
         activePoolId: patch.activePoolId !== undefined ? patch.activePoolId : previous.activePoolId,
         stickyLimit: patch.stickyLimit ?? previous.stickyLimit,
@@ -8131,7 +10484,7 @@ var createRuntime = (store = createConfigStore()) => {
         };
       }
       const file = RELAY_FILES[kind];
-      const code = await readFile(path4.join(PACKAGE_ROOT, file), "utf8");
+      const code = await readFile(path7.join(PACKAGE_ROOT, file), "utf8");
       return { kind, code };
     },
     createProxyPool: async (input) => {
@@ -8201,10 +10554,7 @@ var createRuntime = (store = createConfigStore()) => {
         max_tokens: 8,
         stream: false
       });
-      const prepared = prepareChat(chatPayload, {
-        rtkEnabled: false,
-        openCodeFreeTier: isOpenCodeUpstream(config.upstream)
-      });
+      const prepared = prepareChat(chatPayload, { rtkEnabled: false });
       for (let attempt = 0;attempt < maxAttempts; attempt += 1) {
         const pool = modelTestPoolSelector.pickPool(config, attempted);
         const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
@@ -8220,14 +10570,21 @@ var createRuntime = (store = createConfigStore()) => {
           break;
         if (pool)
           attempted.add(pool.id);
-        const target = buildTarget(config, "chat", pool, modelId);
-        const testHeaders = {
-          ...isOpenCodeUpstream(config.upstream) ? freeTierHeaders(runtimeSession) : {},
-          ...target.headers,
-          "Content-Type": "application/json",
-          Accept: "text/event-stream"
-        };
         try {
+          let nativeRequest = null;
+          if (isOpenCodeUpstream(config.upstream)) {
+            const parsedBody = JSON.parse(prepared.body);
+            nativeRequest = await prepareProviderRequest({ model: modelId, body: parsedBody, session: runtimeSession });
+          }
+          const target = buildTarget(config, "chat", pool, nativeRequest?.url);
+          const outboundBody = nativeRequest?.body ?? prepared.body;
+          const testHeaders = {
+            ...isOpenCodeUpstream(config.upstream) ? nativeRequest?.headers ?? {} : {},
+            ...target.headers,
+            "content-type": "application/json",
+            accept: "text/event-stream",
+            "content-length": String(Buffer.byteLength(outboundBody))
+          };
           let resultText = "";
           let status = 200;
           let retryAfter;
@@ -8248,23 +10605,23 @@ var createRuntime = (store = createConfigStore()) => {
                 req.destroy();
                 reject(new Error("Test request timed out."));
               });
-              req.end(prepared.body);
+              req.end(outboundBody);
             });
             resultText = answer.text;
             status = answer.status;
             retryAfter = answer.retryAfter;
           } else {
-            const answer = await fetch(target.url, {
-              method: "POST",
-              headers: testHeaders,
-              body: prepared.body,
-              signal: AbortSignal.timeout(15000)
-            });
+            const useNativeTls = isOpenCodeUpstream(config.upstream) && !pool && activePoolCount === 0 && typeof nativeRequest?.directFetch === "function";
+            const fetcher = useNativeTls ? nativeRequest.directFetch : fetch;
+            const answer = await fetcher(target.url, { method: "POST", headers: testHeaders, body: outboundBody, signal: AbortSignal.timeout(15000) });
             resultText = await answer.text();
             status = answer.status;
             retryAfter = answer.headers.get("retry-after") ?? undefined;
           }
           if (status >= 200 && status < 300) {
+            if (nativeRequest) {
+              resultText = await normalizeTestSse(resultText, nativeRequest.lane, modelId, nativeRequest.toolNameMap);
+            }
             const aggregated = aggregateStream(resultText);
             const choices = Array.isArray(aggregated.choices) ? aggregated.choices : [];
             const firstChoice = choices[0];
@@ -8274,7 +10631,6 @@ var createRuntime = (store = createConfigStore()) => {
           lastError = `HTTP ${status}: ${resultText.slice(0, 300)}`;
           if (status !== 429)
             break;
-          const activePoolCount = config.proxyPools.filter((p) => p.isActive && p.proxyUrl.trim()).length;
           if (!pool && activePoolCount === 0) {
             directRateLimitedUntil = Date.now() + parseRetryAfterMs(retryAfter);
             lastError = `HTTP 429: upstream rate-limited; retry after approximately ${Math.ceil((directRateLimitedUntil - Date.now()) / 1000)} seconds.`;
@@ -8400,7 +10756,7 @@ var toServiceResponse = (error) => {
       body: { error: { code: error.code, message: error.message } }
     };
   }
-  console.error("[blackrouter] the local service failed:", error);
+  console.error("[blackrouter] the local service failed:", redactDiagnosticText(error.stack ?? error.message));
   return {
     status: 500,
     body: { error: { code: "internal", message: "The local service failed. See its log for the detail." } }

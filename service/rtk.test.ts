@@ -10,6 +10,8 @@ import {
   compactGitStatus,
   compactLs,
   compactReadNumbered,
+  compactSmartTruncate,
+  compressText,
   compactSearchList,
   compactTree,
   compactGrep,
@@ -29,7 +31,7 @@ describe('RTK token compression', () => {
     expect(compacted).toContain('+150 -0');
   });
 
-  it('preserves context before and after edits in compacted git diffs', () => {
+  it('matches 9Router diff context policy and retains context after edits', () => {
     const diff = [
       'diff --git a/src/router.ts b/src/router.ts',
       'index 1234567..89abcde 100644',
@@ -44,12 +46,26 @@ describe('RTK token compression', () => {
     ].join('\n');
 
     const compacted = compactGitDiff(diff);
-    expect(compacted).toContain('const before = true;');
+    expect(compacted).not.toContain('const before = true;');
     expect(compacted).toContain('-const oldRoute = 1;');
     expect(compacted).toContain('+const newRoute = 1;');
     expect(compacted).toContain('const after = true;');
     expect(compacted).toContain('+1 -1');
     expect(compacted).not.toContain('No newline at end of file');
+  });
+
+  it('uses the upstream ten-match grep cap per file', () => {
+    const raw = Array.from({ length: 12 }, (_, index) =>
+      `src/app.ts:${index + 1}:value-${index + 1} ${'x'.repeat(25)}`,
+    ).join('\n');
+    const compacted = compactGrep(raw);
+
+    expect(compacted).toContain('12 matches in 1F:');
+    expect(compacted).toContain('[file] src/app.ts (12):');
+    expect(compacted).toContain('value-10');
+    expect(compacted).not.toContain('value-11');
+    expect(compacted).not.toContain('value-12');
+    expect(compacted).toContain('+2');
   });
 
   it('compacts git status output into branch and counts', () => {
@@ -87,7 +103,7 @@ describe('RTK token compression', () => {
     expect(compacted).toContain('src/file-0.ts');
     expect(compacted).toContain('src/file-9.ts');
     expect(compacted).not.toContain('src/file-10.ts');
-    expect(compacted).toContain('... +2 more modified files');
+    expect(compacted).toContain('... +2 more');
   });
 
   it('compacts clean git status', () => {
@@ -107,10 +123,11 @@ describe('RTK token compression', () => {
     ].join('\n');
 
     const compacted = compactGrep(raw);
-    expect(compacted).toContain('7 matches across 2 files');
-    expect(compacted).toContain('[src/foo.ts] (6)');
-    expect(compacted).toContain('+1 more');
-    expect(compacted).toContain('[src/bar.ts] (1)');
+    expect(compacted).toContain('7 matches in 2F:');
+    expect(compacted).toContain('[file] src/foo.ts (6):');
+    expect(compacted).toContain('sixth');
+    expect(compacted).not.toContain('+1');
+    expect(compacted).toContain('[file] src/bar.ts (1):');
   });
 
   it('detects and compacts detailed git log output without commit bodies', () => {
@@ -189,13 +206,13 @@ describe('RTK token compression', () => {
   });
 
   it('special-cases line-numbered file reads with an explicit truncation marker', () => {
-    const lines = Array.from({ length: 100 }, (_, index) => '  ' + (index + 1) + '|const value' + index + ' = true;');
+    const lines = Array.from({ length: 400 }, (_, index) => '  ' + (index + 1) + '|const value' + index + ' = true;');
     const raw = lines.join('\n');
     expect(autoDetectFilter(raw)).toBe(compactReadNumbered);
     const compacted = compactReadNumbered(raw);
     expect(compacted).toContain('file continues');
     expect(compacted).toContain('const value0');
-    expect(compacted).toContain('const value99');
+    expect(compacted).toContain('const value399');
   });
 
   it('collapses consecutive duplicate log lines with a count', () => {
@@ -226,13 +243,13 @@ describe('RTK token compression', () => {
 
   it('truncates large generic text cleanly', () => {
     const lines: string[] = [];
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 400; i++) {
       lines.push(`Line number ${i}`);
     }
     const raw = lines.join('\n');
     const truncated = smartTruncate(raw);
     expect(truncated).toContain('Line number 0');
-    expect(truncated).toContain('Line number 99');
+    expect(truncated).toContain('Line number 399');
     expect(truncated).toContain('lines truncated');
   });
 
@@ -246,6 +263,20 @@ describe('RTK token compression', () => {
     expect(autoDetectFilter('On branch main\nChanges to be committed:\n')).toBe(compactGitStatus);
     const grepText = 'src/a.ts:1:one\nsrc/a.ts:2:two\nsrc/b.ts:3:three\n';
     expect(autoDetectFilter(grepText)).toBe(compactGrep);
+  });
+
+  it('matches the 9Router 500-character minimum compression threshold', () => {
+    const raw = [
+      'diff --git a/x.ts b/x.ts',
+      '@@ -1,1 +1,8 @@',
+      ...Array.from({ length: 8 }, (_, index) => '+' + 'x'.repeat(35) + index),
+    ].join('\n');
+    expect(raw.length).toBeGreaterThan(256);
+    expect(raw.length).toBeLessThan(500);
+
+    const payload = { messages: [{ role: 'tool', tool_call_id: 'call_small', content: raw }] };
+    expect(compressMessages(payload, true)).toBe(false);
+    expect(payload.messages[0]?.content).toBe(raw);
   });
 
   it('compresses tool result messages in OpenAI format', () => {
@@ -264,7 +295,7 @@ describe('RTK token compression', () => {
     };
 
     const initialLength = (payload.messages[2] as { content: string }).content.length;
-    const modified = compressMessages(payload, true);
+    const modified = compressMessages(payload);
     expect(modified).toBe(true);
     const newLength = (payload.messages[2] as { content: string }).content.length;
     expect(newLength).toBeLessThan(initialLength);
@@ -298,6 +329,13 @@ describe('RTK token compression', () => {
     expect(modified).toBe(true);
     const newLength = block?.content.length ?? 0;
     expect(newLength).toBeLessThan(initialLength);
+  });
+
+  it('preserves legacy RTK compatibility exports', () => {
+    expect(compactSmartTruncate).toBe(smartTruncate);
+    const stats = { bytesBefore: 0, bytesAfter: 0, hits: [] as unknown[] };
+    expect(compressText('short text', stats, 'compat')).toBe('short text');
+    expect(stats.bytesBefore).toBe('short text'.length);
   });
 
   it('does nothing when disabled', () => {

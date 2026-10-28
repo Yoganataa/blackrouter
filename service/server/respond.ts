@@ -1,4 +1,4 @@
-import { RouterError, type RouterErrorCode } from '../errors.ts';
+import { RouterError, redactDiagnosticText, type RouterErrorCode } from '../errors.ts';
 import type { ServiceResponse } from './router.ts';
 
 /** The status a failure answers with. */
@@ -35,7 +35,7 @@ export const toServiceResponse = (error: Error): ServiceResponse => {
       body: { error: { code: error.code, message: error.message } },
     };
   }
-  console.error('[blackrouter] the local service failed:', error);
+  console.error('[blackrouter] the local service failed:', redactDiagnosticText(error.stack ?? error.message));
   return {
     status: 500,
     body: { error: { code: 'internal', message: 'The local service failed. See its log for the detail.' } },

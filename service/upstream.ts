@@ -2,15 +2,17 @@ import http from 'node:http';
 import type { ServerResponse } from 'node:http';
 import https from 'node:https';
 import type { Socket } from 'node:net';
-import { pipeline } from 'node:stream';
+import { pipeline, Readable, Transform } from 'node:stream';
 import tls from 'node:tls';
 
 import type { ProxyPool, RouterConfig, RouterModel } from '../contract.ts';
-import { upstreamError } from './errors.ts';
+import { redactDiagnosticText, upstreamError } from './errors.ts';
 import { resolveModelMetadata } from './model-metadata.ts';
 import { aggregateStream } from './sse.ts';
-import { createOpenCodeResponseTransform, prepareOpenCodeRequestBody, resolveOpenCodeLane } from './opencode-protocol.ts';
-import { freeTierHeaders, type PreparedChat } from './zen.ts';
+import { createOpenCodeResponseTransform, createToolNameRestoreTransform, type OpenCodeLane } from './opencode-protocol.ts';
+import type { PreparedChat } from './zen.ts';
+// @ts-ignore - the selected provider core is copied from upstream JavaScript.
+import { prepareProviderRequest } from './core/provider-adapter.js';
 import { resolveModelCandidates, shouldAdvanceAfterStatus } from './model-fallback.ts';
 import { parseRetryAfterMs } from './retry-after.ts';
 import { createUsageObserver, extractTokenUsage, type TokenUsage } from './usage-observer.ts';
@@ -32,72 +34,87 @@ export type UpstreamRequest = {
 };
 
 
+const CONNECT_HANDSHAKE_TIMEOUT_MS = 12_000;
+
+type PendingConnect = {
+  callback?: (err: Error | null, socket: Socket) => void;
+  socket?: Socket;
+  tlsSocket?: Socket;
+  settled: boolean;
+  timeout?: ReturnType<typeof setTimeout>;
+};
+
 class TunnelAgent extends https.Agent {
   private proxyUrl: URL;
+  private pendingConnects = new Map<http.ClientRequest, PendingConnect>();
 
-  constructor(proxyUrlString: string) {
+  constructor(proxyUrlString: string, private connectTimeoutMs = CONNECT_HANDSHAKE_TIMEOUT_MS) {
     super({ keepAlive: true });
     this.proxyUrl = new URL(proxyUrlString);
   }
 
-  override createConnection(
-    options: { host?: string; port?: number },
-    callback?: (err: Error | null, socket: Socket) => void,
-  ): Socket {
+  private finishPending(request: http.ClientRequest, pending: PendingConnect, error: Error | null, socket?: Socket): void {
+    if (pending.settled) return;
+    pending.settled = true;
+    if (pending.timeout) clearTimeout(pending.timeout);
+    this.pendingConnects.delete(request);
+    if (error) {
+      pending.callback?.(error, null as unknown as Socket);
+      request.destroy();
+      pending.tlsSocket?.destroy();
+      pending.socket?.destroy();
+      return;
+    }
+    pending.callback?.(null, socket!);
+  }
+
+  override destroy(): void {
+    const error = new Error('Proxy CONNECT cancelled because the tunnel agent was destroyed.');
+    for (const [request, pending] of [...this.pendingConnects]) this.finishPending(request, pending, error);
+    super.destroy();
+  }
+
+  override createConnection(options: { host?: string; port?: number }, callback?: (err: Error | null, socket: Socket) => void): Socket {
     const proxyPort = Number(this.proxyUrl.port) || (this.proxyUrl.protocol === 'https:' ? 443 : 80);
     const proxyHost = this.proxyUrl.hostname;
     const targetHost = options.host || 'opencode.ai';
     const targetPort = options.port || 443;
-
     const connectHeaders: Record<string, string> = {
       Host: `${targetHost}:${targetPort}`,
       'User-Agent': 'BlackRouter',
     };
     if (this.proxyUrl.username || this.proxyUrl.password) {
-      connectHeaders['Proxy-Authorization'] = `Basic ${Buffer.from(
-        `${decodeURIComponent(this.proxyUrl.username)}:${decodeURIComponent(this.proxyUrl.password)}`,
-      ).toString('base64')}`;
+      connectHeaders['Proxy-Authorization'] = `Basic ${Buffer.from(`${decodeURIComponent(this.proxyUrl.username)}:${decodeURIComponent(this.proxyUrl.password)}`).toString('base64')}`;
     }
-
     const proxyTransport = this.proxyUrl.protocol === 'https:' ? https : http;
     const connectReq = proxyTransport.request({
-      host: proxyHost,
-      port: proxyPort,
-      method: 'CONNECT',
-      path: `${targetHost}:${targetPort}`,
-      headers: connectHeaders,
+      host: proxyHost, port: proxyPort, method: 'CONNECT',
+      path: `${targetHost}:${targetPort}`, headers: connectHeaders,
     });
+    const pending: PendingConnect = { callback, settled: false };
+    this.pendingConnects.set(connectReq, pending);
+    pending.timeout = setTimeout(() => {
+      this.finishPending(connectReq, pending, new Error(`Proxy CONNECT handshake timed out after ${this.connectTimeoutMs} ms.`));
+    }, this.connectTimeoutMs);
+    pending.timeout.unref?.();
 
     connectReq.on('connect', (res, socket: Socket) => {
+      pending.socket = socket;
+      if (pending.settled) { socket.destroy(); return; }
       if (res.statusCode !== 200) {
-        socket.destroy();
-        callback?.(
-          new Error(`Proxy CONNECT to ${targetHost}:${targetPort} failed with HTTP ${res.statusCode}`),
-          socket,
-        );
+        this.finishPending(connectReq, pending, new Error(`Proxy CONNECT to ${targetHost}:${targetPort} failed with HTTP ${res.statusCode}`));
         return;
       }
-
-      const tlsSocket = tls.connect(
-        {
-          socket,
-          servername: targetHost,
-        },
-        () => {
-          callback?.(null, tlsSocket);
-        },
-      );
-
-      tlsSocket.on('error', (err: Error) => {
-        socket.destroy();
-        callback?.(err, socket);
+      const tlsSocket = tls.connect({ socket, servername: targetHost }, () => {
+        this.finishPending(connectReq, pending, null, tlsSocket);
+      });
+      pending.tlsSocket = tlsSocket;
+      tlsSocket.once('error', (err: Error) => {
+        if (!pending.settled) this.finishPending(connectReq, pending, err);
+        else socket.destroy();
       });
     });
-
-    connectReq.on('error', (err: Error) => {
-      callback?.(err, null as unknown as Socket);
-    });
-
+    connectReq.on('error', (err: Error) => this.finishPending(connectReq, pending, err));
     connectReq.end();
     return null as unknown as Socket;
   }
@@ -106,7 +123,7 @@ class TunnelAgent extends https.Agent {
 /**
  * Creates an HTTPS Agent that establishes a CONNECT tunnel through an HTTP/HTTPS forward proxy.
  */
-export const createTunnelAgent = (proxyUrlString: string): https.Agent => new TunnelAgent(proxyUrlString);
+export const createTunnelAgent = (proxyUrlString: string, connectTimeoutMs = CONNECT_HANDSHAKE_TIMEOUT_MS): https.Agent => new TunnelAgent(proxyUrlString, connectTimeoutMs);
 
 export const isOpenCodeUpstream = (upstream: string): boolean => {
   try {
@@ -118,6 +135,18 @@ export const isOpenCodeUpstream = (upstream: string): boolean => {
 };
 
 /** Keep credentials scoped to the origin where the user configured them. */
+/**
+ * OpenCode's flagged-egress error is eligible for a retry only when a proxy
+ * pool was used. Never make this condition imply an automatic direct-egress retry.
+ */
+export const isOpenCodeFreeTierGateResponse = (
+  status: number,
+  body: string,
+  isOpenCode: boolean,
+  usedProxyPool: boolean,
+): boolean =>
+  status === 403 && isOpenCode && usedProxyPool && body.includes('FreeTierError');
+
 export const hasSameUpstreamOrigin = (left: string, right: string): boolean => {
   try {
     return new URL(left).origin === new URL(right).origin;
@@ -126,30 +155,11 @@ export const hasSameUpstreamOrigin = (left: string, right: string): boolean => {
   }
 };
 
-export const isMuseSparkModel = (id: string): boolean => /^muse[-_]?spark(?:$|[-_:.\s])/i.test(id);
-export const isUnionAlphaModel = (id: string): boolean => /^union[-_]?alpha(?:$|[-_:.\s])/i.test(id);
-
-export const resolveOpencodePath = (call: 'models' | 'chat', modelId?: string): string => {
-  if (call === 'models') return '/zen/v1/models';
-  const clean = (modelId || '').replace(/\([^()]+\)\s*$/, '').trim().toLowerCase();
-  const base = clean.includes('/') ? clean.split('/').pop()! : clean;
-  if (isMuseSparkModel(base)) return '/inference/v1/responses';
-  if (isUnionAlphaModel(base)) return '/inference/v1/messages';
-  return '/inference/v1/chat/completions';
-};
-
-/**
- * Where one API call goes.
- *
- * Direct: the call is relative to the configured API base.
- * Standard forward proxy (type 'http'): calls target upstream directly through a CONNECT tunnel agent.
- * Relay proxy pool (cloudflare, vercel, deno, netlify): forwards to relay URL with x-relay-target/path.
- */
 export const buildTarget = (
   config: Pick<RouterConfig, 'upstream' | 'upstreamApiKey' | 'proxyPools'>,
   call: 'models' | 'chat',
   poolOverride?: ProxyPool | null,
-  modelId?: string,
+  nativeUrl?: URL,
 ): UpstreamRequest => {
   const activePool =
     poolOverride !== undefined
@@ -167,8 +177,14 @@ export const buildTarget = (
   let targetPath: string;
 
   if (isOpenCode) {
-    targetOrigin = 'https://opencode.ai';
-    targetPath = resolveOpencodePath(call, modelId);
+    targetOrigin = nativeUrl?.origin ?? 'https://opencode.ai';
+    if (call === 'models') {
+      targetPath = '/zen/v1/models';
+    } else if (nativeUrl) {
+      targetPath = nativeUrl.pathname + nativeUrl.search;
+    } else {
+      throw new Error('The native provider core must resolve the OpenCode request URL before transport.');
+    }
   } else {
     targetOrigin = `${parsed.protocol}//${parsed.host}`;
     const basePath = parsed.pathname.replace(/\/+$/, '');
@@ -272,7 +288,7 @@ export const fetchModelIds = async (
 ): Promise<{ ids: string[]; free: string[]; rawEntries: Array<Record<string, unknown>> }> => {
   const target = buildTarget(config, 'models');
   const isOpenCode = isOpenCodeUpstream(config.upstream);
-  const upstreamUserAgent = isOpenCode ? 'opencode/latest/2.0.26/cli' : 'BlackRouter/1.0';
+  const upstreamUserAgent = isOpenCode ? 'opencode/latest/2.1.4/cli' : 'BlackRouter/1.0';
   let payload: ModelsAnswer;
 
   if (target.agent && fetchImpl === fetch) {
@@ -387,6 +403,45 @@ const responseHeaders = (headers: http.IncomingHttpHeaders): Record<string, stri
   return picked;
 };
 
+/**
+ * Keep SSE clients alive while the upstream has sent headers but is still
+ * waiting for its first data frame. Mirrors official 9Router PR #5167 using
+ * BlackRouter's Node stream pipeline. The timer stops at the first data byte.
+ */
+export const createSseFirstByteKeepAlive = (keepAliveMs = Number(process.env.SSE_KEEPALIVE_MS ?? 15_000)) => {
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let seenData = false;
+  const stream = new Transform({
+    transform(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null, data?: Buffer | string) => void) {
+      seenData = true;
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      callback(null, chunk);
+    },
+    flush(callback: (error?: Error | null) => void) {
+      if (timer) clearInterval(timer);
+      timer = null;
+      callback();
+    },
+  });
+  stream.once('pipe', () => {
+    if (!Number.isFinite(keepAliveMs) || keepAliveMs <= 0 || seenData) return;
+    timer = setInterval(() => {
+      if (!seenData && !stream.destroyed && !stream.writableEnded) {
+        stream.push(Buffer.from(': ping\n\n'));
+      }
+    }, keepAliveMs);
+    timer.unref?.();
+  });
+  stream.once('close', () => {
+    if (timer) clearInterval(timer);
+    timer = null;
+  });
+  return stream;
+};
+
 export const writeJson = (
   response: ServerResponse,
   status: number,
@@ -408,7 +463,7 @@ export const writeOpenAiError = (
   code: string,
   headers: Record<string, string> = {},
 ): void => {
-  writeJson(response, status, { error: { message, type: 'invalid_request_error', code } }, headers);
+  writeJson(response, status, { error: { message: redactDiagnosticText(message), type: 'invalid_request_error', code } }, headers);
 };
 
 /** A folded stream stays in memory; this is far more than one answer needs. */
@@ -465,6 +520,7 @@ export const proxyChatCompletion = (
   let lastRequestedModel = prepared.model;
   const fallbackReasons: string[] = [];
   const rateLimitedPoolIds = new Set<string>();
+  const failedPoolIds = new Set<string>();
 
   // An HTTP 429 cools down a whole pool in the runtime. Do not revisit that
   // pool later in this request just because the next model candidate is tried.
@@ -474,7 +530,7 @@ export const proxyChatCompletion = (
     let nextIndex = attemptIndex + 1;
     while (nextIndex < attempts.length) {
       const nextAttempt = attempts[nextIndex];
-      if (nextAttempt?.pool && rateLimitedPoolIds.has(nextAttempt.pool.id)) {
+      if (nextAttempt?.pool && (rateLimitedPoolIds.has(nextAttempt.pool.id) || failedPoolIds.has(nextAttempt.pool.id))) {
         nextIndex += 1;
         continue;
       }
@@ -493,27 +549,44 @@ export const proxyChatCompletion = (
     ...(fallbackReasons.length > 0 ? { 'x-blackrouter-fallback-reason': fallbackReasons.join(' -> ') } : {}),
   });
 
-  const modelAwareBody = (model: string): { lane: ReturnType<typeof resolveOpenCodeLane>; body: string } => {
-    const lane = resolveOpenCodeLane(config.upstream, model);
-    let raw = prepared.body;
+  const modelAwareBody = async (model: string): Promise<{
+    lane: OpenCodeLane;
+    body: string;
+    headers?: Record<string, string>;
+    url?: URL;
+    toolNameMap?: Map<string, string> | null;
+    directFetch?: (url: URL, options: RequestInit) => Promise<Response>;
+  }> => {
+    let parsed: unknown;
     try {
-      const parsed: unknown = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        (parsed as Record<string, unknown>).model = model;
-        raw = JSON.stringify(parsed);
-      }
+      parsed = JSON.parse(prepared.body);
     } catch {
-      // prepareChat already validated the request body; keep the original body
-      // so the request still surfaces a useful conversion error below.
+      throw new Error('Prepared request body was not valid JSON.');
     }
-    const isOpenCode = isOpenCodeUpstream(config.upstream);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Prepared request body must be a JSON object.');
+    }
+    const body = parsed as Record<string, unknown>;
+    body.model = model;
+
+    if (!isOpenCodeUpstream(config.upstream)) {
+      return { lane: 'chat', body: JSON.stringify(body) };
+    }
+
+    // Use the upstream provider executor for model routing, native request
+    // translation, request identity, body normalization, and headers.
+    const native = await prepareProviderRequest({ model, body, session });
     return {
-      lane,
-      body: prepareOpenCodeRequestBody(raw, lane, isOpenCode),
+      lane: native.lane as OpenCodeLane,
+      body: native.body as string,
+      headers: native.headers as Record<string, string>,
+      url: native.url as URL,
+      toolNameMap: native.toolNameMap as Map<string, string> | null,
+      directFetch: native.directFetch as ((url: URL, options: RequestInit) => Promise<Response>) | undefined,
     };
   };
 
-  const sendAttempt = (): void => {
+  const sendAttempt = async (): Promise<void> => {
     if (response.destroyed || response.writableEnded) return;
     const attempt = attempts[attemptIndex];
     if (!attempt) {
@@ -528,39 +601,40 @@ export const proxyChatCompletion = (
 
     lastRequestedModel = attempt.model;
     const candidate = attempt.pool;
-    let lane: ReturnType<typeof resolveOpenCodeLane>;
+    let lane: OpenCodeLane;
     let upstreamBody: string;
+    let nativeHeaders: Record<string, string> = {};
+    let nativeUrl: URL | undefined;
+    let nativeToolNameMap: Map<string, string> | null = null;
+    let nativeDirectFetch: ((url: URL, options: RequestInit) => Promise<Response>) | undefined;
     try {
-      const preparedForModel = modelAwareBody(attempt.model);
+      const preparedForModel = await modelAwareBody(attempt.model);
       lane = preparedForModel.lane;
       upstreamBody = preparedForModel.body;
+      nativeHeaders = preparedForModel.headers ?? {};
+      nativeUrl = preparedForModel.url;
+      nativeToolNameMap = preparedForModel.toolNameMap ?? null;
+      nativeDirectFetch = preparedForModel.directFetch;
     } catch (error) {
+      if (response.destroyed || response.writableEnded) return;
       writeOpenAiError(
         response,
         400,
-        error instanceof Error ? error.message : 'Could not convert the OpenCode request body.',
+        error instanceof Error ? error.message : 'Could not prepare the native provider request.',
         'invalid_request',
       );
       return;
     }
 
-    const target = buildTarget(config, 'chat', candidate, attempt.model);
+    // Provider preparation is asynchronous. The client may disconnect while
+    // the native request is being translated; never start upstream egress then.
+    if (response.destroyed || response.writableEnded) return;
+
+    const target = buildTarget(config, 'chat', candidate, nativeUrl);
+    const requestHeaders = { ...(isOpenCodeUpstream(config.upstream) ? nativeHeaders : {}), ...target.headers, 'content-type': 'application/json', accept: 'text/event-stream', 'content-length': String(Buffer.byteLength(upstreamBody)) };
     const transport = target.url.protocol === 'http:' ? http : https;
-    const upstream = transport.request(
-      target.url,
-      {
-        method: 'POST',
-        agent: target.agent,
-        headers: {
-          ...(isOpenCodeUpstream(config.upstream) ? freeTierHeaders(session) : {}),
-          ...target.headers,
-          ...(lane === 'messages' ? { 'anthropic-version': '2023-06-01' } : {}),
-          'content-type': 'application/json',
-          accept: 'text/event-stream',
-          'content-length': String(Buffer.byteLength(upstreamBody)),
-        },
-      },
-      (answer) => {
+    const usesNativeDirectTransport = candidate === null && isOpenCodeUpstream(config.upstream) && typeof nativeDirectFetch === 'function';
+    const handleAnswer = (answer: http.IncomingMessage): void => {
         const status = answer.statusCode ?? 502;
         const retryAfterHeader = answer.headers['retry-after'];
         const retryAfter = typeof retryAfterHeader === 'string' ? retryAfterHeader : undefined;
@@ -568,6 +642,65 @@ export const proxyChatCompletion = (
           candidate === null &&
           retryAfter !== undefined &&
           parseRetryAfterMs(retryAfter) <= 2_000;
+
+        // A pool can return HTTP 403 with a successful transport when its
+        // egress is rejected by OpenCode's free-tier gate. Retry only through
+        // another already-configured pool; do not bypass the chosen egress.
+        if (status === 403 && candidate && isOpenCodeUpstream(config.upstream)) {
+          const maxInspectableErrorBytes = 256 * 1024;
+          const chunks: Buffer[] = [];
+          let inspectedBytes = 0;
+          let inspecting = true;
+          answer.on('data', (raw: Buffer | string) => {
+            const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+            if (!inspecting) {
+              if (!response.destroyed && !response.writableEnded) response.write(chunk);
+              return;
+            }
+            chunks.push(chunk);
+            inspectedBytes += chunk.length;
+            if (inspectedBytes > maxInspectableErrorBytes) {
+              inspecting = false;
+              const routeHeaders = routingHeaders(attempt);
+              response.writeHead(status, {
+                ...responseHeaders(answer.headers),
+                ...routeHeaders,
+              });
+              for (const buffered of chunks) response.write(buffered);
+              chunks.length = 0;
+            }
+          });
+          answer.on('end', () => {
+            if (!inspecting) {
+              if (!response.destroyed && !response.writableEnded) response.end();
+              return;
+            }
+            const bodyBuffer = Buffer.concat(chunks);
+            const bodyText = bodyBuffer.toString('utf8');
+            if (isOpenCodeFreeTierGateResponse(status, bodyText, true, true)) {
+              failedPoolIds.add(candidate.id);
+              if (advanceToNextAttempt()) {
+                fallbackReasons.push(`HTTP 403 FreeTierError on proxy pool ${candidate.name}`);
+                sendAttempt();
+                return;
+              }
+            }
+            const routeHeaders = routingHeaders(attempt);
+            response.writeHead(status, {
+              ...responseHeaders(answer.headers),
+              ...routeHeaders,
+            });
+            response.end(bodyBuffer);
+          });
+          answer.on('error', (error: Error) => {
+            if (!response.headersSent) {
+              writeOpenAiError(response, 502, `Could not read the upstream error response: ${error.message}`, 'upstream_unreachable');
+            } else {
+              response.destroy(error);
+            }
+          });
+          return;
+        }
 
         if (status === 429) {
           if (candidate) rateLimitedPoolIds.add(candidate.id);
@@ -610,8 +743,10 @@ export const proxyChatCompletion = (
         const contentType = typeof answer.headers['content-type'] === 'string'
           ? answer.headers['content-type'].toLowerCase()
           : '';
-        const protocolTransform = lane !== 'chat' && contentType.includes('text/event-stream')
-          ? createOpenCodeResponseTransform(lane, attempt.model)
+        const protocolTransform = contentType.includes('text/event-stream')
+          ? lane === 'chat'
+            ? createToolNameRestoreTransform(nativeToolNameMap)
+            : createOpenCodeResponseTransform(lane, attempt.model, nativeToolNameMap)
           : null;
         const successHeaders = {
           ...responseHeaders(answer.headers),
@@ -621,8 +756,17 @@ export const proxyChatCompletion = (
         if (prepared.stream) {
           response.writeHead(status, successHeaders);
           const observer = createUsageObserver((usage) => onUsage?.(usage));
-          if (protocolTransform) {
+          const keepAliveMs = Number(process.env.SSE_KEEPALIVE_MS ?? 15_000);
+          const keepAlive = contentType.includes('text/event-stream') &&
+            Number.isFinite(keepAliveMs) && keepAliveMs > 0
+            ? createSseFirstByteKeepAlive(keepAliveMs)
+            : null;
+          if (protocolTransform && keepAlive) {
+            pipeline(answer, protocolTransform, observer, keepAlive, response, () => {});
+          } else if (protocolTransform) {
             pipeline(answer, protocolTransform, observer, response, () => {});
+          } else if (keepAlive) {
+            pipeline(answer, observer, keepAlive, response, () => {});
           } else {
             pipeline(answer, observer, response, () => {});
           }
@@ -642,7 +786,7 @@ export const proxyChatCompletion = (
           const completion = aggregateStream(Buffer.concat(chunks).toString('utf8'));
           const usage = extractTokenUsage(completion);
           if (usage) onUsage?.(usage);
-          writeJson(response, status, completion, successHeaders);
+          writeJson(response, status, completion, { ...successHeaders, 'content-type': 'application/json' });
         });
         source.on('error', (error) => {
           writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, 'upstream_unreachable');
@@ -651,34 +795,45 @@ export const proxyChatCompletion = (
           writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, 'upstream_unreachable');
         });
         if (protocolTransform) answer.pipe(protocolTransform);
-      },
-    );
-
-    upstream.on('error', (error) => {
-      // Network failures can also use the bounded model/pool chain. If there
-      // is no remaining candidate, expose the final transport error.
-      if (!response.headersSent && !response.destroyed && advanceToNextAttempt()) {
-        fallbackReasons.push(`network error on ${lastRequestedModel}`);
-        sendAttempt();
-        return;
-      }
-      const finalAttempt = attempt;
-      const routeHeaders = routingHeaders(finalAttempt);
+    };
+    const handleTransportError = (error: Error): void => {
+      // A downstream disconnect owns cancellation; never advance fallback or write an error then.
+      if (response.destroyed || response.writableEnded) return;
+      // A transport failure marks this pool unusable for the rest of the
+      // request. Otherwise a later model fallback could revisit the same
+      // broken relay and waste another attempt before exhausting the chain.
+      if (candidate) failedPoolIds.add(candidate.id);
+      if (!response.headersSent && !response.destroyed && advanceToNextAttempt()) { fallbackReasons.push(`network error on ${lastRequestedModel}`); sendAttempt(); return; }
+      const routeHeaders = routingHeaders(attempt);
       for (const [name, value] of Object.entries(routeHeaders)) response.setHeader(name, value);
-      writeOpenAiError(
-        response,
-        502,
-        `The upstream did not answer for ${lastRequestedModel}: ${error.message}`,
-        'upstream_unreachable',
-        routeHeaders,
-      );
-    });
-
+      writeOpenAiError(response, 502, `The upstream did not answer for ${lastRequestedModel}: ${error.message}`, 'upstream_unreachable', routeHeaders);
+    };
+    let upstream: ReturnType<typeof transport.request> | null = null;
+    let directAbort: AbortController | null = null;
+    if (usesNativeDirectTransport && nativeDirectFetch) {
+      directAbort = new AbortController();
+      void nativeDirectFetch(target.url, { method: 'POST', headers: requestHeaders, body: upstreamBody, signal: AbortSignal.any([directAbort.signal, AbortSignal.timeout(120_000)]) })
+        .then((fetched) => {
+          const body = fetched.body ? Readable.fromWeb(fetched.body as unknown as import('node:stream/web').ReadableStream<Uint8Array>) : Readable.from([]);
+          const wrapped = body as unknown as http.IncomingMessage;
+          Object.defineProperty(wrapped, 'statusCode', { value: fetched.status });
+          Object.defineProperty(wrapped, 'headers', { value: Object.fromEntries(fetched.headers.entries()) });
+          handleAnswer(wrapped);
+        })
+        .catch((error: unknown) => handleTransportError(error instanceof Error ? error : new Error(String(error))));
+    } else {
+      upstream = transport.request(target.url, { method: 'POST', agent: target.agent, headers: requestHeaders }, handleAnswer);
+      upstream.on('error', handleTransportError);
+      upstream.end(upstreamBody);
+    }
     response.on('close', () => {
-      if (!response.writableEnded) upstream.destroy();
+      // buildTarget creates a per-attempt tunnel agent; cancellation must reach its
+      // pending CONNECT ClientRequest as well as the outer HTTP request.
+      target.agent?.destroy();
+      if (response.writableEnded) return;
+      upstream?.destroy();
+      directAbort?.abort(new Error('Downstream client disconnected.'));
     });
-
-    upstream.end(upstreamBody);
   };
 
   sendAttempt();
