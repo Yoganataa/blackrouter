@@ -183,7 +183,7 @@ describe('model fallback request path', () => {
         proxyChatCompletion(
           {
             ...configFor(address.port),
-            upstream: 'https://opencode.ai/zen/v1',
+            upstream: `http://127.0.0.1:${address.port}/v1`,
             fallbackModels: [],
             proxyPools: pools,
           },
