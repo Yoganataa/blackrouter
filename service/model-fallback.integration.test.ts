@@ -204,6 +204,40 @@ describe('model fallback request path', () => {
         return;
       }
 
+      if (request.url === '/pool-cooldown-exhausted-test') {
+        await readRequestBody(request);
+        const address = server.address();
+        if (!address || typeof address === 'string') {
+          response.writeHead(500);
+          response.end('No listener address');
+          return;
+        }
+        poolAttempts.length = 0;
+        requestedModels.length = 0;
+        const cooldownUntil = Date.now() + 60_000;
+        const pools: ProxyPool[] = [
+          { id: 'cool-a', name: 'Cooling Relay A', type: 'cloudflare', proxyUrl: `http://127.0.0.1:${address.port}/cool-a`, isActive: true, rateLimitedUntil: cooldownUntil },
+          { id: 'cool-b', name: 'Cooling Relay B', type: 'cloudflare', proxyUrl: `http://127.0.0.1:${address.port}/cool-b`, isActive: true, rateLimitedUntil: cooldownUntil },
+        ];
+        proxyChatCompletion(
+          { ...configFor(address.port), proxyPools: pools },
+          'ses_pool_cooldown_exhausted_test',
+          {
+            model: 'big-pickle',
+            stream: true,
+            body: JSON.stringify({
+              model: 'big-pickle',
+              stream: true,
+              messages: [{ role: 'user', content: 'Reply with OK.' }],
+            }),
+          },
+          response,
+          undefined,
+          () => {},
+        );
+        return;
+      }
+
       if (request.url === '/http-proxy-failure-test') {
         await readRequestBody(request);
         const address = server.address();
@@ -510,6 +544,24 @@ describe('model fallback request path', () => {
     expect(body).toContain('upstream did not answer');
     expect(response.headers.get('x-blackrouter-resolved-pool')).toBe('Dead Relay B');
     expect(poolAttempts).toEqual(['dead-a', 'dead-b']);
+    expect(requestedModels).toEqual([]);
+  });
+
+  test('returns rate_limit_exhausted when all configured relays are cooling down without direct egress', async () => {
+    poolAttempts.length = 0;
+    requestedModels.length = 0;
+    const response = await fetch(`${baseUrl}/pool-cooldown-exhausted-test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: true }),
+    });
+    const body = await response.text();
+
+    expect(response.status).toBe(429);
+    expect(body).toContain('rate_limit_exhausted');
+    expect(body).toContain('All configured proxy pools are cooling down');
+    expect(Number(response.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect(poolAttempts).toEqual([]);
     expect(requestedModels).toEqual([]);
   });
 
