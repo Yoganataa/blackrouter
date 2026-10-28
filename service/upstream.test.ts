@@ -494,6 +494,60 @@ describe('upstream response contract', () => {
     }
   });
 
+  test('terminates a streaming response after an upstream socket closes mid-SSE without a second response write', async () => {
+    const firstFrame = 'data: ' + JSON.stringify({
+      id: 'chatcmpl-s05-abrupt-close',
+      object: 'chat.completion.chunk',
+      created: 123,
+      model: 'fixture-model',
+      choices: [{ index: 0, delta: { content: 'partial' }, finish_reason: null }],
+    }) + '\\n\\n';
+    const upstream = http.createServer((request, response) => {
+      request.resume();
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.flushHeaders();
+      response.write(firstFrame);
+      setTimeout(() => response.socket?.destroy(), 30);
+    });
+    const up = await startServer(upstream);
+    const router = http.createServer((_request, response) => send(up.url + '/v1', response, true));
+    const rt = await startServer(router);
+    try {
+      const outcome = await new Promise<{ status: number; contentType: string; body: string; incomplete: boolean }>((resolve, reject) => {
+        const request = http.request(rt.url + '/chat/completions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+        }, (response) => {
+          let body = '';
+          response.setEncoding('utf8');
+          response.on('data', (chunk: string) => { body += chunk; });
+          response.on('aborted', () => resolve({
+            status: response.statusCode ?? 0,
+            contentType: String(response.headers['content-type'] ?? ''),
+            body,
+            incomplete: !response.complete,
+          }));
+          response.on('end', () => resolve({
+            status: response.statusCode ?? 0,
+            contentType: String(response.headers['content-type'] ?? ''),
+            body,
+            incomplete: !response.complete,
+          }));
+          response.on('error', (error) => reject(error));
+        });
+        request.on('error', reject);
+        request.end(JSON.stringify({ model: 'fixture-model', messages: [{ role: 'user', content: 'hello' }], stream: true }));
+      });
+      expect(outcome.status).toBe(200);
+      expect(outcome.contentType).toContain('text/event-stream');
+      expect(outcome.body).toContain('partial');
+      expect(outcome.incomplete).toBe(true);
+      expect(outcome.body).not.toContain('upstream_unreachable');
+    } finally {
+      await Promise.all([up.close(), rt.close()]);
+    }
+  });
+
   test('preserves upstream non-2xx status, body and content type for non-streaming clients', async () => {
     const upstreamBody = JSON.stringify({ error: { message: 'fixture quota exceeded', code: 'quota_exhausted' } });
     const upstream = http.createServer((request, response) => {
