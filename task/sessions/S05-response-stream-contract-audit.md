@@ -1,6 +1,6 @@
 # Session S05 — Response and Streaming Contract Audit
 
-**Status:** Not started  
+**Status:** Active  
 **Scope source:** `goals.md` on `main`, `BR-SCOPE-1.2`  
 **Related requirements:** FR-M2 and FR-M6  
 **Tracking log:** `task/PR-2-stabilize-validation.md`
@@ -38,6 +38,19 @@ Audit the existing streaming and non-streaming response contract, including upst
 - [ ] Type-check, focused tests, full tests and build pass, or gaps are recorded.
 - [ ] Task log records changed files, evidence, commit SHA, CI and next task S06.
 
+## Requirement-to-test matrix
+
+| Response mode / condition | Expected contract | Existing or new evidence |
+|---|---|---|
+| Streaming, successful SSE | Preserve HTTP success and SSE content type; emit adapted chunks and terminate normally. | Existing downstream-cancellation normal-completion integration test; protocol adapter unit tests. Additional route-level test coverage may be needed. |
+| Streaming, upstream non-2xx before body starts | Preserve upstream status, safe headers and body; do not fold into a success response. | To verify in S05. |
+| Streaming, upstream error after headers/body begins | Do not attempt a second status/body write; terminate the stream and clean up the pipeline. | Existing pipeline/cancellation behavior; explicit early-close/error evidence to verify. |
+| Non-streaming, upstream non-2xx | Preserve upstream status, content type, and body bytes. | New local integration regression in `service/upstream.test.ts`. |
+| Non-streaming, successful SSE | Aggregate SSE chunks into one OpenAI-style JSON completion, joining content and preserving finish reason/model/id. | New local integration regression in `service/upstream.test.ts`. |
+| SSE first-byte idle period | Emit comment keepalives only before the first upstream chunk; stop after data or stream close; disabled for non-positive interval. | Existing three `SSE first-byte keepalive` tests. |
+| Downstream cancellation before response | Abort pending upstream request and avoid fallback/error writes after client disconnect. | Existing S03 local integration tests. |
+| Native Responses/Messages SSE | Apply lane-specific response transforms and tool-name restoration. | Existing `opencode-protocol.test.ts` adapter tests; route-level status/body behavior to review. |
+
 ## Session report
 
-Not started. Do not mark complete until the criteria above have evidence.
+Active. S05 baseline is PR head `5b794b05c15854740aea23bf0ddbfe6bcc4609d6`. Added two local route-level regressions for non-streaming upstream `429` status/body/header preservation and successful SSE aggregation into JSON. Validation for these changes is running in GitHub Actions; do not close S05 until test/type-check/build results are confirmed and the remaining matrix gaps are either covered or explicitly recorded.
