@@ -470,6 +470,40 @@ describe('upstream response contract', () => {
     response,
   );
 
+  test('closes a streaming response when the upstream SSE body ends prematurely', async () => {
+    const upstream = http.createServer((request, response) => {
+      request.resume();
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.write('data: {"id":"partial-stream","choices":[{"delta":{"content":"partial"}');
+      setTimeout(() => response.destroy(), 10);
+    });
+    const up = await startServer(upstream);
+    const router = http.createServer((_request, response) => send(up.url + '/v1', response, true));
+    const rt = await startServer(router);
+    try {
+      const closed = new Promise<{ status: number | undefined; complete: boolean }>((resolve, reject) => {
+        const request = http.request(rt.url + '/chat/completions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+        });
+        request.on('error', reject);
+        request.on('response', (response) => {
+          response.on('data', () => {});
+          response.on('close', () => resolve({ status: response.statusCode, complete: response.complete }));
+        });
+        request.end(JSON.stringify({ model: 'fixture-model', messages: [{ role: 'user', content: 'hello' }], stream: true }));
+      });
+      const result = await Promise.race([
+        closed,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Premature upstream close was not propagated.')), 500)),
+      ]);
+      expect(result.status).toBe(200);
+      expect(result.complete).toBe(false);
+    } finally {
+      await Promise.all([up.close(), rt.close()]);
+    }
+  });
+
   test('preserves upstream non-2xx status and body for streaming clients before stream start', async () => {
     const upstreamBody = JSON.stringify({ error: { message: 'fixture unavailable', code: 'upstream_unavailable' } });
     const upstream = http.createServer((request, response) => {
