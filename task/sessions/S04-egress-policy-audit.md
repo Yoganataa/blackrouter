@@ -1,6 +1,6 @@
 # Session S04 — Direct, HTTP Proxy and Relay Egress Policy Audit
 
-**Status:** Active  
+**Status:** Complete  
 **Scope source:** `goals.md` on `main`, `BR-SCOPE-1.2`  
 **Related requirement:** FR-M5  
 **Tracking log:** `task/PR-2-stabilize-validation.md`
