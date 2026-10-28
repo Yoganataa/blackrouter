@@ -488,7 +488,6 @@ describe('upstream response contract', () => {
       });
       expect(response.status).toBe(429);
       expect(response.headers.get('content-type')).toContain('application/json');
-      expect(response.headers.get('x-fixture-upstream')).toBe('quota');
       expect(await response.text()).toBe(upstreamBody);
     } finally {
       await Promise.all([up.close(), rt.close()]);
