@@ -26,7 +26,7 @@
 - [S03 — Downstream cancellation lifecycle](sessions/S03-downstream-cancellation.md) — complete; upstream socket/stream cancellation and normal completion pass CI.
 - [S04 — Egress policy audit](sessions/S04-egress-policy-audit.md) — complete; transport failure, all-pools-cooling-down, and diagnostic redaction regressions pass CI run 40628998383.
 - [S05 — Response and streaming contract audit](sessions/S05-response-stream-contract-audit.md) — complete; CI run 40630988626 passed type-check, 167 tests, and build, including deterministic upstream-abrupt-close coverage.
-- [S06 — Native OpenCode behavior and model routing audit](sessions/S06-opencode-native-behavior-audit.md) — prepared; not started.
+- [S06 — Native OpenCode behavior and model routing audit](sessions/S06-opencode-native-behavior-audit.md) — complete; CI run 40632366289 passed type-check, 168 tests, and build; exact copied-core upstream revision remains a recorded provenance gap.
 - [S07 — Test Model real inference](sessions/S07-test-model-real-inference.md) — prepared; not started.
 - [S08 — Security and secret-handling audit](sessions/S08-security-secret-handling-audit.md) — prepared; not started.
 - [S09 — Current-head CI and generated-bundle gate](sessions/S09-reproducible-ci-bundle-gate.md) — prepared; not started.
@@ -65,7 +65,7 @@ These tasks block provider implementation and SHOULD work. Complete in order unl
 | S03 | [x] | Validate downstream cancellation and request lifecycle independently from CONNECT timeout. | Deterministic local-upstream test proves cancellation reaches the owned upstream resources and completes within a bound. |
 | S04 | [x] | Audit direct, HTTP forward-proxy, and relay egress behavior. | Route matrix and regression tests prove no silent direct fallback and bounded/redacted no-route errors; CI 40628998383 passed type-check, 163 tests, and build. |
 | S05 | [x] | Audit streaming and non-streaming response contract, errors, first-byte keepalive, and status/body propagation. | CI 40630988626 passed type-check, 167 tests, and build; deterministic upstream-abrupt-close, status/body propagation, SSE aggregation, and keepalive coverage documented. |
-| S06 | [ ] | Audit model catalog, endpoint selection, native OpenCode headers/fingerprints, and session affinity. | Requirement-to-test matrix maps FR-M2/FR-M4 to concrete evidence; missing coverage is isolated. |
+| S06 | [x] | Audit model catalog, endpoint selection, native OpenCode headers/fingerprints, and session affinity. | FR-M2/FR-M4 matrix documented; CI 40632366289 passed type-check, 168 tests, and build. Exact copied-core upstream revision is an explicit provenance gap. |
 | S07 | [ ] | Verify Test Model sends a real short inference and reports the real result. | Test path is proven by code/tests and live evidence where runtime credentials/access are available; connectivity-only success is rejected. |
 | S08 | [ ] | Complete security/secret-handling audit. | Loopback default, credential redaction, stored-secret preservation, logs/diagnostics and relay error surfaces reviewed with regression evidence. |
 | S09 | [ ] | Run full reproducible CI gate on the current PR head and inspect generated bundles. | Current-head type-check, full tests, build, bundle diff review, and diagnostic-only code removal recorded. |
