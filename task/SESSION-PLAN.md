@@ -24,7 +24,7 @@
 - [S01 — CONNECT ClientRequest lifecycle](sessions/S01-connect-clientrequest-lifecycle.md) — complete (diagnostic; production fix remains in S02).
 - [S02 — CONNECT cleanup and timeout fix](sessions/S02-connect-cleanup-timeout-fix.md) — complete; timeout, HTTP 407, and agent-destroy regressions pass in CI.
 - [S03 — Downstream cancellation lifecycle](sessions/S03-downstream-cancellation.md) — complete; upstream socket/stream cancellation and normal completion pass CI.
-- [S04 — Egress policy audit](sessions/S04-egress-policy-audit.md) — active; all-relay transport-failure regression added, CI pending.
+- [S04 — Egress policy audit](sessions/S04-egress-policy-audit.md) — active; transport-failure and all-pools-cooling-down regressions added, CI pending.
 - [S05 — Response and streaming contract audit](sessions/S05-response-stream-contract-audit.md) — prepared; not started.
 - [S06 — Native OpenCode behavior and model routing audit](sessions/S06-opencode-native-behavior-audit.md) — prepared; not started.
 - [S07 — Test Model real inference](sessions/S07-test-model-real-inference.md) — prepared; not started.
