@@ -8897,7 +8897,7 @@ var proxyChatCompletion = (config, session, prepared, response, pool, onRateLimi
         const usage = extractTokenUsage(completion);
         if (usage)
           onUsage?.(usage);
-        writeJson(response, status, completion, successHeaders);
+        writeJson(response, status, completion, { ...successHeaders, "content-type": "application/json" });
       });
       source.on("error", (error) => {
         writeOpenAiError(response, 502, `The upstream stream broke: ${error.message}`, "upstream_unreachable");
