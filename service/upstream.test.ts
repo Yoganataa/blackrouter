@@ -481,15 +481,16 @@ describe('upstream response contract', () => {
     const router = http.createServer((_request, response) => send(up.url + '/v1', response, true));
     const rt = await startServer(router);
     try {
-      const closed = new Promise<{ status: number | undefined; complete: boolean }>((resolve, reject) => {
+      const closed = new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
         const request = http.request(rt.url + '/chat/completions', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
         });
         request.on('error', reject);
         request.on('response', (response) => {
-          response.on('data', () => {});
-          response.on('close', () => resolve({ status: response.statusCode, complete: response.complete }));
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+          response.on('close', () => resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
         });
         request.end(JSON.stringify({ model: 'fixture-model', messages: [{ role: 'user', content: 'hello' }], stream: true }));
       });
@@ -498,7 +499,8 @@ describe('upstream response contract', () => {
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Premature upstream close was not propagated.')), 500)),
       ]);
       expect(result.status).toBe(200);
-      expect(result.complete).toBe(false);
+      expect(result.body).toContain('partial-stream');
+      expect(result.body).not.toContain('[DONE]');
     } finally {
       await Promise.all([up.close(), rt.close()]);
     }
