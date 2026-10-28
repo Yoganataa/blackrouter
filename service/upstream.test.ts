@@ -470,6 +470,30 @@ describe('upstream response contract', () => {
     response,
   );
 
+  test('preserves upstream non-2xx status and body for streaming clients before stream start', async () => {
+    const upstreamBody = JSON.stringify({ error: { message: 'fixture unavailable', code: 'upstream_unavailable' } });
+    const upstream = http.createServer((request, response) => {
+      request.resume();
+      response.writeHead(503, { 'content-type': 'application/json' });
+      response.end(upstreamBody);
+    });
+    const up = await startServer(upstream);
+    const router = http.createServer((_request, response) => send(up.url + '/v1', response, true));
+    const rt = await startServer(router);
+    try {
+      const response = await fetch(rt.url + '/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'fixture-model', messages: [{ role: 'user', content: 'hello' }], stream: true }),
+      });
+      expect(response.status).toBe(503);
+      expect(response.headers.get('content-type')).toContain('application/json');
+      expect(await response.text()).toBe(upstreamBody);
+    } finally {
+      await Promise.all([up.close(), rt.close()]);
+    }
+  });
+
   test('preserves upstream non-2xx status, body and content type for non-streaming clients', async () => {
     const upstreamBody = JSON.stringify({ error: { message: 'fixture quota exceeded', code: 'quota_exhausted' } });
     const upstream = http.createServer((request, response) => {
