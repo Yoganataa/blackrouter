@@ -507,7 +507,7 @@ describe('upstream response contract', () => {
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       response.flushHeaders();
       response.write(firstFrame);
-      setTimeout(() => response.socket?.destroy(), 30);
+      setTimeout(() => response.socket?.destroy(), 250);
     });
     const up = await startServer(upstream);
     const router = http.createServer((_request, response) => send(up.url + '/v1', response, true));
