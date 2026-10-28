@@ -166,6 +166,44 @@ describe('model fallback request path', () => {
         return;
       }
 
+      if (request.url === '/pool-all-network-failure-test') {
+        await readRequestBody(request);
+        const address = server.address();
+        if (!address || typeof address === 'string') {
+          response.writeHead(500);
+          response.end('No listener address');
+          return;
+        }
+        poolAttempts.length = 0;
+        requestedModels.length = 0;
+        const pools: ProxyPool[] = [
+          { id: 'dead-a', name: 'Dead Relay A', type: 'cloudflare', proxyUrl: `http://127.0.0.1:${address.port}/dead-a`, isActive: true },
+          { id: 'dead-b', name: 'Dead Relay B', type: 'cloudflare', proxyUrl: `http://127.0.0.1:${address.port}/dead-b`, isActive: true },
+        ];
+        proxyChatCompletion(
+          {
+            ...configFor(address.port),
+            upstream: 'https://opencode.ai/zen/v1',
+            fallbackModels: [],
+            proxyPools: pools,
+          },
+          'ses_pool_all_network_failure_test',
+          {
+            model: 'big-pickle',
+            stream: true,
+            body: JSON.stringify({
+              model: 'big-pickle',
+              stream: true,
+              messages: [{ role: 'user', content: 'Reply with OK.' }],
+            }),
+          },
+          response,
+          pools[0],
+          () => {},
+        );
+        return;
+      }
+
       if (request.url === '/http-proxy-failure-test') {
         await readRequestBody(request);
         const address = server.address();
@@ -235,6 +273,13 @@ describe('model fallback request path', () => {
           pools[0],
           () => {},
         );
+        return;
+      }
+
+      if (request.url === '/dead-a' || request.url === '/dead-b') {
+        poolAttempts.push(request.url.slice(1));
+        // Both configured relays fail at transport level. There is no direct route in this case.
+        request.socket.destroy();
         return;
       }
 
@@ -448,6 +493,24 @@ describe('model fallback request path', () => {
       'network-b:primary-model',
       'network-b:fallback-model',
     ]);
+  });
+
+  test('returns a bounded error when every configured relay fails without trying direct egress', async () => {
+    poolAttempts.length = 0;
+    requestedModels.length = 0;
+    const response = await fetch(`${baseUrl}/pool-all-network-failure-test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run: true }),
+    });
+    const body = await response.text();
+
+    expect(response.status).toBe(502);
+    expect(body).toContain('upstream_unreachable');
+    expect(body).toContain('upstream did not answer');
+    expect(response.headers.get('x-blackrouter-resolved-pool')).toBe('Dead Relay B');
+    expect(poolAttempts).toEqual(['dead-a', 'dead-b']);
+    expect(requestedModels).toEqual([]);
   });
 
   test('does not bypass a failed HTTP forward proxy with direct egress', async () => {
