@@ -97,6 +97,29 @@ describe('where a call goes', () => {
     expect(custom.url.toString()).toBe('https://custom-gateway.local/v1/chat/completions');
   });
 
+  test('preserves native OpenCode v2 headers, session affinity and fingerprint tools', async () => {
+    const first = await nativeRequest('blackrouter/big-pickle');
+    const second = await nativeRequest('blackrouter/big-pickle');
+    const headers = first.headers as Record<string, string>;
+    const session = headers['x-opencode-session'];
+
+    expect(headers['user-agent']).toBe('opencode/latest/2.1.4/cli');
+    expect(headers.authorization).toBe('Bearer public');
+    expect(session).toMatch(/^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
+    expect(headers['x-opencode-session-id']).toBe(session);
+    expect(headers['x-session-affinity']).toBe(session);
+    expect(headers['x-session-id']).toBe(session);
+    expect((second.headers as Record<string, string>)['x-opencode-session']).toBe(session);
+
+    const body = JSON.parse(first.body);
+    const toolNames = (body.tools as Array<{ function?: { name?: string }; name?: string }>).map(
+      (tool) => tool.function?.name ?? tool.name,
+    );
+    expect(toolNames).toContain('read');
+    expect(toolNames).toContain('shell');
+    expect(JSON.stringify(body)).toContain('<env>');
+  });
+
   test('recognizes only the OpenCode free-tier egress gate response', () => {
     expect(isOpenCodeFreeTierGateResponse(403, '{"type":"FreeTierError"}', true, true)).toBe(true);
     expect(isOpenCodeFreeTierGateResponse(403, '{"type":"Forbidden"}', true, true)).toBe(false);
