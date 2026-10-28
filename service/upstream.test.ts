@@ -448,6 +448,101 @@ describe('HTTP CONNECT lifecycle', () => {
   });
 });
 
+describe('upstream response contract', () => {
+  const startServer = async (server: http.Server): Promise<{ url: string; close: () => Promise<void> }> => {
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Fixture server did not bind a TCP port.');
+    return {
+      url: `http://127.0.0.1:${address.port}`,
+      close: async () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
+    };
+  };
+
+  const send = (upstreamUrl: string, response: http.ServerResponse, stream: boolean) => proxyChatCompletion(
+    config({ upstream: upstreamUrl }),
+    's05-response-contract-session',
+    {
+      body: JSON.stringify({ model: 'fixture-model', messages: [{ role: 'user', content: 'hello' }], stream }),
+      stream,
+      model: 'fixture-model',
+    },
+    response,
+  );
+
+  test('preserves upstream non-2xx status, body and content type for non-streaming clients', async () => {
+    const upstreamBody = JSON.stringify({ error: { message: 'fixture quota exceeded', code: 'quota_exhausted' } });
+    const upstream = http.createServer((request, response) => {
+      request.resume();
+      response.writeHead(429, { 'content-type': 'application/json', 'x-fixture-upstream': 'quota' });
+      response.end(upstreamBody);
+    });
+    const up = await startServer(upstream);
+    const router = http.createServer((_request, response) => send(up.url + '/v1', response, false));
+    const rt = await startServer(router);
+    try {
+      const response = await fetch(rt.url + '/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'fixture-model', messages: [{ role: 'user', content: 'hello' }] }),
+      });
+      expect(response.status).toBe(429);
+      expect(response.headers.get('content-type')).toContain('application/json');
+      expect(response.headers.get('x-fixture-upstream')).toBe('quota');
+      expect(await response.text()).toBe(upstreamBody);
+    } finally {
+      await Promise.all([up.close(), rt.close()]);
+    }
+  });
+
+  test('folds a successful SSE response into one JSON completion for non-streaming clients', async () => {
+    const upstream = http.createServer((request, response) => {
+      request.resume();
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end([
+        'data: ' + JSON.stringify({
+          id: 'chatcmpl-s05-fixture',
+          object: 'chat.completion.chunk',
+          created: 123,
+          model: 'fixture-model',
+          choices: [{ index: 0, delta: { content: 'Hello' }, finish_reason: null }],
+        }),
+        '',
+        'data: ' + JSON.stringify({
+          id: 'chatcmpl-s05-fixture',
+          object: 'chat.completion.chunk',
+          created: 123,
+          model: 'fixture-model',
+          choices: [{ index: 0, delta: { content: ' world' }, finish_reason: 'stop' }],
+        }),
+        '',
+        'data: [DONE]',
+        '',
+      ].join('\\n'));
+    });
+    const up = await startServer(upstream);
+    const router = http.createServer((_request, response) => send(up.url + '/v1', response, false));
+    const rt = await startServer(router);
+    try {
+      const response = await fetch(rt.url + '/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'fixture-model', messages: [{ role: 'user', content: 'hello' }] }),
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toContain('application/json');
+      const body = await response.json() as { id?: string; object?: string; model?: string; choices?: Array<{ message?: { content?: string }; finish_reason?: string }> };
+      expect(body.id).toBe('chatcmpl-s05-fixture');
+      expect(body.object).toBe('chat.completion');
+      expect(body.model).toBe('fixture-model');
+      expect(body.choices?.[0]?.message?.content).toBe('Hello world');
+      expect(body.choices?.[0]?.finish_reason).toBe('stop');
+    } finally {
+      await Promise.all([up.close(), rt.close()]);
+    }
+  });
+});
+
 describe('SSE first-byte keepalive', () => {
   test('emits comments while idle and preserves subsequent SSE bytes', async () => {
     const source = new Readable({ read() {} });
