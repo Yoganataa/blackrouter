@@ -1,44 +1,38 @@
 # Session S06 — Native OpenCode Behavior and Model Routing Audit
 
-**Status:** Not started  
+**Status:** Active — validation pending  
 **Scope source:** `goals.md` on `main`, `BR-SCOPE-1.2`  
 **Related requirements:** FR-M2, FR-M4  
-**Dependencies:** S04 and S05 findings should be available; do not duplicate their audits.  
+**Baseline PR head:** `7fb44705a880fa0ee40747d6989a093c49a7f576`  
 **Tracking log:** `task/PR-2-stabilize-validation.md`
 
-## Objective
+## Requirement-to-test matrix
 
-Establish a requirement-to-test matrix for native OpenCode request behavior: model catalog and endpoint selection, required headers and fingerprints, session affinity, and model-specific Chat Completions/Responses/Messages translation.
+| Requirement / behavior | Evidence in code/tests | Result / gap |
+|---|---|---|
+| OpenCode Zen model catalog endpoint | `service/upstream.test.ts`: `native provider executor resolves OpenCode v2 endpoints` asserts `https://opencode.ai/zen/v1/models`; `loads a complete catalog from a custom OpenAI-compatible upstream` covers generic `/models` fetch behavior | Covered at target construction / mocked fetch; live catalog refresh is not proven in this session. |
+| Model-specific endpoint selection | `native provider executor resolves OpenCode v2 endpoints` covers Big Pickle → `/inference/v1/chat/completions`, Muse Spark → `/inference/v1/responses`, Union Alpha → `/inference/v1/messages`, and custom upstream → `/chat/completions` | Covered for these representative families; catalog-wide compatibility is not claimed. |
+| Native request headers / CLI fingerprint | `uses the current OpenCode CLI fingerprint when refreshing the free catalog`; executor sets UA `opencode/latest/2.1.4/cli`, public bearer, client and project headers | New regression added in this session; CI pending. |
+| Session affinity | Executor emits `x-opencode-session`, `x-opencode-session-id`, `x-session-affinity`, `x-session-id`; new regression checks values match and repeated requests using the same valid session keep the same ID | New regression added in this session; cross-process persistence and live upstream acceptance are not tested. |
+| Required OpenCode fingerprint tools / environment marker | `service/core/utils/opencodeFingerprint.js` documents canonical `read`/`shell` definitions and `<env>` marker; new regression asserts both tool names and marker are present in prepared body | New regression added in this session; exact upstream acceptance remains a runtime limitation. |
+| Caller tool-name collision restoration | `service/opencode-protocol.test.ts` covers compatible `shell_client` collision normalization and unique aliasing when caller already defines the alias; `service/core/provider-adapter.js` infers/restores renamed names | Existing tests cover the demonstrated collision cases. |
+| Responses/Messages stream translation | `service/opencode-protocol.test.ts` covers Responses SSE → Chat chunks and Messages conversion/restoration cases | Existing unit-level coverage; no live inference asserted. |
+| Egress preservation for native endpoints | `service/upstream.test.ts`: `a proxy pool preserves the native provider endpoint in relay headers`, `a standard forward proxy (http) connects to native endpoint with tunnel agent`, and `respects explicit poolOverride while preserving the native endpoint`; S04 separately audits no silent direct fallback | Covered by local target/route tests; no live relay acceptance claimed. |
 
-## Entry gate
+## Provenance and local delta
 
-- Read the completed/available S04 and S05 reports and current source/tests.
-- Inspect current 9router upstream source/revision only where needed; record provenance and local deltas before proposing a port.
-- Capture current PR head and CI state.
+- `service/core/LICENSE` identifies the copied core's license as MIT, copyright decolua and contributors, 2024–2026.
+- `service/core/executors/opencode.js` documents the OpenCode v2 CLI user-agent as `opencode/latest/2.1.4/cli` and notes the version date 2026-10-23. The same file documents session-affinity headers and model endpoint families.
+- Local adapter: `service/core/provider-adapter.js` dispatches the native executor's prepared URL/headers/body into BlackRouter's own transport selection. It chooses registered `targetFormat`, with a Muse Spark predicate fallback, and restores caller tool names. `service/upstream.ts` owns direct/proxy/relay egress.
+- Exact upstream Git commit/revision for the copied `service/core` snapshot is not established by the current source files or this audit. Do not claim a specific upstream revision; record as a provenance gap for release hardening.
 
-## In scope
+## Scope and risks
 
-- Map supported model families and request shapes to the selected translator/endpoint.
-- Audit provider headers, CLI/session/tool fingerprints, timestamp behavior and affinity continuity.
-- Audit `/v1/models` and catalog behavior used by the OpenCode Free lane.
-- Identify gaps in existing tests and add targeted regressions only for demonstrated gaps.
-- Preserve configured egress policy; do not copy upstream direct-egress retry behavior that bypasses a selected proxy/relay.
-
-## Out of scope
-
-- Provider adapter expansion (S12 onward).
-- Rewriting all protocol translators or porting the full 9router application.
-- Claiming provider compatibility from source resemblance alone.
-
-## Acceptance criteria
-
-- [ ] FR-M2/FR-M4 requirement-to-test matrix lists concrete test names or explicit gaps.
-- [ ] Header/fingerprint and session-affinity expectations are documented and tested where applicable.
-- [ ] Model/endpoint selection and catalog behavior have explicit coverage.
-- [ ] Upstream source revision/path/license and local behavioral differences are recorded for any adopted behavior.
-- [ ] Focused tests, full tests, type-check and build pass, or exact blockers are recorded.
-- [ ] Task log records files, evidence, commit SHA, CI and next task S07.
+- No production code changes are proposed by this audit; the current change is test-only.
+- Unit tests and mocked fetches do not prove a live OpenCode Free inference, real current catalog, or actual upstream gate acceptance. S07 is the designated real-inference task where access is available.
+- Preserve the S04 egress invariant: never copy native upstream retry logic that bypasses an explicitly configured proxy/relay.
+- Do not begin SHOULD work before S11.
 
 ## Session report
 
-Not started. Do not mark complete until the criteria above have evidence.
+Initial audit mapped model routing, catalog request headers, native fingerprints, session affinity, tool-name collision behavior, protocol conversion and egress integration to concrete tests. Added a regression to `service/upstream.test.ts` for native OpenCode v2 headers, matching session-affinity headers, same-session continuity, fingerprint tools, and the `<env>` marker. CI status is pending; do not mark complete until type-check, full tests and build finish and any failure is resolved or precisely recorded.
