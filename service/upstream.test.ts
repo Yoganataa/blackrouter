@@ -518,7 +518,7 @@ describe('upstream response contract', () => {
         '',
         'data: [DONE]',
         '',
-      ].join('\\n'));
+      ].join('\n'));
     });
     const up = await startServer(upstream);
     const router = http.createServer((_request, response) => send(up.url + '/v1', response, false));
