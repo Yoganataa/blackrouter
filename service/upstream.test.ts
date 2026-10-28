@@ -474,8 +474,9 @@ describe('upstream response contract', () => {
     const upstream = http.createServer((request, response) => {
       request.resume();
       response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.flushHeaders();
       response.write('data: {"id":"partial-stream","choices":[{"delta":{"content":"partial"}');
-      setTimeout(() => response.destroy(), 10);
+      setTimeout(() => response.destroy(), 100);
     });
     const up = await startServer(upstream);
     const router = http.createServer((_request, response) => send(up.url + '/v1', response, true));
