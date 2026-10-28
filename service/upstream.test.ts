@@ -501,7 +501,7 @@ describe('upstream response contract', () => {
       created: 123,
       model: 'fixture-model',
       choices: [{ index: 0, delta: { content: 'partial' }, finish_reason: null }],
-    }) + '\\n\\n';
+    }) + '\n\n';
     const upstream = http.createServer((request, response) => {
       request.resume();
       response.writeHead(200, { 'content-type': 'text/event-stream' });
