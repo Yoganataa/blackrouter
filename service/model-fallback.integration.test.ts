@@ -542,6 +542,8 @@ describe('model fallback request path', () => {
     expect(response.status).toBe(502);
     expect(body).toContain('upstream_unreachable');
     expect(body).toContain('upstream did not answer');
+    expect(body).not.toContain('http://127.0.0.1');
+    expect(body).not.toContain('sk-test');
     expect(response.headers.get('x-blackrouter-resolved-pool')).toBe('Dead Relay B');
     expect(poolAttempts).toEqual(['dead-a', 'dead-b']);
     expect(requestedModels).toEqual([]);
