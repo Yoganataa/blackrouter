@@ -24,7 +24,7 @@
 - [S01 — CONNECT ClientRequest lifecycle](sessions/S01-connect-clientrequest-lifecycle.md) — complete (diagnostic; production fix remains in S02).
 - [S02 — CONNECT cleanup and timeout fix](sessions/S02-connect-cleanup-timeout-fix.md) — complete; timeout, HTTP 407, and agent-destroy regressions pass in CI.
 - [S03 — Downstream cancellation lifecycle](sessions/S03-downstream-cancellation.md) — complete; upstream socket/stream cancellation and normal completion pass CI.
-- [S04 — Egress policy audit](sessions/S04-egress-policy-audit.md) — prepared; not started.
+- [S04 — Egress policy audit](sessions/S04-egress-policy-audit.md) — active; all-relay transport-failure regression added, CI pending.
 - [S05 — Response and streaming contract audit](sessions/S05-response-stream-contract-audit.md) — prepared; not started.
 - [S06 — Native OpenCode behavior and model routing audit](sessions/S06-opencode-native-behavior-audit.md) — prepared; not started.
 - [S07 — Test Model real inference](sessions/S07-test-model-real-inference.md) — prepared; not started.
@@ -63,7 +63,7 @@ These tasks block provider implementation and SHOULD work. Complete in order unl
 | S01 | [x] | Instrument the internal CONNECT `ClientRequest` lifecycle and determine cleanup ownership/order. | Trace distinguishes agent-first and outer-request-first destruction; diagnostic-only instrumentation is identified for removal. |
 | S02 | [x] | Implement the smallest CONNECT cleanup/timeout fix supported by S01 evidence. | Deterministic regression tests prove bounded timeout and client-side request/socket cleanup; no unrelated transport changes. |
 | S03 | [x] | Validate downstream cancellation and request lifecycle independently from CONNECT timeout. | Deterministic local-upstream test proves cancellation reaches the owned upstream resources and completes within a bound. |
-| S04 | [ ] | Audit direct, HTTP forward-proxy, and relay egress behavior. | Separate tests prove selected proxy/relay failures never silently switch to direct egress and preserve actionable status/body when no safe route remains. |
+| S04 | [/] | Audit direct, HTTP forward-proxy, and relay egress behavior. | Separate tests prove selected proxy/relay failures never silently switch to direct egress and preserve actionable status/body when no safe route remains. |
 | S05 | [ ] | Audit streaming and non-streaming response contract, errors, first-byte keepalive, and status/body propagation. | Targeted tests cover normal and failure paths; gaps are documented rather than inferred. |
 | S06 | [ ] | Audit model catalog, endpoint selection, native OpenCode headers/fingerprints, and session affinity. | Requirement-to-test matrix maps FR-M2/FR-M4 to concrete evidence; missing coverage is isolated. |
 | S07 | [ ] | Verify Test Model sends a real short inference and reports the real result. | Test path is proven by code/tests and live evidence where runtime credentials/access are available; connectivity-only success is rejected. |
