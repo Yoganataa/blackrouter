@@ -491,3 +491,13 @@ GitHub Actions run: `40325271651`; failing job: `121580233509`; workflow: `verif
 - **Regression evidence:** local HTTP integration tests prove upstream request socket closure when the downstream client disconnects while awaiting a response, upstream response stream closure when the client disconnects during streaming, and successful normal completion without cancellation. Both cancellation assertions use a 500 ms bound.
 - **Fixture correction history:** run 40597358407 failed the active-stream test because its fixture never emitted a valid SSE frame; run 40597396640 still failed because the fixture delayed writing until request end; run 40597471516 revealed double-escaped frame delimiters. The fixture was corrected and final run 40597547670 passed. These failures were test-fixture issues, not changes to production behavior; no assertion was relaxed.
 - **Next permitted task:** S04 — egress policy audit. Do not start SHOULD work before S11.
+
+
+## Session S04 — Egress policy audit (active, 2026-10-28)
+
+- **Scope:** FR-M5 under `BR-SCOPE-1.2`; no provider/SHOULD work started.
+- **Starting verified code baseline:** S03 final CI run 40597547670 passed type-check, 161 tests, and build; S03 final docs commit was bcbeb4a38a1521e21d54cc29db70ec1296104a68. PR #2 remains open/unmerged.
+- **Audit evidence:** `proxyChatCompletion` constructs attempts from eligible configured pools when any active pool exists; it does not append a `null`/direct attempt in that branch. Existing integration tests cover a failed HTTP CONNECT proxy, retry to another configured relay after a relay transport failure, and exhaustion after OpenCode `403 FreeTierError` from all relay pools.
+- **Change:** added a fully local integration case to `service/model-fallback.integration.test.ts` for both configured relay transports failing. Expected result is `502 upstream_unreachable`, final route metadata identifying `Dead Relay B`, exactly two relay attempts, and no request to the local direct-upstream endpoint. Test commit: f861262d3e76ada2f978c9198ab2f9b1e98b8ccf (follow-up fixture safety commit after 53a2ac61c9b7827a6e2e26d9a4ddc800bb419a59).
+- **CI status:** not yet available from the commit-workflow lookup; do not claim this new test passes until the PR workflow result is observed.
+- **Remaining:** verify active-pool cooldown exhaustion, explicit direct mode and full suite/type-check/build; then record final CI/bundle result before closing S04.
